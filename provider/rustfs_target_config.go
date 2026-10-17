@@ -22,6 +22,16 @@ func targetConfigBlockName(targetType string) string {
 	return name + "_config"
 }
 
+// targetServiceName maps a target type spelling to the bare service name the
+// admin list endpoint reports in its "service" field. A subsystem spelling
+// ("audit_webhook", "notify_amqp") normalizes to its bare service ("webhook",
+// "amqp"); an already-bare value is returned unchanged.
+func targetServiceName(targetType string) string {
+	name := strings.TrimPrefix(targetType, "audit_")
+	name = strings.TrimPrefix(name, "notify_")
+	return name
+}
+
 // targetConfigBlocks holds the optional per-type configuration blocks. Exactly
 // one block must be set, and it must match the target type.
 type targetConfigBlocks struct {

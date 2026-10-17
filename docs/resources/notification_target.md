@@ -12,10 +12,11 @@ Manage RustFS event-notification targets
 ## Example Usage
 
 ```terraform
-# Publish bucket events to an AMQP exchange. Nested configuration uses
-# attribute syntax: amqp_config = { ... }, not a block.
+# Publish bucket events to an AMQP exchange. target_type names the notification
+# subsystem (notify_amqp), and nested configuration uses attribute syntax:
+# amqp_config = { ... }, not a block.
 resource "rustfs_notification_target" "amqp_example" {
-  target_type = "amqp"
+  target_type = "notify_amqp"
   target_name = "amqp_example"
   enable      = true
 
@@ -30,7 +31,7 @@ resource "rustfs_notification_target" "amqp_example" {
 
 # Publish bucket events to a Redis channel.
 resource "rustfs_notification_target" "redis_example" {
-  target_type = "redis"
+  target_type = "notify_redis"
   target_name = "redis_example"
   enable      = true
 
@@ -49,7 +50,7 @@ resource "rustfs_notification_target" "redis_example" {
 ### Required
 
 - `target_name` (String) Name of the notification target. Changing this forces recreation.
-- `target_type` (String) Notification target service. Changing this forces recreation.
+- `target_type` (String) Notification target subsystem (for example notify_amqp). Changing this forces recreation.
 
 ### Optional
 

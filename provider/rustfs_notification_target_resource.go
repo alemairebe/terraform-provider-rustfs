@@ -81,18 +81,18 @@ func (r *notificationTargetResource) Schema(_ context.Context, _ resource.Schema
 	attributes := map[string]schema.Attribute{
 		"target_type": schema.StringAttribute{
 			Required:      true,
-			Description:   "Notification target service. Changing this forces recreation.",
+			Description:   "Notification target subsystem (for example notify_amqp). Changing this forces recreation.",
 			PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()},
 			Validators: []validator.String{stringvalidator.OneOf(
-				"webhook",
-				"amqp",
-				"kafka",
-				"mqtt",
-				"nats",
-				"postgres",
-				"mysql",
-				"redis",
-				"pulsar",
+				"notify_webhook",
+				"notify_amqp",
+				"notify_kafka",
+				"notify_mqtt",
+				"notify_nats",
+				"notify_postgres",
+				"notify_mysql",
+				"notify_redis",
+				"notify_pulsar",
 			)},
 		},
 		"target_name": schema.StringAttribute{
@@ -215,7 +215,7 @@ func (r *notificationTargetResource) refreshHealth(model *notificationTargetReso
 	}
 
 	key := model.TargetName.ValueString()
-	service := model.TargetType.ValueString()
+	service := targetServiceName(model.TargetType.ValueString())
 	for i := range targets {
 		t := &targets[i]
 		if t.AccountID == key && t.Service == service {
@@ -249,7 +249,7 @@ func (r *notificationTargetResource) Read(ctx context.Context, req resource.Read
 	}
 
 	key := state.TargetName.ValueString()
-	service := state.TargetType.ValueString()
+	service := targetServiceName(state.TargetType.ValueString())
 	var found *rustfs.NotificationTarget
 	for i := range targets {
 		t := &targets[i]

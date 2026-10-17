@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 
@@ -20,7 +21,8 @@ import (
 const notificationTargetResourceName = "rustfs_notification_target.test"
 
 var notificationServiceNames = []string{
-	"webhook", "amqp", "kafka", "mqtt", "nats", "postgres", "mysql", "redis", "pulsar",
+	"notify_webhook", "notify_amqp", "notify_kafka", "notify_mqtt", "notify_nats",
+	"notify_postgres", "notify_mysql", "notify_redis", "notify_pulsar",
 }
 
 var notificationConfigBlockNames = []string{
@@ -123,6 +125,7 @@ func requireReplacement(t *testing.T, modifier planmodifier.String, name string)
 
 func TestAccNotificationTargetResource(t *testing.T) {
 	name := fmt.Sprintf("tf-notify-%d", acctest.RandInt())
+	endpoint := os.Getenv("RUSTFS_NOTIFY_TEST_ENDPOINT")
 
 	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccNotificationTargetPreCheck(t) },
@@ -130,31 +133,32 @@ func TestAccNotificationTargetResource(t *testing.T) {
 		CheckDestroy:             testAccCheckNotificationTargetDestroy,
 		Steps: []resource.TestStep{
 			{
-				Config: testAccNotificationTargetConfig(name, "tf-events", "managed by terraform"),
+				Config: testAccNotificationTargetConfig(name, "managed by terraform"),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					testAccCheckNotificationTargetExists(name),
-					resource.TestCheckResourceAttr(notificationTargetResourceName, "target_type", "redis"),
+					resource.TestCheckResourceAttr(notificationTargetResourceName, "target_type", "notify_webhook"),
 					resource.TestCheckResourceAttr(notificationTargetResourceName, "target_name", name),
-					resource.TestCheckResourceAttr(notificationTargetResourceName, "redis_config.url", "redis://127.0.0.1:6379/"),
-					resource.TestCheckResourceAttr(notificationTargetResourceName, "redis_config.channel", "tf-events"),
+					resource.TestCheckResourceAttr(notificationTargetResourceName, "webhook_config.endpoint", endpoint),
 					resource.TestCheckResourceAttr(notificationTargetResourceName, "comment", "managed by terraform"),
 					resource.TestCheckResourceAttr(notificationTargetResourceName, "enable", "true"),
 					resource.TestCheckResourceAttrSet(notificationTargetResourceName, "health_state"),
+					resource.TestCheckResourceAttrSet(notificationTargetResourceName, "status"),
 				),
 			},
 			{
-				Config: testAccNotificationTargetConfig(name, "tf-events-updated", "updated by terraform"),
+				Config: testAccNotificationTargetConfig(name, "updated by terraform"),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					testAccCheckNotificationTargetExists(name),
-					resource.TestCheckResourceAttr(notificationTargetResourceName, "redis_config.channel", "tf-events-updated"),
+					resource.TestCheckResourceAttr(notificationTargetResourceName, "webhook_config.endpoint", endpoint),
 					resource.TestCheckResourceAttr(notificationTargetResourceName, "comment", "updated by terraform"),
 					resource.TestCheckResourceAttrSet(notificationTargetResourceName, "health_state"),
+					resource.TestCheckResourceAttrSet(notificationTargetResourceName, "status"),
 				),
 			},
 			{
 				ResourceName:      notificationTargetResourceName,
 				ImportState:       true,
-				ImportStateId:     "redis/" + name,
+				ImportStateId:     "notify_webhook/" + name,
 				ImportStateVerify: true,
 				// The admin list endpoint does not echo config values, so these
 				// attributes cannot be verified after import.
@@ -174,43 +178,49 @@ func TestAccNotificationTargetResource(t *testing.T) {
 // running RustFS has the notification module enabled (the admin API rejects
 // target management otherwise). The list endpoint succeeds even when the module
 // is disabled, so the check probes an actual create and skips when the server
-// reports the notification module is disabled.
+// reports the notification module is disabled. The probe uses the webhook
+// target (the only type that activates without an external service) pointed at
+// RUSTFS_NOTIFY_TEST_ENDPOINT.
 func testAccNotificationTargetPreCheck(t *testing.T) {
 	testAccPreCheck(t)
+
+	endpoint := os.Getenv("RUSTFS_NOTIFY_TEST_ENDPOINT")
+	if endpoint == "" {
+		t.Skip("RUSTFS_NOTIFY_TEST_ENDPOINT must be set for the notification target acceptance test")
+	}
 
 	client := testAccRustClient()
 	probe := fmt.Sprintf("tf-notify-probe-%d", acctest.RandInt())
 	probeConfig := []rustfs.TargetKeyValue{
-		{Key: "url", Value: "amqps://mq.example.com:5671/"},
+		{Key: "endpoint", Value: endpoint},
 	}
-	err := client.SetNotificationTarget("amqp", probe, probeConfig)
+	err := client.SetNotificationTarget("notify_webhook", probe, probeConfig)
 	if err != nil {
-		if strings.Contains(err.Error(), "notification module is disabled") ||
-			strings.Contains(err.Error(), "module is disabled") {
+		if strings.Contains(err.Error(), "module is disabled") {
 			t.Skipf("notification module is disabled on the running RustFS; skipping: %v", err)
 		}
-		t.Fatalf("notification target management is not available on the running RustFS, skipping: %v", err)
+		t.Fatalf("notification target management is not available on the running RustFS: %v", err)
 	}
 	// Clean up the probe target so it does not linger in the server config.
-	if err := client.ResetNotificationTarget("amqp", probe); err != nil {
+	if err := client.ResetNotificationTarget("notify_webhook", probe); err != nil {
 		t.Logf("could not clean up notification target probe %s: %v", probe, err)
 	}
 }
 
-func testAccNotificationTargetConfig(name, channel, comment string) string {
+func testAccNotificationTargetConfig(name, comment string) string {
+	endpoint := os.Getenv("RUSTFS_NOTIFY_TEST_ENDPOINT")
 	return testAccProviderConfig() + fmt.Sprintf(`
 resource "rustfs_notification_target" "test" {
-  target_type = "redis"
+  target_type = "notify_webhook"
   target_name = "%s"
 
-  redis_config = {
-    url     = "redis://127.0.0.1:6379/"
-    channel = "%s"
+  webhook_config = {
+    endpoint = "%s"
   }
 
   comment = "%s"
 }
-`, name, channel, comment)
+`, name, endpoint, comment)
 }
 
 func testAccCheckNotificationTargetExists(name string) resource.TestCheckFunc {
@@ -230,7 +240,7 @@ func testAccCheckNotificationTargetExists(name string) resource.TestCheckFunc {
 			return err
 		}
 		for _, target := range targets {
-			if target.AccountID == name && target.Service == "redis" {
+			if target.AccountID == name && target.Service == "webhook" {
 				return nil
 			}
 		}

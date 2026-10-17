@@ -305,12 +305,6 @@ func (r *auditTargetRessource) auditTargetKeyValues(model *auditTargetRessourceM
 	return kvs, nil
 }
 
-// serviceForType maps an audit target_type to the service reported by the list
-// endpoint (audit_webhook -> webhook, audit_kafka -> kafka, ...).
-func serviceForType(targetType string) string {
-	return strings.TrimPrefix(targetType, "audit_")
-}
-
 // Create adds the audit target and sets the initial Terraform state.
 func (r *auditTargetRessource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var plan auditTargetRessourceModel
@@ -359,7 +353,7 @@ func (r *auditTargetRessource) refreshHealth(model *auditTargetRessourceModel) e
 	}
 
 	key := model.TargetName.ValueString()
-	service := serviceForType(model.TargetType.ValueString())
+	service := targetServiceName(model.TargetType.ValueString())
 	for i := range targets {
 		t := &targets[i]
 		if t.AccountID == key && (service == "" || t.Service == service) {
@@ -393,7 +387,7 @@ func (r *auditTargetRessource) Read(ctx context.Context, req resource.ReadReques
 	}
 
 	key := state.TargetName.ValueString()
-	service := serviceForType(state.TargetType.ValueString())
+	service := targetServiceName(state.TargetType.ValueString())
 	var found *rustfs.AuditTarget
 	for i := range targets {
 		t := &targets[i]

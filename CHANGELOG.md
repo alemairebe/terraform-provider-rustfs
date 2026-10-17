@@ -2,7 +2,8 @@
 
 FEATURES:
 - **New Resource:** `rustfs_notification_target` — event-notification targets for all nine target
-  types (webhook, amqp, kafka, mqtt, nats, postgres, mysql, redis, pulsar), configured through
+  types (`notify_webhook`, `notify_amqp`, `notify_kafka`, `notify_mqtt`, `notify_nats`,
+  `notify_postgres`, `notify_mysql`, `notify_redis`, `notify_pulsar`), configured through
   mutually-exclusive typed `*_config` blocks, with `enable`, `comment` and the computed
   `status`/`health_state`/`health_reason` health metadata
 - `rustfs_audit_target` gains the same nine `*_config` blocks plus `enable`, so audit targets can

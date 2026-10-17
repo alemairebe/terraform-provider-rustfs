@@ -30,6 +30,7 @@ services:
       RUSTFS_ENDPOINT: "rustfs:9001"
       RUSTFS_USER: "rustfsadmin"
       RUSTFS_SECRET: "rustfsadmin"
+      RUSTFS_NOTIFY_TEST_ENDPOINT: "http://127.0.0.1:9001/health/ready"
       TEST_FILTER: "${TEST_FILTER:-TestAcc}"
     depends_on:
       rustfs:
@@ -45,6 +46,9 @@ services:
     environment:
       RUSTFS_ACCESS_KEY: rustfsadmin
       RUSTFS_SECRET_KEY: rustfsadmin
+      RUSTFS_NOTIFY_ENABLE: "true"
+      RUSTFS_AUDIT_ENABLE: "true"
+      RUSTFS_OUTBOUND_ALLOW_ORIGINS: "http://127.0.0.1:9001"
       RUSTFS_KMS_ENABLE: "true"
       RUSTFS_KMS_BACKEND: "local"
       RUSTFS_KMS_KEY_DIR: "/data/kms"
