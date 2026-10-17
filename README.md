@@ -49,7 +49,8 @@ notification targets — work once the matching RustFS sub-system is enabled and
 | `rustfs_kms_key` | KMS master keys |
 | `rustfs_config` | Server sub-system configuration (config-kv) |
 | `rustfs_module_switch` | Feature module switches |
-| `rustfs_audit_target` | Audit-log webhook/HTTP targets |
+| `rustfs_audit_target` | Audit-log targets (webhook, AMQP, Kafka, etc.) |
+| `rustfs_notification_target` | Event-notification targets (webhook, AMQP, Kafka, etc.) |
 | `rustfs_iam_backup_import` | Import IAM entities from a backup |
 | `rustfs_bucket_metadata_backup_import` | Import bucket metadata from a backup |
 

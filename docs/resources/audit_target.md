@@ -2,12 +2,12 @@
 page_title: "rustfs_audit_target Resource - rustfs"
 subcategory: ""
 description: |-
-  Manage RustFS audit-log webhook/HTTP targets
+  Manage RustFS audit-log targets (webhook, amqp, kafka, mqtt, nats, postgres, mysql, redis, pulsar)
 ---
 
 # rustfs_audit_target Resource
 
-Manage RustFS audit-log webhook/HTTP targets
+Manage RustFS audit-log targets (webhook, amqp, kafka, mqtt, nats, postgres, mysql, redis, pulsar)
 
 ## Example Usage
 
@@ -18,6 +18,23 @@ resource "rustfs_audit_target" "test" {
   endpoint    = "https://hooks.example.com/webhook/terraform"
   auth_token  = "superSecret"
   comment     = "managed by terraform"
+}
+
+# Audit targets other than webhooks are configured through the typed
+# *_config blocks; target_type then carries the audit_ prefix. The flat
+# webhook attributes above cannot be combined with a typed block.
+resource "rustfs_audit_target" "amqp" {
+  target_type = "audit_amqp"
+  target_name = "terraform"
+  comment     = "managed by terraform"
+
+  amqp_config = {
+    url         = "amqps://mq.example.com:5671/"
+    username    = "rustfs-audit"
+    password    = "superSecret"
+    exchange    = "rustfs.audit.exchange"
+    routing_key = "rustfs.audit"
+  }
 }
 ```
 
@@ -30,19 +47,201 @@ resource "rustfs_audit_target" "test" {
 
 ### Optional
 
+- `amqp_config` (Attributes) AMQP event target configuration. (see [below for nested schema](#nestedatt--amqp_config))
 - `auth_token` (String, Sensitive) Optional bearer token for the audit target (webhook). Not refreshed from the server on read.
 - `client_ca` (String, Sensitive) Optional CA certificate used to verify the audit target.
 - `client_cert` (String, Sensitive) Optional client certificate for mTLS to the audit target.
 - `client_key` (String, Sensitive) Optional client private key for mTLS to the audit target.
 - `comment` (String) Optional comment describing the audit target.
+- `enable` (Boolean) Whether the audit target is enabled.
 - `endpoint` (String) Endpoint URL the audit target posts to (webhook).
+- `kafka_config` (Attributes) Kafka event target configuration. (see [below for nested schema](#nestedatt--kafka_config))
+- `mqtt_config` (Attributes) MQTT event target configuration. (see [below for nested schema](#nestedatt--mqtt_config))
+- `mysql_config` (Attributes) MySQL event target configuration. (see [below for nested schema](#nestedatt--mysql_config))
+- `nats_config` (Attributes) NATS event target configuration. (see [below for nested schema](#nestedatt--nats_config))
+- `postgres_config` (Attributes) PostgreSQL event target configuration. (see [below for nested schema](#nestedatt--postgres_config))
+- `pulsar_config` (Attributes) Pulsar event target configuration. (see [below for nested schema](#nestedatt--pulsar_config))
 - `queue_dir` (String) Optional absolute path of the on-disk queue directory for the audit target.
 - `queue_limit` (Number) Optional in-memory queue limit for the audit target.
+- `redis_config` (Attributes) Redis event target configuration. (see [below for nested schema](#nestedatt--redis_config))
 - `skip_tls_verify` (Boolean) Skip TLS certificate verification for the audit target.
 - `target_type` (String) Audit target subsystem. Defaults to audit_webhook.
+- `webhook_config` (Attributes) Webhook (HTTP) event target configuration. (see [below for nested schema](#nestedatt--webhook_config))
 
 ### Read-Only
 
 - `health_reason` (String) Runtime health reason for the audit target.
 - `health_state` (String) Runtime health state of the audit target (offline/online/...).
 - `status` (String) Runtime status of the audit target.
+
+<a id="nestedatt--amqp_config"></a>
+### Nested Schema for `amqp_config`
+
+Optional:
+
+- `exchange` (String) AMQP exchange to publish events to.
+- `mandatory` (Boolean) Whether the AMQP publisher uses the mandatory flag.
+- `password` (String, Sensitive) Password used to authenticate to the target.
+- `persistent` (Boolean) Whether AMQP messages are marked persistent.
+- `queue_dir` (String) Absolute path of the on-disk queue directory for the target.
+- `queue_limit` (Number) In-memory queue limit for the target.
+- `routing_key` (String) AMQP routing key used when publishing events.
+- `tls_ca` (String) CA certificate used to verify the target.
+- `tls_client_cert` (String) Client certificate for mTLS to the target.
+- `tls_client_key` (String, Sensitive) Client private key for mTLS to the target.
+- `url` (String) AMQP broker URL.
+- `username` (String) Username used to authenticate to the target.
+
+
+<a id="nestedatt--kafka_config"></a>
+### Nested Schema for `kafka_config`
+
+Optional:
+
+- `acks` (String) Kafka producer acknowledgement mode: 0, 1, -1 or all.
+- `brokers` (String) Comma-separated list of Kafka broker addresses.
+- `queue_dir` (String) Absolute path of the on-disk queue directory for the target.
+- `queue_limit` (Number) In-memory queue limit for the target.
+- `sasl_enable` (Boolean) Whether SASL authentication is enabled for the Kafka connection.
+- `sasl_mechanism` (String) SASL authentication mechanism for the Kafka connection.
+- `sasl_password` (String, Sensitive) SASL password for the Kafka connection.
+- `sasl_username` (String) SASL username for the Kafka connection.
+- `tls_ca` (String) CA certificate used to verify the target.
+- `tls_client_cert` (String) Client certificate for mTLS to the target.
+- `tls_client_key` (String, Sensitive) Client private key for mTLS to the target.
+- `tls_enable` (Boolean) Whether TLS is enabled for the Kafka connection.
+- `topic` (String) Kafka topic to publish events to.
+
+
+<a id="nestedatt--mqtt_config"></a>
+### Nested Schema for `mqtt_config`
+
+Optional:
+
+- `broker` (String) MQTT broker address.
+- `keep_alive_interval` (Number) Keep-alive interval for the MQTT client.
+- `password` (String, Sensitive) Password used to authenticate to the target.
+- `qos` (Number) MQTT quality of service level.
+- `queue_dir` (String) Absolute path of the on-disk queue directory for the target.
+- `queue_limit` (Number) In-memory queue limit for the target.
+- `reconnect_interval` (Number) Reconnect interval for the MQTT client.
+- `tls_ca` (String) CA certificate used to verify the target.
+- `tls_client_cert` (String) Client certificate for mTLS to the target.
+- `tls_client_key` (String, Sensitive) Client private key for mTLS to the target.
+- `tls_policy` (String) TLS certificate policy: system_ca or custom_ca.
+- `tls_trust_leaf_as_ca` (Boolean) Whether to trust the leaf certificate as the CA.
+- `topic` (String) MQTT topic to publish events to.
+- `username` (String) Username used to authenticate to the target.
+- `ws_path_allowlist` (String) WebSocket path allowlist for the MQTT connection.
+
+
+<a id="nestedatt--mysql_config"></a>
+### Nested Schema for `mysql_config`
+
+Optional:
+
+- `dsn_string` (String, Sensitive) MySQL connection DSN string.
+- `format` (String) MySQL event format.
+- `max_open_connections` (Number) Maximum number of open MySQL connections.
+- `queue_dir` (String) Absolute path of the on-disk queue directory for the target.
+- `queue_limit` (Number) In-memory queue limit for the target.
+- `table` (String) MySQL table to write events to.
+- `tls_ca` (String) CA certificate used to verify the target.
+- `tls_client_cert` (String) Client certificate for mTLS to the target.
+- `tls_client_key` (String, Sensitive) Client private key for mTLS to the target.
+
+
+<a id="nestedatt--nats_config"></a>
+### Nested Schema for `nats_config`
+
+Optional:
+
+- `address` (String) NATS server address.
+- `credentials_file` (String) Path to the NATS credentials file.
+- `jetstream_ack_timeout_secs` (Number) NATS JetStream acknowledgement timeout in seconds.
+- `jetstream_enable` (Boolean) Whether JetStream is enabled for the NATS target.
+- `jetstream_stream_name` (String) NATS JetStream stream name.
+- `password` (String, Sensitive) Password used to authenticate to the target.
+- `queue_dir` (String) Absolute path of the on-disk queue directory for the target.
+- `queue_limit` (Number) In-memory queue limit for the target.
+- `subject` (String) NATS subject to publish events to.
+- `tls_ca` (String) CA certificate used to verify the target.
+- `tls_client_cert` (String) Client certificate for mTLS to the target.
+- `tls_client_key` (String, Sensitive) Client private key for mTLS to the target.
+- `tls_required` (Boolean) Whether TLS is required for the NATS connection.
+- `token` (String, Sensitive) NATS authentication token.
+- `username` (String) Username used to authenticate to the target.
+
+
+<a id="nestedatt--postgres_config"></a>
+### Nested Schema for `postgres_config`
+
+Optional:
+
+- `dsn_string` (String, Sensitive) PostgreSQL connection DSN string.
+- `format` (String) PostgreSQL event format: namespace or access.
+- `queue_dir` (String) Absolute path of the on-disk queue directory for the target.
+- `queue_limit` (Number) In-memory queue limit for the target.
+- `table` (String) PostgreSQL table to write events to.
+- `tls_ca` (String) CA certificate used to verify the target.
+- `tls_client_cert` (String) Client certificate for mTLS to the target.
+- `tls_client_key` (String, Sensitive) Client private key for mTLS to the target.
+- `tls_required` (Boolean) Whether TLS is required for the PostgreSQL connection.
+
+
+<a id="nestedatt--pulsar_config"></a>
+### Nested Schema for `pulsar_config`
+
+Optional:
+
+- `auth_token` (String, Sensitive) Authentication token for the Pulsar target.
+- `broker` (String) Pulsar broker address.
+- `password` (String, Sensitive) Password used to authenticate to the target.
+- `queue_dir` (String) Absolute path of the on-disk queue directory for the target.
+- `queue_limit` (Number) In-memory queue limit for the target.
+- `tls_allow_insecure` (Boolean) Whether to allow insecure TLS connections.
+- `tls_ca` (String) CA certificate used to verify the Pulsar target.
+- `tls_hostname_verification` (Boolean) Whether TLS hostname verification is enabled.
+- `topic` (String) Pulsar topic to publish events to.
+- `username` (String) Username used to authenticate to the target.
+
+
+<a id="nestedatt--redis_config"></a>
+### Nested Schema for `redis_config`
+
+Optional:
+
+- `channel` (String) Redis channel to publish events to.
+- `connection_timeout` (Number) Connection timeout for the Redis connection.
+- `keep_alive_interval` (Number) Keep-alive interval for the Redis connection.
+- `max_retry_attempts` (Number) Maximum number of retry attempts.
+- `max_retry_delay` (Number) Maximum delay between retry attempts.
+- `min_retry_delay` (Number) Minimum delay between retry attempts.
+- `password` (String, Sensitive) Password used to authenticate to the target.
+- `pipeline_buffer_size` (Number) Redis pipeline buffer size.
+- `queue_dir` (String) Absolute path of the on-disk queue directory for the target.
+- `queue_limit` (Number) In-memory queue limit for the target.
+- `reconnect_retry_attempts` (Number) Number of reconnect retry attempts.
+- `response_timeout` (Number) Response timeout for the Redis connection.
+- `tls_allow_insecure` (Boolean) Whether to allow insecure TLS connections.
+- `tls_ca` (String) CA certificate used to verify the target.
+- `tls_client_cert` (String) Client certificate for mTLS to the target.
+- `tls_client_key` (String, Sensitive) Client private key for mTLS to the target.
+- `tls_policy` (String) TLS certificate policy: system_ca or custom_ca.
+- `url` (String) Redis server URL.
+- `username` (String) Username used to authenticate to the target.
+
+
+<a id="nestedatt--webhook_config"></a>
+### Nested Schema for `webhook_config`
+
+Optional:
+
+- `auth_token` (String, Sensitive) Optional bearer token sent to the webhook target.
+- `client_ca` (String) CA certificate used to verify the webhook target.
+- `client_cert` (String) Client certificate for mTLS to the webhook target.
+- `client_key` (String, Sensitive) Client private key for mTLS to the webhook target.
+- `endpoint` (String) Endpoint URL the webhook target posts to.
+- `queue_dir` (String) Absolute path of the on-disk queue directory for the webhook target.
+- `queue_limit` (Number) In-memory queue limit for the webhook target.
+- `skip_tls_verify` (Boolean) Skip TLS certificate verification for the webhook target.
