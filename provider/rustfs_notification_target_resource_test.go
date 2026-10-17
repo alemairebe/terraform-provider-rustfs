@@ -130,7 +130,7 @@ func TestAccNotificationTargetResource(t *testing.T) {
 		CheckDestroy:             testAccCheckNotificationTargetDestroy,
 		Steps: []resource.TestStep{
 			{
-				Config: testAccNotificationTargetConfig(name, "tf-events"),
+				Config: testAccNotificationTargetConfig(name, "tf-events", "managed by terraform"),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					testAccCheckNotificationTargetExists(name),
 					resource.TestCheckResourceAttr(notificationTargetResourceName, "target_type", "redis"),
@@ -143,7 +143,7 @@ func TestAccNotificationTargetResource(t *testing.T) {
 				),
 			},
 			{
-				Config: testAccNotificationTargetConfig(name, "tf-events-updated"),
+				Config: testAccNotificationTargetConfig(name, "tf-events-updated", "updated by terraform"),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					testAccCheckNotificationTargetExists(name),
 					resource.TestCheckResourceAttr(notificationTargetResourceName, "redis_config.channel", "tf-events-updated"),
@@ -197,7 +197,7 @@ func testAccNotificationTargetPreCheck(t *testing.T) {
 	}
 }
 
-func testAccNotificationTargetConfig(name, channel string) string {
+func testAccNotificationTargetConfig(name, channel, comment string) string {
 	return testAccProviderConfig() + fmt.Sprintf(`
 resource "rustfs_notification_target" "test" {
   target_type = "redis"
@@ -210,7 +210,7 @@ resource "rustfs_notification_target" "test" {
 
   comment = "%s"
 }
-`, name, channel, "managed by terraform")
+`, name, channel, comment)
 }
 
 func testAccCheckNotificationTargetExists(name string) resource.TestCheckFunc {
