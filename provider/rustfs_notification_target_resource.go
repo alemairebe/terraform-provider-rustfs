@@ -159,12 +159,24 @@ func (r *notificationTargetResource) ValidateConfig(ctx context.Context, req res
 		return
 	}
 
-	if err := model.configBlocks().validate(model.TargetType.ValueString()); err != nil {
+	if err := model.validateConfig(); err != nil {
 		resp.Diagnostics.AddError(
 			"Invalid notification target configuration",
 			err.Error(),
 		)
 	}
+}
+
+// validateConfig enforces the "exactly one matching block" invariant that the
+// schema alone cannot express. target_type is Required, so an unknown or null
+// value means the framework will report its own "required" diagnostic; skip the
+// invariant in that case rather than normalizing "" and falsely rejecting a
+// matching block.
+func (m *notificationTargetResourceModel) validateConfig() error {
+	if m.TargetType.IsUnknown() || m.TargetType.IsNull() {
+		return nil
+	}
+	return m.configBlocks().validate(m.TargetType.ValueString())
 }
 
 // Create adds the notification target and sets the initial Terraform state.
@@ -270,6 +282,7 @@ func (r *notificationTargetResource) Read(ctx context.Context, req resource.Read
 	// are preserved from state; the list response is not trusted to echo them
 	// back.
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
+	tflog.Trace(ctx, "read a notification target")
 }
 
 // Update edits the notification target and updates the Terraform state on success.
@@ -300,6 +313,7 @@ func (r *notificationTargetResource) Update(ctx context.Context, req resource.Up
 		)
 		return
 	}
+	tflog.Trace(ctx, "updated a notification target")
 	if err := r.refreshHealth(&plan); err != nil {
 		resp.Diagnostics.AddError(
 			"Error reading notification target",
@@ -331,7 +345,9 @@ func (r *notificationTargetResource) Delete(ctx context.Context, req resource.De
 			"Error resetting notification target",
 			"Could not reset notification target, unexpected error: "+err.Error(),
 		)
+		return
 	}
+	tflog.Trace(ctx, "deleted a notification target")
 }
 
 func (r *notificationTargetResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {

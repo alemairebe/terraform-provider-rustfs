@@ -13,6 +13,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/defaults"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
@@ -112,6 +113,68 @@ func TestNotificationTargetMetadata(t *testing.T) {
 
 	if resp.TypeName != "rustfs_notification_target" {
 		t.Errorf("expected rustfs_notification_target, got %s", resp.TypeName)
+	}
+}
+
+func TestNotificationTargetValidate(t *testing.T) {
+	tests := []struct {
+		name    string
+		model   notificationTargetResourceModel
+		wantErr string
+	}{
+		{
+			name: "unknown target_type with matching block is ok",
+			model: notificationTargetResourceModel{
+				TargetType: types.StringUnknown(),
+				Webhook: &targetWebhookConfigModel{
+					Endpoint: types.StringValue("https://hooks.example.com/webhook/x"),
+				},
+			},
+		},
+		{
+			name: "null target_type with matching block is ok",
+			model: notificationTargetResourceModel{
+				TargetType: types.StringNull(),
+				Webhook: &targetWebhookConfigModel{
+					Endpoint: types.StringValue("https://hooks.example.com/webhook/x"),
+				},
+			},
+		},
+		{
+			name: "block for wrong type",
+			model: notificationTargetResourceModel{
+				TargetType: types.StringValue("notify_amqp"),
+				Webhook: &targetWebhookConfigModel{
+					Endpoint: types.StringValue("https://hooks.example.com/webhook/x"),
+				},
+			},
+			wantErr: `target type "notify_amqp" requires the amqp_config block`,
+		},
+		{
+			name: "no block with non-webhook type",
+			model: notificationTargetResourceModel{
+				TargetType: types.StringValue("notify_amqp"),
+			},
+			wantErr: "target configuration block",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.model.validateConfig()
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("expected no error, got %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected error %q, got nil", tc.wantErr)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("expected error %q, got %q", tc.wantErr, err.Error())
+			}
+		})
 	}
 }
 

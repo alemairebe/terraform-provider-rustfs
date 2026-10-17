@@ -243,6 +243,13 @@ func TestTargetConfigValidate(t *testing.T) {
 	if err := blocks.validate("amqp"); err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
+
+	// A block whose only attribute is unknown is not empty: the value is not
+	// resolvable yet, so it must not be rejected at plan time.
+	unknownOnly := targetConfigBlocks{Amqp: &targetAmqpConfigModel{URL: types.StringUnknown()}}
+	if err := unknownOnly.validate("amqp"); err != nil {
+		t.Fatalf("expected nil error for unknown-only block, got %v", err)
+	}
 }
 
 func TestTargetConfigSchema(t *testing.T) {

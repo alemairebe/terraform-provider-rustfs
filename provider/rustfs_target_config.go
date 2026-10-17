@@ -13,9 +13,8 @@ import (
 )
 
 // targetConfigBlockName maps a target type spelling to its configuration
-// block name. Audit targets use the "audit_<service>" subsystem spelling,
-// notification targets use the bare "<service>" spelling and the admin API
-// also accepts "notify_<service>"; all normalize to "<service>_config".
+// block name. Both resources pass the subsystem spelling ("audit_<service>" or
+// "notify_<service>"); all normalize to "<service>_config".
 func targetConfigBlockName(targetType string) string {
 	name := strings.TrimPrefix(targetType, "audit_")
 	name = strings.TrimPrefix(name, "notify_")
@@ -195,7 +194,7 @@ func (b targetConfigBlocks) validate(targetType string) error {
 	if set[0] != blockName {
 		return fmt.Errorf("target type %q requires the %s block", targetType, blockName)
 	}
-	if len(b.blockKeyValues(set[0])) == 0 {
+	if b.blockEmpty(set[0]) {
 		return fmt.Errorf("%s must not be empty", blockName)
 	}
 	return nil
@@ -277,6 +276,51 @@ func (b targetConfigBlocks) blockKeyValues(blockName string) []rustfs.TargetKeyV
 		return b.Pulsar.keyValues()
 	}
 	return nil
+}
+
+// blockEmpty reports whether the named block's attributes are all null. A
+// block is only treated as empty when every attribute is null; an unknown
+// attribute counts as present because it is not yet resolvable and cannot be
+// judged empty at plan time. The caller guarantees blockName names a non-nil
+// block.
+func (b targetConfigBlocks) blockEmpty(blockName string) bool {
+	switch blockName {
+	case "webhook_config":
+		return b.Webhook.isEmpty()
+	case "amqp_config":
+		return b.Amqp.isEmpty()
+	case "kafka_config":
+		return b.Kafka.isEmpty()
+	case "mqtt_config":
+		return b.Mqtt.isEmpty()
+	case "nats_config":
+		return b.Nats.isEmpty()
+	case "postgres_config":
+		return b.Postgres.isEmpty()
+	case "mysql_config":
+		return b.Mysql.isEmpty()
+	case "redis_config":
+		return b.Redis.isEmpty()
+	case "pulsar_config":
+		return b.Pulsar.isEmpty()
+	}
+	return false
+}
+
+// targetConfigBlockValue is implemented by the framework attribute value types
+// used in the target configuration blocks (types.String, types.Bool, types.Int64).
+type targetConfigBlockValue interface {
+	IsNull() bool
+}
+
+// targetConfigBlockAllNull reports whether every attribute value is null.
+func targetConfigBlockAllNull(values ...targetConfigBlockValue) bool {
+	for _, v := range values {
+		if !v.IsNull() {
+			return false
+		}
+	}
+	return true
 }
 
 // targetKeyValueBuilder accumulates key/value pairs in server table order.
@@ -458,6 +502,81 @@ func (m *targetPulsarConfigModel) keyValues() []rustfs.TargetKeyValue {
 	b.addString("queue_dir", m.QueueDir)
 	b.addInt64("queue_limit", m.QueueLimit)
 	return b.kvs
+}
+
+// isEmpty reports whether every attribute in the block is null. An unknown
+// attribute counts as present, so a block whose only attribute is unknown is
+// not considered empty. Each method mirrors its keyValues field list.
+func (m *targetWebhookConfigModel) isEmpty() bool {
+	return targetConfigBlockAllNull(
+		m.Endpoint, m.AuthToken, m.QueueLimit, m.QueueDir,
+		m.ClientCert, m.ClientKey, m.ClientCA, m.SkipTLSVerify,
+	)
+}
+
+func (m *targetAmqpConfigModel) isEmpty() bool {
+	return targetConfigBlockAllNull(
+		m.URL, m.Exchange, m.RoutingKey, m.Mandatory, m.Persistent,
+		m.Username, m.Password, m.TLSCA, m.TLSClientCert, m.TLSClientKey,
+		m.QueueDir, m.QueueLimit,
+	)
+}
+
+func (m *targetKafkaConfigModel) isEmpty() bool {
+	return targetConfigBlockAllNull(
+		m.Brokers, m.Topic, m.Acks, m.TLSEnable, m.TLSCA, m.TLSClientCert,
+		m.TLSClientKey, m.SASLEnable, m.SASLMechanism, m.SASLUsername,
+		m.SASLPassword, m.QueueDir, m.QueueLimit,
+	)
+}
+
+func (m *targetMqttConfigModel) isEmpty() bool {
+	return targetConfigBlockAllNull(
+		m.Broker, m.Topic, m.Qos, m.Username, m.Password,
+		m.ReconnectInterval, m.KeepAliveInterval, m.QueueDir, m.QueueLimit,
+		m.TLSPolicy, m.TLSCA, m.TLSClientCert, m.TLSClientKey,
+		m.TLSTrustLeafAsCA, m.WSPathAllowlist,
+	)
+}
+
+func (m *targetNatsConfigModel) isEmpty() bool {
+	return targetConfigBlockAllNull(
+		m.Address, m.Subject, m.Username, m.Password, m.Token,
+		m.CredentialsFile, m.TLSCA, m.TLSClientCert, m.TLSClientKey,
+		m.TLSRequired, m.QueueDir, m.QueueLimit, m.JetstreamEnable,
+		m.JetstreamStreamName, m.JetstreamAckTimeoutSecs,
+	)
+}
+
+func (m *targetPostgresConfigModel) isEmpty() bool {
+	return targetConfigBlockAllNull(
+		m.DSNString, m.Table, m.Format, m.TLSRequired, m.TLSCA,
+		m.TLSClientCert, m.TLSClientKey, m.QueueDir, m.QueueLimit,
+	)
+}
+
+func (m *targetMysqlConfigModel) isEmpty() bool {
+	return targetConfigBlockAllNull(
+		m.DSNString, m.Table, m.Format, m.TLSCA, m.TLSClientCert,
+		m.TLSClientKey, m.QueueDir, m.QueueLimit, m.MaxOpenConnections,
+	)
+}
+
+func (m *targetRedisConfigModel) isEmpty() bool {
+	return targetConfigBlockAllNull(
+		m.URL, m.Channel, m.Username, m.Password, m.KeepAliveInterval,
+		m.QueueDir, m.QueueLimit, m.MaxRetryAttempts, m.ReconnectRetryAttempts,
+		m.MinRetryDelay, m.MaxRetryDelay, m.ConnectionTimeout, m.ResponseTimeout,
+		m.PipelineBufferSize, m.TLSPolicy, m.TLSCA, m.TLSClientCert,
+		m.TLSClientKey, m.TLSAllowInsecure,
+	)
+}
+
+func (m *targetPulsarConfigModel) isEmpty() bool {
+	return targetConfigBlockAllNull(
+		m.Broker, m.Topic, m.AuthToken, m.Username, m.Password, m.TLSCA,
+		m.TLSAllowInsecure, m.TLSHostnameVerification, m.QueueDir, m.QueueLimit,
+	)
 }
 
 // targetConfigBlockSchema returns the nine per-type configuration blocks as

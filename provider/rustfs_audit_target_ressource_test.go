@@ -206,6 +206,15 @@ func TestAuditTargetValidate(t *testing.T) {
 			wantErr: `target type "audit_webhook" requires the webhook_config block`,
 		},
 		{
+			name: "unknown target_type with matching block is ok",
+			model: auditTargetRessourceModel{
+				TargetType: types.StringUnknown(),
+				Redis: &targetRedisConfigModel{
+					URL: types.StringValue("redis://127.0.0.1:6379/"),
+				},
+			},
+		},
+		{
 			name: "flat webhook attributes combined with block",
 			model: auditTargetRessourceModel{
 				TargetType: types.StringValue("audit_webhook"),

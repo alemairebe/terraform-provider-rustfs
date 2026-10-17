@@ -222,6 +222,14 @@ func (r *auditTargetRessource) ValidateConfig(ctx context.Context, req resource.
 // validateConfig enforces the audit target's two-path configuration rules and
 // returns a diagnostic-ready error when they are violated.
 func (m *auditTargetRessourceModel) validateConfig() error {
+	// target_type is Optional+Computed with a default of "audit_webhook". An
+	// unknown value cannot be resolved during config validation, so skip the
+	// two-path comparison rather than normalizing "" to "audit_webhook" and
+	// falsely rejecting a matching block.
+	if m.TargetType.IsUnknown() {
+		return nil
+	}
+
 	// target_type is Optional+Computed with a default of "audit_webhook", and
 	// ValidateConfig runs before defaults are applied, so an omitted target_type
 	// arrives as null/empty and must be normalized to the default before the
