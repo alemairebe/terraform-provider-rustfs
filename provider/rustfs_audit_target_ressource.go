@@ -179,8 +179,8 @@ func (r *auditTargetRessource) Schema(_ context.Context, _ resource.SchemaReques
 	}
 
 	resp.Schema = schema.Schema{
-		Description:         "Manage RustFS audit-log webhook/HTTP targets",
-		MarkdownDescription: "Manage RustFS audit-log webhook/HTTP targets",
+		Description:         "Manage RustFS audit-log targets (webhook, amqp, kafka, mqtt, nats, postgres, mysql, redis, pulsar)",
+		MarkdownDescription: "Manage RustFS audit-log targets (webhook, amqp, kafka, mqtt, nats, postgres, mysql, redis, pulsar)",
 		Attributes:          attributes,
 	}
 }
@@ -222,17 +222,26 @@ func (r *auditTargetRessource) ValidateConfig(ctx context.Context, req resource.
 // validateConfig enforces the audit target's two-path configuration rules and
 // returns a diagnostic-ready error when they are violated.
 func (m *auditTargetRessourceModel) validateConfig() error {
+	// target_type is Optional+Computed with a default of "audit_webhook", and
+	// ValidateConfig runs before defaults are applied, so an omitted target_type
+	// arrives as null/empty and must be normalized to the default before the
+	// two-path comparison.
+	targetType := m.TargetType.ValueString()
+	if targetType == "" {
+		targetType = "audit_webhook"
+	}
+
 	blocks := m.configBlocks()
 	if len(blocks.setBlocks()) == 0 {
 		// Legacy flat path: only audit_webhook may omit a typed block.
-		if m.TargetType.ValueString() != "audit_webhook" {
-			return fmt.Errorf("target type %q requires the %s block", m.TargetType.ValueString(), targetConfigBlockName(m.TargetType.ValueString()))
+		if targetType != "audit_webhook" {
+			return fmt.Errorf("target type %q requires the %s block", targetType, targetConfigBlockName(targetType))
 		}
 		return nil
 	}
 
 	// Typed path: exactly one block, matching target_type, and no flat attrs.
-	if err := blocks.validate(m.TargetType.ValueString()); err != nil {
+	if err := blocks.validate(targetType); err != nil {
 		return err
 	}
 	if flatWebhookAttributesSet(m) {

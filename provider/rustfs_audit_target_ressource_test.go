@@ -189,6 +189,23 @@ func TestAuditTargetValidate(t *testing.T) {
 			},
 		},
 		{
+			name: "omitted target_type with flat webhook attributes is ok",
+			model: auditTargetRessourceModel{
+				TargetType: types.StringNull(),
+				Endpoint:   types.StringValue("https://hooks.example.com/webhook/x"),
+			},
+		},
+		{
+			name: "omitted target_type with non-webhook block errors",
+			model: auditTargetRessourceModel{
+				TargetType: types.StringNull(),
+				Redis: &targetRedisConfigModel{
+					URL: types.StringValue("redis://127.0.0.1:6379/"),
+				},
+			},
+			wantErr: `target type "audit_webhook" requires the webhook_config block`,
+		},
+		{
 			name: "flat webhook attributes combined with block",
 			model: auditTargetRessourceModel{
 				TargetType: types.StringValue("audit_webhook"),
