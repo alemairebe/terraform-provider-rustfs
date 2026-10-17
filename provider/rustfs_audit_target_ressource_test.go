@@ -66,7 +66,7 @@ func testAccAuditTargetPreCheck(t *testing.T) {
 
 	client := testAccRustClient()
 	probe := fmt.Sprintf("tf-audit-probe-%d", acctest.RandInt())
-	probeConfig := []rustfs.AuditTargetKeyValue{
+	probeConfig := []rustfs.TargetKeyValue{
 		{Key: "endpoint", Value: "https://hooks.example.com/webhook/" + probe},
 	}
 	err := client.SetAuditTarget("audit_webhook", probe, probeConfig)

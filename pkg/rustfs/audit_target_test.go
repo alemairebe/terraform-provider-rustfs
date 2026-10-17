@@ -73,7 +73,7 @@ func TestSetAuditTarget(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusOK)
 	})
-	err := client.SetAuditTarget("audit_webhook", "audit", []AuditTargetKeyValue{
+	err := client.SetAuditTarget("audit_webhook", "audit", []TargetKeyValue{
 		{Key: "endpoint", Value: "https://hooks.example/webhook"},
 		{Key: "auth_token", Value: "s3cr3t"},
 		{Key: "comment", Value: "audit logs"},
@@ -103,7 +103,7 @@ func TestSetAuditTargetError(t *testing.T) {
 		w.WriteHeader(http.StatusBadRequest)
 		_, _ = w.Write([]byte(`{"Code":"InvalidArgument","Message":"endpoint is required"}`))
 	})
-	err := client.SetAuditTarget("audit_webhook", "audit", []AuditTargetKeyValue{{Key: "comment", Value: "x"}})
+	err := client.SetAuditTarget("audit_webhook", "audit", []TargetKeyValue{{Key: "comment", Value: "x"}})
 	if err == nil {
 		t.Fatal("expected an error for a rejected request")
 	}
