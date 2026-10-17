@@ -202,6 +202,7 @@ func (p *RustfsProvider) Resources(ctx context.Context) []func() resource.Resour
 		NewBucketEncryptionResource,
 		NewBucketVersioningResource,
 		NewAuditTargetRessource,
+		NewNotificationTargetResource,
 		NewModuleSwitchRessource,
 		NewKmsKeyRessource,
 		NewConfigRessource,
