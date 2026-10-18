@@ -8,6 +8,9 @@
     },
     {
       "pattern": "^https?://(s3\\.amazonaws\\.com|img\\.shields\\.io|golang\\.org|hooks\\.slack\\.com)"
+    },
+    {
+      "pattern": "^https?://(api\\.securityscorecards\\.dev|scorecard\\.dev)"
     }
   ]
 }
