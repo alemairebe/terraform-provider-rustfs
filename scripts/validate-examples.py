@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 The terraform-provider-rustfs contributors
+# SPDX-License-Identifier: Apache-2.0
 """Validate the Terraform examples in this repository against the provider that is
 built from the working tree.
 

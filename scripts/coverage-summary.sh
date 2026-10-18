@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright (c) 2026 The terraform-provider-rustfs contributors
+# SPDX-License-Identifier: Apache-2.0
 #
 # Summarise a Go cover profile (as produced by `go test -coverprofile=...`) as a
 # Markdown table: one row per package plus a total, weakest package first.

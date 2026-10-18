@@ -1,5 +1,5 @@
-// Copyright IBM Corp. 2021, 2025
-// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 The terraform-provider-rustfs contributors
+// SPDX-License-Identifier: Apache-2.0
 
 package main
 
