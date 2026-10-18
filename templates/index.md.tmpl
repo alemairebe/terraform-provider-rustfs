@@ -2,28 +2,105 @@
 page_title: "rustfs Provider"
 subcategory: ""
 description: |-
-  The RustFS provider manages resources in RustFS, an S3-compatible object storage system.
+  Terraform provider for RustFS, S3-compatible object storage: buckets, IAM users, groups and
+  policies, service accounts, KMS keys, quotas, lifecycle rules, versioning, object lock,
+  encryption, bucket and site replication, storage tiers and ILM, audit and notification targets,
+  module switches and cluster health - 32 resources and 17 data sources.
 ---
 
 # rustfs Provider
 
-The RustFS provider manages resources in [RustFS](https://github.com/rustfs/rustfs), an
-S3-compatible object storage system. It talks to both the S3 API and the RustFS admin API
-(`/rustfs/admin/v3`) to manage buckets, IAM users, groups, policies and service accounts,
-quotas, lifecycle rules, encryption, versioning, object lock, replication, storage tiers,
-KMS keys and server sub-system configuration.
+Terraform provider for [RustFS](https://github.com/rustfs/rustfs), an S3-compatible object storage
+system. It talks to both the S3 API and the RustFS admin API v3 (`/rustfs/admin/v3`), so storage,
+identity, encryption, replication, tiering and monitoring can live in the same Terraform state as
+the rest of your infrastructure.
+
+**32 resources and 17 data sources**, including support for:
+
+- **Buckets** - buckets, policy, public-access block, tags, CORS, versioning, object lock,
+  encryption (SSE-S3/SSE-KMS), lifecycle, notifications, durability
+- **Identity** - IAM users, groups, policies, service accounts, LDAP service accounts and policy
+  attachments, plus IAM backup import
+- **Data movement** - bucket replication, site replication, remote targets, pool rebalancing
+- **Tiers and KMS** - storage tiers (S3, Azure, GCS, ...), ILM tier statistics, KMS master keys
+- **Operations** - quotas, server sub-system configuration (config-kv), feature module switches,
+  audit targets, notification targets
+- **Observability** - cluster health (OBD diagnostics), storage info, server/pool/drive info,
+  metrics, replication metrics
+
+## Quick start
+
+```terraform
+terraform {
+  required_providers {
+    rustfs = {
+      source  = "caberdo/rustfs"
+      version = "~> 0.4"
+    }
+  }
+}
+
+provider "rustfs" {
+  endpoint   = "127.0.0.1:9001"
+  access_key = "rustfsadmin"
+  secret_key = "rustfsadmin"
+}
+
+resource "rustfs_bucket" "artifacts" {
+  name = "artifacts"
+}
+
+resource "rustfs_user" "ci" {
+  access_key = "ci-bot"
+  secret_key = "super-secret"
+  name       = "CI pipeline"
+  status     = "enabled"
+}
+```
+
+The [README](https://github.com/caberdo/terraform-provider-rustfs#readme) documents every resource
+in detail, including the complete resource and data source tables.
 
 ## Support and compatibility
 
 - The provider speaks the S3 API through the AWS SDK for Go v2 S3 client and the RustFS admin
   API v3 (`/rustfs/admin/v3`), both with SigV4-signed requests.
-- Terraform 1.0 or later is required (plugin protocol 6.0).
+- Terraform 1.0 or later is required (plugin protocol 6.0); the provider is also available for
+  OpenTofu.
+- CI exercises the acceptance suite against RustFS `1.0.1` and `latest`; see
+  [`.github/rustfs-versions.txt`](https://github.com/caberdo/terraform-provider-rustfs/blob/main/.github/rustfs-versions.txt).
 - Capabilities that depend on server-side sub-systems - KMS (`rustfs_kms_key`), LDAP
   (`rustfs_ldap_*`), storage tiers and ILM (`rustfs_tier`, `rustfs_rebalance`), audit
   targets (`rustfs_audit_target`) and notification targets - fail with the server's error
   until the matching RustFS sub-system is enabled and configured.
 - Bucket encryption (`rustfs_bucket_encryption`) requires a KMS backend when using SSE-KMS;
   `AES256` (SSE-S3) works without one.
+
+## Migrating from `weinmann-emt/rustfs`
+
+This provider is the successor of
+[`weinmann-emt/terraform-provider-rustfs`](https://github.com/weinmann-emt/terraform-provider-rustfs).
+Twelve of its sixteen resources and all six of its data sources are schema-compatible, so the move
+is a state rewrite:
+
+```bash
+terraform state replace-provider weinmann-emt/rustfs caberdo/rustfs
+terraform plan   # expect: No changes.
+```
+
+See the [migration table](https://github.com/caberdo/terraform-provider-rustfs#migrating-from-weinmann-emtrustfs)
+for the three resources whose schemas differ and the one that was renamed.
+
+## Verifying a release
+
+Releases are built from GPG-signed, GitHub-verified tags and ship checksums signed with the
+[release signing key](https://github.com/caberdo/terraform-provider-rustfs/blob/main/.github/release-signing-key.asc)
+(fingerprint `77BEB69E5C039CB69017B060DFE36652ADCC2259`), an SPDX SBOM and the registry manifest:
+
+```bash
+gpg --verify terraform-provider-rustfs_<version>_SHA256SUMS.sig \
+             terraform-provider-rustfs_<version>_SHA256SUMS
+```
 
 ## Authentication
 
@@ -62,5 +139,12 @@ export RUSTFS_SECRET=secret
 ```terraform
 provider "rustfs" {}
 ```
+
+## Community
+
+- [Issues and feature requests](https://github.com/caberdo/terraform-provider-rustfs/issues)
+- [Changelog](https://github.com/caberdo/terraform-provider-rustfs/blob/main/CHANGELOG.md)
+- [Security policy](https://github.com/caberdo/terraform-provider-rustfs/blob/main/.github/SECURITY.md)
+- [Contributing](https://github.com/caberdo/terraform-provider-rustfs/blob/main/.github/CONTRIBUTING.md)
 
 {{ .SchemaMarkdown | trimspace }}
