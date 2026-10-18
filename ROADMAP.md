@@ -27,6 +27,9 @@ in RustFS. Landed so far:
 * **Releases carry SLSA v1.0 build provenance** next to the GPG-signed checksums
   ([#52](https://github.com/caberdo/terraform-provider-rustfs/issues/52)), so `gh attestation verify`
   works on a downloaded artifact.
+* **IAM policy statements are complete**: `Sid`, `Condition`, `NotAction` and `NotResource` are
+  supported in `rustfs_policy`
+  ([#59](https://github.com/caberdo/terraform-provider-rustfs/issues/59), closed).
 
 Still open in this cycle, roughly in the order they unblock each other:
 
@@ -42,8 +45,6 @@ Still open in this cycle, roughly in the order they unblock each other:
 
 * **Fix the group-policy attachment** that currently replaces every other policy on a group
   ([#58](https://github.com/caberdo/terraform-provider-rustfs/issues/58)).
-* **Full IAM policy statements**: `Condition`, `Sid`, `NotAction` and `NotResource` in
-  `rustfs_policy` ([#59](https://github.com/caberdo/terraform-provider-rustfs/issues/59)).
 * **Raise statement coverage**: the acceptance suite is now instrumented, so the merged number is
   visible in CI (~67% as of the badge work). The target is 80% merged, which is what the badge's
   silver level asks for.

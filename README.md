@@ -19,7 +19,7 @@ cluster health all live in the same Terraform state as the rest of your infrastr
 | | |
 |---|---|
 | 🎯 **Broadest RustFS coverage** | Buckets, IAM (users, groups, policies, service accounts, LDAP), KMS keys, quotas, bucket + site replication, storage tiers and ILM, audit and notification targets, durability, module switches, cluster health, metrics and diagnostics |
-| 🧪 **Tested against real servers** | 241 unit tests (four of them fuzz targets replaying a seed corpus) plus 52 acceptance tests that run against RustFS in Docker, on a version matrix (RustFS `1.0.1`, `1.0.2`, `1.0.3` and `latest`) |
+| 🧪 **Tested against real servers** | 249 unit tests (four of them fuzz targets replaying a seed corpus) plus 52 acceptance tests that run against RustFS in Docker, on a version matrix (RustFS `1.0.1`, `1.0.2`, `1.0.3` and `latest`) |
 | 🔐 **Verifiable supply chain** | GPG-signed release tags, signed `SHA256SUMS`, SLSA build provenance for every artifact, SPDX SBOM and the Terraform registry manifest in every release |
 | 🚚 **Drop-in successor** | 12 of the 16 resources of `weinmann-emt/rustfs` migrate with **zero** config changes, 1 has a rename, 3 need a small edit — see [Migrating](#migrating-from-weinmann-emtrustfs) |
 | ⚡ **Modern internals** | terraform-plugin-framework (plugin protocol 6.0), AWS SDK for Go v2, Go 1.27, Docker/Podman acceptance harness |
@@ -334,7 +334,7 @@ registered to the releasing account.
 | `make testacc-live` | Starts RustFS with `podman-compose` and runs the acceptance suite against it |
 | `make coverage-merge` | Merges the unit profile with the acceptance profile (`coverage-acceptance.out`, written by the acceptance container) into one statement-coverage table |
 
-The suite is 241 unit tests (10 of them skip themselves without a live server, and the four fuzz
+The suite is 249 unit tests (10 of them skip themselves without a live server, and the four fuzz
 targets replay their committed seed corpus) and 52 acceptance tests (44 run against RustFS
 `latest`, 8 skip when the server lacks the sub-system they need). CI runs the unit tests with
 `-race`, then the acceptance matrix (`.github/rustfs-versions.txt`) against real RustFS servers; the
