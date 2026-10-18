@@ -1,3 +1,14 @@
+## 0.4.1 (Unreleased)
+
+CHORES:
+- The acceptance environment no longer pins the notify and audit feature modules with
+  `RUSTFS_NOTIFY_ENABLE`/`RUSTFS_AUDIT_ENABLE`: RustFS rejects every admin API update to an
+  env-pinned module, which broke `TestAccModuleSwitchResource`. The audit and notification
+  target tests now enable their own module through the admin API and restore it afterwards, so
+  the module switch resource is testable again
+- `TestAccStorageInfo` accepts the non-empty refresh plan its live disk metrics (`avail_space`,
+  `free_inodes`, `used_space`) produce while the concurrent acceptance tests write objects
+
 ## 0.4.0 (2026-10-18)
 
 FEATURES:
