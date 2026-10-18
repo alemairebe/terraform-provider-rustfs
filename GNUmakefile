@@ -27,6 +27,19 @@ coverage-merge:
 	@echo
 	@./scripts/coverage-summary.sh coverage-union.out
 
+# Fail when coverage-union.out is below .github/coverage-baseline.txt. CI runs
+# the same script on every pull request and on main.
+coverage-gate:
+	./scripts/coverage-gate.sh coverage-union.out
+
+# Regenerate the coverage badge and block in README.md from the baseline;
+# `make coverage-readme-check` is what CI runs to fail on drift.
+coverage-readme:
+	./scripts/coverage-readme.sh
+
+coverage-readme-check:
+	./scripts/coverage-readme.sh --check
+
 # Short fuzz run of every target. `-fuzz` takes exactly one target, so each is
 # listed explicitly; the weekly Fuzz workflow runs the same commands (60s each).
 # `go test ./...` replays the committed seed corpus, so no target needs fuzzing
@@ -69,4 +82,4 @@ validate-examples:
 generate:
 	go generate ./...
 
-.PHONY: build test coverage coverage-html coverage-merge testacc lint lint-fix fmt vet install testacc-docker testacc-live validate-examples generate fuzz
+.PHONY: build test coverage coverage-html coverage-merge coverage-gate coverage-readme coverage-readme-check testacc lint lint-fix fmt vet install testacc-docker testacc-live validate-examples generate fuzz

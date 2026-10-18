@@ -1,6 +1,9 @@
 # Terraform Provider for RustFS
 
 [![CI](https://img.shields.io/github/actions/workflow/status/caberdo/terraform-provider-rustfs/test.yml?branch=main&label=CI)](https://github.com/caberdo/terraform-provider-rustfs/actions/workflows/test.yml)
+<!-- coverage-badge:start -->
+[![Coverage](https://img.shields.io/badge/coverage-69.1%25-orange)](#testing-and-coverage)
+<!-- coverage-badge:end -->
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/caberdo/terraform-provider-rustfs/badge)](https://scorecard.dev/viewer/?uri=github.com/caberdo/terraform-provider-rustfs)
 [![Release](https://img.shields.io/github/v/release/caberdo/terraform-provider-rustfs?label=release)](https://github.com/caberdo/terraform-provider-rustfs/releases)
 [![Terraform Registry](https://img.shields.io/badge/registry-caberdo%2Frustfs-7b42bc)](https://registry.terraform.io/providers/caberdo/rustfs)
@@ -342,20 +345,30 @@ acceptance job merges both coverage profiles and publishes a per-package table i
 every run. A weekly `Fuzz` workflow runs each fuzz target for a minute — deeper campaigns are
 `make fuzz FUZZTIME=10m`.
 
-Statement coverage of this repository, measured with `make coverage` and `make coverage-merge`:
+Statement coverage of this repository, merged from the unit and acceptance profiles:
 
-| Package | Unit tests only | Unit + acceptance |
-|---|---|---|
-| `pkg/rustfs` — the RustFS admin API client | ~78% | ~87% |
-| `provider` — resource/data source implementations | ~22% | ~60% |
-| **all packages** | — | **~67%** |
+<!-- coverage:start -->
+```
+pkg/rustfs  ██████████████████░░  88.4%   floor 88.0%
+provider    █████████████░░░░░░░  63.0%   floor 62.5%
+total       ██████████████░░░░░░  69.1%   floor 68.5%   -> 80%, then 90%
+```
+
+Measured on `6d73c32` (unit + acceptance) on 2026-10-18.
+<!-- coverage:end -->
+
+The floor is enforced: `scripts/coverage-gate.sh` fails the `Coverage` check on a pull request whose
+merged coverage drops below `.github/coverage-baseline.txt`, and the `latest` cell of the acceptance
+matrix repeats that gate on `main`. The same check fails when this block drifts from the baseline.
+To raise the floor, run `make coverage` and `make coverage-merge`, update
+`.github/coverage-baseline.txt`, then `make coverage-readme`.
 
 The unit-only `provider` figure is a measuring artefact rather than a gap: that package is thin
 CRUD wiring whose behaviour is asserted end-to-end against a real server, which is why the
 acceptance suite is instrumented too (`-covermode=atomic -coverpkg=./...` in
 `acc_test/docker-compose.yml`) and why the two profiles are merged. Run `make coverage` (and
-`make testacc-docker` followed by `make coverage-merge` for the second column) for the exact
-numbers of your checkout.
+`make testacc-docker` followed by `make coverage-merge` for the second number) for the exact
+figures of your checkout.
 
 ## Development
 

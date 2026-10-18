@@ -1,3 +1,13 @@
+## Unreleased
+
+IMPROVEMENTS:
+- Statement coverage is enforced and published. `scripts/coverage-gate.sh` fails the new `Coverage`
+  check when the merged unit + acceptance coverage drops below
+  `.github/coverage-baseline.txt`, and the `latest` cell of the acceptance matrix repeats that gate
+  on `main`, so the floor can only move up. The README carries a generated coverage badge and a
+  per-package bar chart (`scripts/coverage-readme.sh`); CI fails when they drift from the baseline.
+  Merged coverage is 69.1% today, with 80% and then 90% tracked as milestones in the issue tracker
+
 ## 0.5.0 (2026-10-18)
 
 BUG FIXES:

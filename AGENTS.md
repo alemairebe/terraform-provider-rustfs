@@ -225,6 +225,11 @@ or drop a schema change silently — an attribute that cannot be updated in plac
   (`acc_test/docker-compose.yml`) writes `coverage-acceptance.out` into the worktree, and
   `make coverage-merge` (→ `scripts/merge-coverage.sh`) merges both into `coverage-union.out` and
   prints the combined table. The acceptance job in `test.yml` publishes that table in its summary.
+- **Coverage floor (do not lower)**: `make coverage-gate` (→ `scripts/coverage-gate.sh`) fails when
+  `coverage-union.out` is below `.github/coverage-baseline.txt`. The `Coverage` check runs it on
+  every pull request and the `latest` acceptance cell repeats it on `main`. Raising the floor is part
+  of a coverage PR: update `measured_*`/`floor_*` in that file and run `make coverage-readme`, which
+  regenerates the README badge and bar chart (CI fails on drift).
 - **Fuzz (parsers)**: `make fuzz` runs every fuzz target for `FUZZTIME` (default 30s); the weekly
   `Fuzz` workflow runs the same four commands for 60s each. `go test ./...` replays the committed
   seed corpus (`testdata/fuzz/<Target>/`) without fuzzing, so no target has to be fuzzed to keep
