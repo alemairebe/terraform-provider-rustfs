@@ -1,4 +1,4 @@
-## Unreleased
+## 0.5.0 (2026-10-18)
 
 BUG FIXES:
 - `rustfs_group_policy_attachment` no longer replaces every policy on the group. Attach and detach
