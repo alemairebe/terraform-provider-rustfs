@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/caberdo/terraform-provider-rustfs/pkg/rustfs"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
 )
@@ -27,15 +28,19 @@ data "rustfs_metrics" "test" {}
 }
 
 // testAccMetricsPreCheck verifies the environment and that the running RustFS
-// exposes the admin metrics stream. RustFS releases predating
-// GET /rustfs/admin/v3/metrics answer the unimplemented route with the generic
-// s3s NotImplemented error, so the test skips on such servers instead of
-// failing (mirrors the audit-target/LDAP skip convention).
+// implements the admin metrics stream. RustFS registers
+// GET /rustfs/admin/v3/metrics before implementing it and answers the route
+// with 501 NotImplemented, which the client reports as an
+// *UnsupportedFeatureError; only that capability gap skips the test, so an
+// unexpected failure still fails it.
 func testAccMetricsPreCheck(t *testing.T) {
 	testAccPreCheck(t)
 	client := testAccRustClient()
 	if _, err := client.GetMetrics(); err != nil {
-		t.Skipf("the admin metrics stream is not available on the running RustFS (unimplemented route), skipping: %v", err)
+		if rustfs.IsUnsupportedFeature(err) {
+			t.Skipf("the admin metrics stream is not implemented by the running RustFS, skipping: %v", err)
+		}
+		t.Fatalf("could not read the admin metrics stream: %v", err)
 	}
 }
 

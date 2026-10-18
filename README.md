@@ -19,7 +19,7 @@ cluster health all live in the same Terraform state as the rest of your infrastr
 | | |
 |---|---|
 | 🎯 **Broadest RustFS coverage** | Buckets, IAM (users, groups, policies, service accounts, LDAP), KMS keys, quotas, bucket + site replication, storage tiers and ILM, audit and notification targets, durability, module switches, cluster health, metrics and diagnostics |
-| 🧪 **Tested against real servers** | 226 unit tests plus 51 acceptance tests that run against RustFS in Docker, on a version matrix (RustFS `1.0.1` and `latest`) |
+| 🧪 **Tested against real servers** | 235 unit tests plus 52 acceptance tests that run against RustFS in Docker, on a version matrix (RustFS `1.0.1`, `1.0.2`, `1.0.3` and `latest`) |
 | 🔐 **Verifiable supply chain** | GPG-signed release tags, signed `SHA256SUMS`, SPDX SBOM and the Terraform registry manifest in every release |
 | 🚚 **Drop-in successor** | 12 of the 16 resources of `weinmann-emt/rustfs` migrate with **zero** config changes, 1 has a rename, 3 need a small edit — see [Migrating](#migrating-from-weinmann-emtrustfs) |
 | ⚡ **Modern internals** | terraform-plugin-framework (plugin protocol 6.0), AWS SDK for Go v2, Go 1.27, Docker/Podman acceptance harness |
@@ -93,8 +93,43 @@ terraform apply                                              # with RUSTFS_ENDPO
 | | |
 |---|---|
 | Terraform | 1.0 or later (plugin protocol 6.0); also available for [OpenTofu](https://search.opentofu.org/provider/caberdo/rustfs) |
-| RustFS | Acceptance-tested against `1.0.1` and `latest` — see [`.github/rustfs-versions.txt`](./.github/rustfs-versions.txt) |
+| RustFS | Acceptance-tested against `1.0.1`, `1.0.2`, `1.0.3` and `latest` — see the [version matrix](#supported-rustfs-versions) and [`.github/rustfs-versions.txt`](./.github/rustfs-versions.txt) |
 | Go (to build from source) | 1.27.1 |
+
+### Supported RustFS versions
+
+CI runs the acceptance suite against RustFS `1.0.1`, `1.0.2`, `1.0.3` and `latest`
+([`.github/rustfs-versions.txt`](./.github/rustfs-versions.txt)). The provider does not enforce a
+server version up front; it reports a capability gap when a route it needs is unavailable.
+
+| Capability | Provider types | `1.0.1` | `1.0.2` | `1.0.3` |
+|---|---|:--:|:--:|:--:|
+| S3 API and admin API v3 routes (buckets, IAM, quotas, replication, tiers, targets, config, health, info, …) | every resource and data source except `rustfs_metrics` | ✅ | ✅ | ✅ |
+| Admin metrics stream — `GET /rustfs/admin/v3/metrics` | `rustfs_metrics` data source | ❌ | ❌ | ❌ |
+
+`1.0.3` is a console-only update: it ships the same server code as `1.0.2`, so its server
+capabilities are identical. A ❌ means the route is registered but not implemented (see below); the
+data source fails with a diagnostic naming the route and the server version instead of the raw
+error payload.
+
+#### Route presence is not support (501 semantics)
+
+RustFS registers admin routes before it implements them and answers `501 NotImplemented` (an
+S3-style `<Error><Code>NotImplemented</Code></Error>` body) instead of `404`. A route in the server's
+route table is therefore not proof of support — `DELETE /iceberg/v1/buckets/{warehouse}` is
+registered but unimplemented on these releases. For the routes it depends on, the provider treats
+`404`, `405` and `501` as a capability gap and reports an `UnsupportedFeatureError` naming the
+feature, the route and the server version:
+
+```text
+Error: Metrics are not available on this RustFS server
+
+  with data.rustfs_metrics.test,
+
+RustFS 1.0.3 does not implement GET /rustfs/admin/v3/metrics: metrics is not available on this
+server. Upgrade RustFS to a release that implements the route, or remove the rustfs_metrics data
+source from the configuration.
+```
 
 Some capabilities depend on server-side sub-systems and only work once the matching RustFS
 sub-system is enabled and configured: KMS (`rustfs_kms_key`), LDAP (`rustfs_ldap_*`), storage tiers
@@ -276,7 +311,7 @@ registered to the releasing account.
 | `make testacc-docker` | The full acceptance suite against RustFS in Docker — this is what CI runs |
 | `make testacc-live` | Starts RustFS with `podman-compose` and runs the acceptance suite against it |
 
-The suite is 226 unit tests and 51 acceptance tests. CI runs the unit tests with `-race`, then the
+The suite is 235 unit tests and 52 acceptance tests. CI runs the unit tests with `-race`, then the
 acceptance matrix (`.github/rustfs-versions.txt`) against real RustFS servers, and publishes a
 per-package coverage table in the job summary of every run.
 

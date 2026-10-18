@@ -2,8 +2,10 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
+	"github.com/caberdo/terraform-provider-rustfs/pkg/rustfs"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -28,9 +30,13 @@ func (d *MetricsDataSource) Metadata(_ context.Context, req datasource.MetadataR
 }
 
 func (d *MetricsDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
+	description := "Metrics stream for the RustFS server. Requires a server that implements " +
+		"`GET /rustfs/admin/v3/metrics`: RustFS 1.0.1 through 1.0.3 register the route but answer " +
+		"`501 NotImplemented`, which Terraform reports as an unsupported capability naming the " +
+		"server version and the route."
 	resp.Schema = schema.Schema{
-		Description:         "Metrics stream for RustFS server",
-		MarkdownDescription: "Metrics stream for RustFS server",
+		Description:         description,
+		MarkdownDescription: description,
 		Attributes: map[string]schema.Attribute{
 			"metrics": schema.StringAttribute{
 				Computed:            true,
@@ -59,6 +65,15 @@ func (d *MetricsDataSource) Configure(_ context.Context, req datasource.Configur
 func (d *MetricsDataSource) Read(ctx context.Context, _ datasource.ReadRequest, resp *datasource.ReadResponse) {
 	raw, err := d.client.RustClient.GetMetrics()
 	if err != nil {
+		var unsupported *rustfs.UnsupportedFeatureError
+		if errors.As(err, &unsupported) {
+			resp.Diagnostics.AddError(
+				"Metrics are not available on this RustFS server",
+				unsupported.Error()+". Upgrade RustFS to a release that implements the route, or remove the "+
+					"rustfs_metrics data source from the configuration.",
+			)
+			return
+		}
 		resp.Diagnostics.AddError(
 			"Error reading metrics",
 			"Could not read metrics, unexpected error: "+err.Error(),
