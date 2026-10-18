@@ -50,6 +50,34 @@ func TestGetGroup(t *testing.T) {
 	}
 }
 
+func TestGroupInfoPolicies(t *testing.T) {
+	tests := []struct {
+		name   string
+		policy string
+		want   []string
+	}{
+		{name: "unset", policy: "", want: []string{}},
+		{name: "single", policy: "readwrite", want: []string{"readwrite"}},
+		{name: "multiple", policy: "readwrite,diagnostics", want: []string{"readwrite", "diagnostics"}},
+		{name: "padded and empty entries", policy: " readwrite , ,diagnostics ", want: []string{"readwrite", "diagnostics"}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			info := GroupInfo{Policy: test.policy}
+			got := info.Policies()
+			if len(got) != len(test.want) {
+				t.Fatalf("expected %v, got %v", test.want, got)
+			}
+			for i := range test.want {
+				if got[i] != test.want[i] {
+					t.Fatalf("expected %v, got %v", test.want, got)
+				}
+			}
+		})
+	}
+}
+
 func TestUpdateGroupMembers(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPut {

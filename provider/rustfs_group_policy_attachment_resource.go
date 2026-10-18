@@ -6,8 +6,10 @@ package provider
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
+	"github.com/caberdo/terraform-provider-rustfs/pkg/rustfs"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -43,7 +45,7 @@ func (r *GroupPolicyAttachmentResource) Metadata(_ context.Context, req resource
 func (r *GroupPolicyAttachmentResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		Description:         "Attach a canned IAM policy to an IAM group",
-		MarkdownDescription: "Attach a canned IAM policy to an IAM group and detach it on destroy",
+		MarkdownDescription: "Attach a canned IAM policy to an IAM group and detach it on destroy, leaving every other policy on the group untouched",
 		Attributes: map[string]schema.Attribute{
 			"group": schema.StringAttribute{
 				Required:    true,
@@ -109,9 +111,37 @@ func (r *GroupPolicyAttachmentResource) Read(ctx context.Context, req resource.R
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	// The API exposes no read-back for group policy attachments; the attach
-	// operation is idempotent and the natural key is immutable, so the last
-	// known state is preserved (same pattern as rustfs_bucket).
+
+	group := state.Group.ValueString()
+	policy := state.Policy.ValueString()
+
+	info, err := r.client.RustClient.GetGroup(group)
+	if err != nil {
+		if rustfs.IsAPIErrorCode(err, "NoSuchResource", "NoSuchGroup") {
+			// The group is gone, so the attachment is gone with it.
+			resp.State.RemoveResource(ctx)
+			return
+		}
+		resp.Diagnostics.AddError(
+			"Error reading group policy attachment",
+			"Could not read group "+group+": "+err.Error(),
+		)
+		return
+	}
+
+	// The admin API has no attachment read-back, but a group carries its whole
+	// policy list; a policy missing from that list was detached outside
+	// Terraform, so the attachment is dropped from state and planned again.
+	if !slices.Contains(info.Policies(), policy) {
+		tflog.Trace(ctx, "group policy attachment no longer attached", map[string]any{
+			"group":  group,
+			"policy": policy,
+		})
+		resp.State.RemoveResource(ctx)
+		return
+	}
+
+	state.ID = types.StringValue(group + "/" + policy)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
@@ -144,6 +174,11 @@ func (r *GroupPolicyAttachmentResource) Delete(ctx context.Context, req resource
 
 	err := r.client.RustClient.DetachGroupPolicy(data.Group.ValueString(), data.Policy.ValueString())
 	if err != nil {
+		// A group that no longer exists cannot still carry the policy, so the
+		// attachment is already gone.
+		if rustfs.IsAPIErrorCode(err, "NoSuchResource", "NoSuchGroup") {
+			return
+		}
 		resp.Diagnostics.AddError(
 			"Error detaching policy from group",
 			"Could not detach policy: "+err.Error(),

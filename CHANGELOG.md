@@ -1,6 +1,13 @@
 ## Unreleased
 
 BUG FIXES:
+- `rustfs_group_policy_attachment` no longer replaces every policy on the group. Attach and detach
+  go through the additive `POST /idp/builtin/policy/attach` and `/detach` endpoints (as
+  `rustfs_user_policy_attachment` already did) instead of `PUT set-user-or-group-policy`, so a
+  second attachment on the same group and policies attached outside Terraform survive a create and
+  a destroy. Both calls are serialized because the endpoints read-modify-write the group's policy
+  list, and `Read` now detects an out-of-band detach instead of leaving a dangling attachment in
+  state
 - The `insecure` provider attribute now really disables TLS certificate verification. The schema
   accepted it and the docs described it as "skip SSL validation", but the value never reached the
   transport, so a self-signed server failed with `x509: certificate signed by unknown authority`.

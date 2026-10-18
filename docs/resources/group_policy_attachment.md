@@ -2,12 +2,12 @@
 page_title: "rustfs_group_policy_attachment Resource - rustfs"
 subcategory: ""
 description: |-
-  Attach a canned IAM policy to an IAM group and detach it on destroy
+  Attach a canned IAM policy to an IAM group and detach it on destroy, leaving every other policy on the group untouched
 ---
 
 # rustfs_group_policy_attachment Resource
 
-Attach a canned IAM policy to an IAM group and detach it on destroy
+Attach a canned IAM policy to an IAM group and detach it on destroy, leaving every other policy on the group untouched
 
 ## Example Usage
 

@@ -3,20 +3,6 @@
 
 package rustfs
 
-import (
-	"context"
-	"encoding/json"
-)
-
-// userPolicyAssociationRequest is the JSON body accepted by the RustFS
-// builtin-policy attach/detach endpoints. Exactly one of User or Group must
-// be set, together with at least one policy name.
-type userPolicyAssociationRequest struct {
-	User     string   `json:"user,omitempty"`
-	Group    string   `json:"group,omitempty"`
-	Policies []string `json:"policies"`
-}
-
 // AttachUserPolicy attaches a canned policy to a user, leaving any policies
 // the user already holds untouched. RustFS stores a user's policies as a
 // comma-separated list, so this appends to the existing list instead of
@@ -35,25 +21,8 @@ func (c *RustfsAdmin) DetachUserPolicy(user, policy string) error {
 }
 
 func (c *RustfsAdmin) userPolicyAssociation(user, policy, relPath string) error {
-	body, err := json.Marshal(userPolicyAssociationRequest{
+	return c.policyAssociation(relPath, policyAssociationRequest{
 		User:     user,
 		Policies: []string{policy},
 	})
-	if err != nil {
-		return err
-	}
-
-	reqData := RequestData{
-		Method:  "POST",
-		RelPath: relPath,
-		Content: body,
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	resp, err := c.doRequest(ctx, reqData)
-	if err != nil {
-		return err
-	}
-	drainClose(resp)
-	return nil
 }
