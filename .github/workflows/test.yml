@@ -30,6 +30,11 @@ jobs:
         with:
           go-version-file: "go.mod"
           cache: true
+          # The scanner is built from .github/gosec, a nested module, so its
+          # go.sum has to be listed for setup-go to cache that module too.
+          cache-dependency-path: |
+            go.sum
+            .github/gosec/go.sum
 
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
@@ -39,14 +44,21 @@ jobs:
           version: v2.14.0
           args: --config .github/golangci.yml
 
+      # gosec v2.29.0 (the latest release) pins golang.org/x/tools v0.49.0,
+      # which cannot decode the export data the Go 1.27.2 toolchain emits
+      # ("export data version 5 is greater than maximum supported version 4"),
+      # so the scanner exits non-zero on a clean tree. It is built from the
+      # pinned v2.29.0 source with a tool-only x/tools override instead of the
+      # prebuilt action (securego/gosec#1771, securego/gosec#1774); drop the
+      # override once a gosec release ships golang.org/x/tools >= v0.50.0.
       - name: Run Gosec Security Scanner
         id: gosec
-        uses: securego/gosec@deb54465fea23d19a77f037e11e6589021f8501d # v2.29.0
         continue-on-error: true
         env:
           GOTOOLCHAIN: auto
-        with:
-          args: -fmt sarif -out gosec.sarif -exclude-dir=vendor -tests=false ./
+        run: |
+          go build -C .github/gosec -o "$RUNNER_TEMP/gosec" github.com/securego/gosec/v2/cmd/gosec
+          "$RUNNER_TEMP/gosec" -fmt sarif -out gosec.sarif -exclude-dir=vendor -tests=false ./
 
       - name: Upload security scan results
         uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
@@ -67,6 +79,29 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "See the **Security** tab for full details." >> $GITHUB_STEP_SUMMARY
           exit 1
+
+  govulncheck:
+    name: Vulnerability Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: "go.mod"
+          cache: true
+
+      # Pinned like golangci-lint so a new release cannot change the gate
+      # silently. The scanner needs no RustFS server: it walks the module
+      # graph and the call graph against the Go vulnerability database.
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+
+      - name: Run govulncheck
+        run: govulncheck ./...
 
   test:
     name: Test
