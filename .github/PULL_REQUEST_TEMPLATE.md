@@ -34,8 +34,8 @@ Describe how you tested this change:
 
 ## Documentation Checklist
 
-- [ ] Documentation added to `docs/` directory
-- [ ] Example added to `examples/` directory
+- [ ] Example added to `examples/` directory (the documentation source)
+- [ ] `make generate` run and the regenerated `docs/` committed
 - [ ] Schema attributes have descriptions
 - [ ] Import section documented (if applicable)
 

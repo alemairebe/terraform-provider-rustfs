@@ -221,6 +221,10 @@ or drop a schema change silently — an attribute that cannot be updated in plac
 - **Unit tests (client)**: `go test ./pkg/rustfs/... -v` — most files mock the admin API with
   `httptest`; the live CRUD tests dial `RUSTFS_ENDPOINT` and skip themselves when it is unset
 - **Unit tests (provider, no server)**: `go test ./provider/... -v -skip '^TestAcc'`
+- **Coverage (unit + acceptance)**: `make coverage` writes `coverage.out`; the acceptance container
+  (`acc_test/docker-compose.yml`) writes `coverage-acceptance.out` into the worktree, and
+  `make coverage-merge` (→ `scripts/merge-coverage.sh`) merges both into `coverage-union.out` and
+  prints the combined table. The acceptance job in `test.yml` publishes that table in its summary.
 - **Acceptance tests (Docker, as CI runs them)**:
   `docker compose -f acc_test/docker-compose.yml up -d` then
   `docker compose -f acc_test/docker-compose.yml --profile test run --rm test`

@@ -11,6 +11,9 @@
     },
     {
       "pattern": "^https?://(api\\.securityscorecards\\.dev|scorecard\\.dev)"
+    },
+    {
+      "pattern": "^https?://(www\\.)?bestpractices\\.dev/projects"
     }
   ]
 }
