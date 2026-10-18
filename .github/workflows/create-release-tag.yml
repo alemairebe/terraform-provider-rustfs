@@ -9,6 +9,11 @@
 # the release workflow is invoked explicitly in the `release` job below rather
 # than relying on the `push: tags: v*` trigger in release.yml. That trigger is
 # still needed for signed tags pushed from a developer machine.
+#
+# If a release fails after the tag was pushed, do not re-run this workflow: it
+# would calculate the next version instead of the one that failed. Dispatch the
+# Release workflow manually instead, with `tag` set to the tag to republish;
+# goreleaser runs with `release.mode: replace`, so that is idempotent.
 name: Create Release Tag
 
 on:
@@ -79,7 +84,9 @@ jobs:
       - name: Check tag doesn't exist
         run: |
           if git rev-parse "${{ env.VERSION }}" >/dev/null 2>&1; then
-            echo "Error: Tag ${{ env.VERSION }} already exists"
+            echo "Error: tag ${{ env.VERSION }} already exists"
+            echo "To publish (or republish) that tag without touching it, dispatch the"
+            echo "Release workflow manually with inputs.tag set to ${{ env.VERSION }}."
             exit 1
           fi
 
