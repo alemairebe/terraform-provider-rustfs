@@ -26,6 +26,11 @@ data "rustfs_storage_info" "test" {}
 				),
 			},
 			{
+				// The data source reports live disk metrics (avail_space,
+				// free_inodes, used_space), which change while the concurrent
+				// acceptance tests write objects, so a non-empty refresh plan is
+				// expected here rather than a defect.
+				ExpectNonEmptyPlan: true,
 				Config: testAccProviderConfig() + `
 data "rustfs_storage_info" "test" {}
 
