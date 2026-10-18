@@ -63,7 +63,7 @@ func TestAddUserWithAccesKey(t *testing.T) {
 	service := rustfs.ServiceAccount{
 		AccessKey:  randomString(8),
 		SecretKey:  "someSuperS3cret",
-		Name:       randomString(8),
+		Name:       randomServiceAccountName(),
 		TargetUser: account.AccessKey,
 	}
 	err = dut.CreateServiceAccount(service)
