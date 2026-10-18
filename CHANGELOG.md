@@ -1,4 +1,4 @@
-## 0.4.0 (Unreleased)
+## 0.4.0 (2026-10-18)
 
 FEATURES:
 - **New Resource:** `rustfs_notification_target` — event-notification targets for all nine target
