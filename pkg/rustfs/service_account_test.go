@@ -44,12 +44,18 @@ func randomString(length int) string {
 	return string(result)
 }
 
+// randomServiceAccountName returns a name RustFS accepts: unlike access keys,
+// service-account names must start with an ASCII letter.
+func randomServiceAccountName() string {
+	return "sa" + randomString(8)
+}
+
 func TestCreateServiceAccount(t *testing.T) {
 
 	account := rustfs.ServiceAccount{
 		AccessKey: randomString(8),
 		SecretKey: "someSuperS3cret",
-		Name:      randomString(8),
+		Name:      randomServiceAccountName(),
 	}
 	dut := getClient(t)
 	err := dut.CreateServiceAccount(account)
@@ -63,7 +69,7 @@ func TestCreateAndDeleteServiceAccount(t *testing.T) {
 	account := rustfs.ServiceAccount{
 		AccessKey: randomString(8),
 		SecretKey: "someSuperS3cret",
-		Name:      randomString(8),
+		Name:      randomServiceAccountName(),
 	}
 	dut := getClient(t)
 	err := dut.CreateServiceAccount(account)
@@ -80,7 +86,7 @@ func TestCreateUpdateAndDeleteServiceAccount(t *testing.T) {
 	account := rustfs.ServiceAccount{
 		AccessKey: randomString(8),
 		SecretKey: "someSuperS3cret",
-		Name:      randomString(8),
+		Name:      randomServiceAccountName(),
 	}
 	dut := getClient(t)
 	err := dut.CreateServiceAccount(account)
@@ -102,7 +108,7 @@ func TestCreateReadAndDeleteServiceAccount(t *testing.T) {
 	account := rustfs.ServiceAccount{
 		AccessKey: randomString(8),
 		SecretKey: "someSuperS3cret",
-		Name:      randomString(8),
+		Name:      randomServiceAccountName(),
 	}
 	dut := getClient(t)
 	err := dut.CreateServiceAccount(account)
