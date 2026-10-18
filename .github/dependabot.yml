@@ -15,6 +15,9 @@ updates:
       prefix: "chore(deps)"
       include: "scope"
 
+  # Two compose files in two directories: Dependabot's `directory` is not
+  # recursive, so the root stack (the devcontainer) and the acceptance stack in
+  # acc_test/ each need their own block.
   - package-ecosystem: "docker-compose"
     directory: "/"
     schedule:
@@ -28,6 +31,27 @@ updates:
     commit-message:
       prefix: "chore(deps)"
       include: "scope"
+
+  # The acceptance stack pins `golang` by digest so the test toolchain cannot
+  # move under the suite, which leaves Dependabot as the only thing that
+  # refreshes that digest. Only `golang` is allowed here: `rustfs/rustfs` stays
+  # on the tag that the version matrix (.github/rustfs-versions.txt) drives, and
+  # an update against it would silently pin the matrix.
+  - package-ecosystem: "docker-compose"
+    directory: "/acc_test"
+    schedule:
+      interval: "daily"
+      time: "03:00"
+      timezone: "Europe/Amsterdam"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "deps"
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+    allow:
+      - dependency-name: "golang"
 
   - package-ecosystem: "github-actions"
     directory: "/"
