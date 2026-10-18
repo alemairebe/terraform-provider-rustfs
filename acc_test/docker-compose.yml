@@ -13,20 +13,39 @@ services:
       - -c
       - |
         TERRAFORM_VERSION=1.11.4
-        TERRAFORM_BIN=/usr/local/terraform/terraform
-        if [ -f "$$TERRAFORM_BIN" ]; then
-          echo "Using cached Terraform..."
+        # Match the container architecture: Apple Silicon runners/contributors
+        # run linux/arm64, where a linux_amd64 Terraform cannot execute.
+        TERRAFORM_ARCH=$$(dpkg --print-architecture)
+        TERRAFORM_DIR=/usr/local/terraform/$${TERRAFORM_ARCH}
+        TERRAFORM_BIN=$${TERRAFORM_DIR}/terraform
+        if [ -x "$$TERRAFORM_BIN" ]; then
+          echo "Using cached Terraform $$TERRAFORM_VERSION ($$TERRAFORM_ARCH)..."
         else
-          echo "Downloading Terraform $$TERRAFORM_VERSION..."
-          apt-get update -qq && apt-get install -y -qq unzip >/dev/null 2>&1
-          wget -q -O /tmp/terraform.zip "https://releases.hashicorp.com/terraform/$${TERRAFORM_VERSION}/terraform_$${TERRAFORM_VERSION}_linux_amd64.zip"
-          unzip -o /tmp/terraform.zip -d /usr/local/terraform
+          echo "Downloading Terraform $$TERRAFORM_VERSION ($$TERRAFORM_ARCH)..."
+          apt-get update -qq && apt-get install -y -qq unzip wget >/dev/null 2>&1
+          wget -q -O /tmp/terraform.zip "https://releases.hashicorp.com/terraform/$${TERRAFORM_VERSION}/terraform_$${TERRAFORM_VERSION}_linux_$${TERRAFORM_ARCH}.zip"
+          mkdir -p "$$TERRAFORM_DIR"
+          unzip -o /tmp/terraform.zip -d "$$TERRAFORM_DIR"
           rm /tmp/terraform.zip
         fi
         ln -sf $$TERRAFORM_BIN /usr/local/bin/terraform
+        terraform version
         go mod download
         go build ./...
-        TF_ACC=1 go test -v -failfast -timeout 30m ./provider $${TEST_FILTER:+-run $$TEST_FILTER}
+        # Coverage is collected here so the acceptance suite can be cited as
+        # evidence for the statement-coverage criteria of the OpenSSF Best
+        # Practices badge (.github/OPENSSF-BEST-PRACTICES.md): the unit suite
+        # alone reads ~22% in ./provider because that package asserts its
+        # behaviour end-to-end against a real server.
+        TF_ACC=1 go test -v -failfast -timeout 30m \
+          -covermode=atomic -coverprofile=coverage-acceptance.out -coverpkg=./... \
+          ./provider $${TEST_FILTER:+-run $$TEST_FILTER}
+        status=$$?
+        if [ -f coverage-acceptance.out ]; then
+          echo "Acceptance coverage (covered statements, ./... ):"
+          go tool cover -func=coverage-acceptance.out | tail -1
+        fi
+        exit $$status
     environment:
       TF_ACC: "1"
       RUSTFS_ENDPOINT: "rustfs:9001"

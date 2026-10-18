@@ -20,6 +20,13 @@ coverage:
 coverage-html: coverage
 	go tool cover -html=coverage.out
 
+# Unit coverage (coverage.out) plus the acceptance profile written by
+# acc_test/docker-compose.yml (coverage-acceptance.out) as one number.
+coverage-merge:
+	./scripts/merge-coverage.sh coverage-union.out coverage.out coverage-acceptance.out
+	@echo
+	@./scripts/coverage-summary.sh coverage-union.out
+
 # Short fuzz run of every target. `-fuzz` takes exactly one target, so each is
 # listed explicitly; the weekly Fuzz workflow runs the same commands (60s each).
 # `go test ./...` replays the committed seed corpus, so no target needs fuzzing
@@ -62,4 +69,4 @@ validate-examples:
 generate:
 	go generate ./...
 
-.PHONY: build test coverage coverage-html testacc lint lint-fix fmt vet install testacc-docker testacc-live validate-examples generate fuzz
+.PHONY: build test coverage coverage-html coverage-merge testacc lint lint-fix fmt vet install testacc-docker testacc-live validate-examples generate fuzz

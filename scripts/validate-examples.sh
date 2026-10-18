@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright (c) 2026 The terraform-provider-rustfs contributors
+# SPDX-License-Identifier: Apache-2.0
 # Validates every Terraform example under examples/ against the provider built from
 # this working tree. See scripts/validate-examples.py for what is checked and why.
 #

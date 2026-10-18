@@ -1,3 +1,6 @@
+// Copyright (c) 2026 The terraform-provider-rustfs contributors
+// SPDX-License-Identifier: Apache-2.0
+
 package rustfs
 
 import (
@@ -30,7 +33,11 @@ type RustfsAdminConfig struct {
 	AccessSecret string
 	Endpoint     string
 	Ssl          bool
-	Insecure     bool
+	// HTTPClient, when set, serves every admin request. The provider passes its
+	// own client so that both API clients share one transport (proxy settings,
+	// timeouts and TLS policy, including the provider's `insecure` attribute).
+	// When nil, a default http.Client is used.
+	HTTPClient *http.Client
 }
 
 type RustfsAdmin struct {
@@ -117,7 +124,10 @@ func IsAPIErrorCode(err error, codes ...string) bool {
 
 func New(config *RustfsAdminConfig) (client RustfsAdmin) {
 	client.endpointURL = client.createEndpointUrl(config.Endpoint, config.Ssl)
-	client.httpClient = &http.Client{}
+	client.httpClient = config.HTTPClient
+	if client.httpClient == nil {
+		client.httpClient = &http.Client{}
+	}
 	client.accessKey = config.AccessKey
 	client.accessSecret = config.AccessSecret
 	return

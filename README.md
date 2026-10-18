@@ -19,7 +19,7 @@ cluster health all live in the same Terraform state as the rest of your infrastr
 | | |
 |---|---|
 | 🎯 **Broadest RustFS coverage** | Buckets, IAM (users, groups, policies, service accounts, LDAP), KMS keys, quotas, bucket + site replication, storage tiers and ILM, audit and notification targets, durability, module switches, cluster health, metrics and diagnostics |
-| 🧪 **Tested against real servers** | 235 unit tests plus 52 acceptance tests that run against RustFS in Docker, on a version matrix (RustFS `1.0.1`, `1.0.2`, `1.0.3` and `latest`) |
+| 🧪 **Tested against real servers** | 249 unit tests (four of them fuzz targets replaying a seed corpus) plus 52 acceptance tests that run against RustFS in Docker, on a version matrix (RustFS `1.0.1`, `1.0.2`, `1.0.3` and `latest`) |
 | 🔐 **Verifiable supply chain** | GPG-signed release tags, signed `SHA256SUMS`, SLSA build provenance for every artifact, SPDX SBOM and the Terraform registry manifest in every release |
 | 🚚 **Drop-in successor** | 12 of the 16 resources of `weinmann-emt/rustfs` migrate with **zero** config changes, 1 has a rename, 3 need a small edit — see [Migrating](#migrating-from-weinmann-emtrustfs) |
 | ⚡ **Modern internals** | terraform-plugin-framework (plugin protocol 6.0), AWS SDK for Go v2, Go 1.27, Docker/Podman acceptance harness |
@@ -332,20 +332,29 @@ registered to the releasing account.
 | `make coverage` | Unit tests plus a per-package coverage table; `make coverage-html` opens a report |
 | `make testacc-docker` | The full acceptance suite against RustFS in Docker — this is what CI runs |
 | `make testacc-live` | Starts RustFS with `podman-compose` and runs the acceptance suite against it |
+| `make coverage-merge` | Merges the unit profile with the acceptance profile (`coverage-acceptance.out`, written by the acceptance container) into one statement-coverage table |
 
-The suite is 235 unit tests and 52 acceptance tests. CI runs the unit tests with `-race`, then the
-acceptance matrix (`.github/rustfs-versions.txt`) against real RustFS servers, and publishes a
-per-package coverage table in the job summary of every run.
+The suite is 249 unit tests (10 of them skip themselves without a live server, and the four fuzz
+targets replay their committed seed corpus) and 52 acceptance tests (44 run against RustFS
+`latest`, 8 skip when the server lacks the sub-system they need). CI runs the unit tests with
+`-race`, then the acceptance matrix (`.github/rustfs-versions.txt`) against real RustFS servers; the
+acceptance job merges both coverage profiles and publishes a per-package table in the job summary of
+every run. A weekly `Fuzz` workflow runs each fuzz target for a minute — deeper campaigns are
+`make fuzz FUZZTIME=10m`.
 
-Unit-test coverage of this repository (acceptance tests excluded, because they need a live server):
+Statement coverage of this repository, measured with `make coverage` and `make coverage-merge`:
 
-| Package | Coverage |
-|---|---|
-| `pkg/rustfs` — the RustFS admin API client | ~77% |
-| `provider` — resource/data source implementations | ~22% (mostly covered by the acceptance suite) |
+| Package | Unit tests only | Unit + acceptance |
+|---|---|---|
+| `pkg/rustfs` — the RustFS admin API client | ~78% | ~87% |
+| `provider` — resource/data source implementations | ~22% | ~60% |
+| **all packages** | — | **~67%** |
 
-The `provider` figure is a measuring artefact rather than a gap: that package is thin CRUD wiring
-whose behaviour is asserted end-to-end against a real server. Run `make coverage` for the exact
+The unit-only `provider` figure is a measuring artefact rather than a gap: that package is thin
+CRUD wiring whose behaviour is asserted end-to-end against a real server, which is why the
+acceptance suite is instrumented too (`-covermode=atomic -coverpkg=./...` in
+`acc_test/docker-compose.yml`) and why the two profiles are merged. Run `make coverage` (and
+`make testacc-docker` followed by `make coverage-merge` for the second column) for the exact
 numbers of your checkout.
 
 ## Development
@@ -407,12 +416,18 @@ Yes — this is a plugin-protocol 6.0 provider, and it is listed in the
 
 ## Security, contributing and support
 
-- [`SECURITY.md`](./.github/SECURITY.md) — how to report a vulnerability.
+- [`SECURITY.md`](./.github/SECURITY.md) — how to report a vulnerability, and what the provider does
+  and does not guarantee.
 - [`CONTRIBUTING.md`](./.github/CONTRIBUTING.md) — how to get a change merged.
+- [`GOVERNANCE.md`](./GOVERNANCE.md) — who decides what, and how continuity is handled.
+- [`ROADMAP.md`](./ROADMAP.md) — what the project intends to do next (and what it will not do).
+- [`ARCHITECTURE.md`](./ARCHITECTURE.md) — how the provider is built, at runtime and as a release.
 - [`SUPPORT.md`](./SUPPORT.md) — where to ask questions.
 - [`CODE_OF_CONDUCT.md`](./CODE_OF_CONDUCT.md) — the ground rules for the community.
 - [`CHANGELOG.md`](./CHANGELOG.md) — what changed in every release.
+- [`.github/OPENSSF-BEST-PRACTICES.md`](./.github/OPENSSF-BEST-PRACTICES.md) — the evidence behind the
+  project's OpenSSF Best Practices badge answers.
 
 ## License
 
-[MPL-2.0](LICENSE)
+[Apache-2.0](LICENSE) — see [`NOTICE`](./NOTICE) for the projects this one derives from.

@@ -1,0 +1,24 @@
+terraform-provider-rustfs
+Copyright (c) 2026 The terraform-provider-rustfs contributors
+
+Licensed under the Apache License, Version 2.0 — see LICENSE.
+
+This distribution includes or derives from the following third-party work:
+
+  * terraform-provider-rustfs by the weinmann-emt project
+    https://github.com/weinmann-emt/terraform-provider-rustfs
+    Apache-2.0. This provider grew out of that project; its resource and data
+    source schemas were kept compatible on purpose.
+
+  * terraform-provider-scaffolding-framework by HashiCorp, Inc.
+    https://github.com/hashicorp/terraform-provider-scaffolding-framework
+    MPL-2.0. main.go and the build/release plumbing follow that scaffolding.
+
+  * Terraform Plugin Framework, terraform-plugin-testing and terraform-plugin-docs
+    by HashiCorp, Inc. — MPL-2.0. Declared as Go module dependencies in go.mod
+    and compiled into the released provider binaries.
+
+  * AWS SDK for Go v2 (github.com/aws/aws-sdk-go-v2) — Apache-2.0, and
+    github.com/ProtonMail/go-crypto — BSD-3-Clause. Compiled into the released
+    provider binaries. The full dependency inventory of each release is published
+    as an SPDX SBOM (sbom.spdx.json).

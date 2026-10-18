@@ -1,5 +1,5 @@
-// Copyright IBM Corp. 2021, 2025
-// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 The terraform-provider-rustfs contributors
+// SPDX-License-Identifier: Apache-2.0
 
 package provider
 
@@ -96,8 +96,6 @@ func (p *RustfsProvider) Configure(ctx context.Context, req provider.ConfigureRe
 		return
 	}
 
-	generatedConfig := generateRustClientConfig(config)
-
 	endpoint := envOrDefault("RUSTFS_ENDPOINT", config.Endpoint.ValueString())
 	if endpoint == "" {
 		resp.Diagnostics.AddError(
@@ -110,12 +108,15 @@ func (p *RustfsProvider) Configure(ctx context.Context, req provider.ConfigureRe
 	accessKey := envOrDefault("RUSTFS_USER", config.AccessKey.ValueString())
 	secretKey := envOrDefault("RUSTFS_SECRET", config.secretKey())
 
-	// Example client configuration for data sources and resources
-	tr := newHTTPTransport(config.Ssl.ValueBool())
+	// One transport for both API clients: S3 requests go through the AWS SDK,
+	// admin requests through rustfs.New, and `insecure` has to reach both.
+	httpClient := &http.Client{Transport: newHTTPTransport(config.Ssl.ValueBool(), config.Insecure.ValueBool())}
+	generatedConfig := generateRustClientConfig(config, httpClient)
+
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx,
 		awsconfig.WithRegion("us-east-1"),
 		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKey, secretKey, "")),
-		awsconfig.WithHTTPClient(&http.Client{Transport: tr}),
+		awsconfig.WithHTTPClient(httpClient),
 	)
 	if err != nil {
 		resp.Diagnostics.AddError(err.Error(), err.Error())
@@ -144,7 +145,7 @@ func (p *RustfsProvider) Configure(ctx context.Context, req provider.ConfigureRe
 	resp.ResourceData = client
 }
 
-func newHTTPTransport(secure bool) *http.Transport {
+func newHTTPTransport(secure, insecure bool) *http.Transport {
 	tr := &http.Transport{
 		Proxy: http.ProxyFromEnvironment,
 		DialContext: (&net.Dialer{
@@ -163,12 +164,18 @@ func newHTTPTransport(secure bool) *http.Transport {
 	if secure {
 		tr.TLSClientConfig = &tls.Config{
 			MinVersion: tls.VersionTLS12,
+			// #nosec G402 -- certificate verification is on by default; this is
+			// the explicit, opt-in `insecure` provider attribute, documented in
+			// the schema and README as being for self-signed test servers.
+			InsecureSkipVerify: insecure,
 		}
 		if f := os.Getenv("SSL_CERT_FILE"); f != "" {
 			rootCAs, err := x509.SystemCertPool()
 			if err != nil {
 				rootCAs = x509.NewCertPool()
 			}
+			// #nosec G304 -- SSL_CERT_FILE is an explicit operator setting; reading
+			// that exact path is the feature, there is no traversal boundary here.
 			if data, err := os.ReadFile(f); err == nil {
 				rootCAs.AppendCertsFromPEM(data)
 			}

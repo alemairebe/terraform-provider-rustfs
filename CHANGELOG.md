@@ -1,5 +1,12 @@
 ## Unreleased
 
+BUG FIXES:
+- The `insecure` provider attribute now really disables TLS certificate verification. The schema
+  accepted it and the docs described it as "skip SSL validation", but the value never reached the
+  transport, so a self-signed server failed with `x509: certificate signed by unknown authority`.
+  Both API clients now share one `*http.Client`, which also means the admin API finally honours the
+  provider's proxy settings, timeouts and TLS minimum (it used a bare `http.Client` before)
+
 FEATURES:
 - `rustfs_policy` statements gain `sid`, `not_action`, `not_resource` and `condition`, so
   prefix-scoped and negative statements (`condition = { StringLike = { "s3:prefix" = ["tenant-42/*"] } }`)
@@ -35,6 +42,22 @@ CHORES:
   `terraform-provider-rustfs_<version>_provenance.intoto.jsonl`, so `gh attestation verify` works
   for a downloaded artifact — against the attestation record or, with `--bundle`, from the release
   assets alone
+- The acceptance suite is instrumented for coverage (`-covermode=atomic -coverpkg=./...`, profile
+  written to `coverage-acceptance.out`), `scripts/merge-coverage.sh` merges it with the unit
+  profile, and the acceptance job publishes the combined number in its job summary. `make
+  coverage-merge` does the same locally
+- The acceptance container downloads the Terraform build for its own architecture
+  (`dpkg --print-architecture`), so the suite runs on Apple Silicon (linux/arm64) instead of
+  failing to execute a linux_amd64 binary
+- Licence references are consistent again: the repository is Apache-2.0 (`LICENSE`, GitHub,
+  `weinmann-emt/terraform-provider-rustfs` and `terraform-provider-gravitino` all agree), the two
+  `MPL-2.0` file headers left over from the HashiCorp provider scaffolding and the `MPL-2.0` lines
+  in `README.md`/`CONTRIBUTING.md` are gone, every Go file carries a copyright and SPDX header, and
+  `NOTICE` records the upstream projects
+- Added `GOVERNANCE.md`, `ROADMAP.md`, `ARCHITECTURE.md`, and `.github/OPENSSF-BEST-PRACTICES.md`
+  (the evidence pack for the OpenSSF Best Practices badge); `SECURITY.md` now documents the security
+  requirements, the threat model and the assurance case, and `CONTRIBUTING.md` documents the code
+  review and testing requirements
 
 ## 0.4.1 (2026-10-18)
 
