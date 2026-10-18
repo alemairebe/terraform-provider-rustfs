@@ -1,0 +1,7 @@
+go test fuzz v1
+string("notify_kafka")
+uint8(0)
+string("")
+int64(0)
+bool(false)
+string("comment only")

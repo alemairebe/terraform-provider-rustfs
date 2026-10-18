@@ -1,11 +1,11 @@
 package rustfs
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"net/url"
-	"strings"
 )
 
 type PolicyStatement struct {
@@ -73,10 +73,49 @@ func (c *RustfsAdmin) CreatePolicy(policy Policy) error {
 	return nil
 }
 
+// parsePolicyField decodes the "policy" field of an info-canned-policy reply
+// into statements.
+//
+// The RustFS API may return `policy` either as a JSON string containing the
+// policy document, or as an inline JSON object, so the field is normalized to
+// bytes first. A document whose Action is a single string (rather than a list)
+// is accepted as well. The document comes from the server and is therefore
+// untrusted: malformed input must produce an error, never a panic.
+func parsePolicyField(policy json.RawMessage) ([]PolicyStatement, error) {
+	policyBytes := []byte(policy)
+	if len(policyBytes) > 0 && policyBytes[0] == '"' {
+		var asString string
+		if err := json.Unmarshal(policyBytes, &asString); err != nil {
+			return nil, err
+		}
+		policyBytes = []byte(asString)
+	}
+
+	var statement statementReply
+	errStatement := json.NewDecoder(bytes.NewReader(policyBytes)).Decode(&statement)
+	if errStatement == nil {
+		return statement.Statement, nil
+	}
+
+	var statementSingle statementReplySingle
+	errSingle := json.NewDecoder(bytes.NewReader(policyBytes)).Decode(&statementSingle)
+	if errSingle == nil {
+		statements := make([]PolicyStatement, 0, len(statementSingle.Statement))
+		for _, got := range statementSingle.Statement {
+			statements = append(statements, PolicyStatement{
+				Effect:   got.Effect,
+				Action:   []string{got.Action},
+				Resource: got.Resource,
+			})
+		}
+		return statements, nil
+	}
+
+	return nil, errors.Join(errStatement, errSingle)
+}
+
 func (c *RustfsAdmin) ReadPolicy(policy string) (Policy, error) {
 	var instance policyReply
-	var statement statementReply
-	var statement_single statementReplySingle
 	var read Policy
 	urlValues := make(url.Values)
 	urlValues.Set("name", policy)
@@ -101,41 +140,12 @@ func (c *RustfsAdmin) ReadPolicy(policy string) (Policy, error) {
 	read.Name = instance.PolicyName
 	read.Version = "2012-10-17"
 
-	// The rustfs API may return `policy` either as a JSON string containing
-	// the policy document, or as an inline JSON object. Normalize to bytes.
-	policyBytes := []byte(instance.Policy)
-	if len(policyBytes) > 0 && policyBytes[0] == '"' {
-		var asString string
-		if err := json.Unmarshal(policyBytes, &asString); err != nil {
-			return Policy{}, err
-		}
-		policyBytes = []byte(asString)
+	statements, err := parsePolicyField(instance.Policy)
+	if err != nil {
+		return Policy{}, err
 	}
-
-	err = json.NewDecoder(strings.NewReader(string(policyBytes))).Decode(&statement)
-	// We have no error!
-	if err == nil {
-		read.Statement = statement.Statement
-		return read, nil
-	}
-	err_single := json.NewDecoder(strings.NewReader(string(policyBytes))).Decode(&statement_single)
-	if err_single == nil {
-		statements := []PolicyStatement{}
-		for _, got := range statement_single.Statement {
-			statements = append(statements,
-				PolicyStatement{
-					Effect:   got.Effect,
-					Action:   []string{got.Action},
-					Resource: got.Resource,
-				},
-			)
-		}
-		read.Statement = statements
-		return read, nil
-	}
-
-	return Policy{}, errors.Join(err, err_single)
-
+	read.Statement = statements
+	return read, nil
 }
 
 func (c *RustfsAdmin) DeletePolicy(policy string) error {

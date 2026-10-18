@@ -221,6 +221,10 @@ or drop a schema change silently — an attribute that cannot be updated in plac
 - **Unit tests (client)**: `go test ./pkg/rustfs/... -v` — most files mock the admin API with
   `httptest`; the live CRUD tests dial `RUSTFS_ENDPOINT` and skip themselves when it is unset
 - **Unit tests (provider, no server)**: `go test ./provider/... -v -skip '^TestAcc'`
+- **Fuzz (parsers)**: `make fuzz` runs every fuzz target for `FUZZTIME` (default 30s); the weekly
+  `Fuzz` workflow runs the same four commands for 60s each. `go test ./...` replays the committed
+  seed corpus (`testdata/fuzz/<Target>/`) without fuzzing, so no target has to be fuzzed to keep
+  the suite green. Deeper campaigns: `make fuzz FUZZTIME=10m`
 - **Acceptance tests (Docker, as CI runs them)**:
   `docker compose -f acc_test/docker-compose.yml up -d` then
   `docker compose -f acc_test/docker-compose.yml --profile test run --rm test`
