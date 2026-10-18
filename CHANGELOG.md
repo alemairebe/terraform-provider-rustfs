@@ -26,6 +26,17 @@ IMPROVEMENTS:
   server the suite runs against
 
 CHORES:
+- The parsers that consume untrusted input are fuzzed: `FuzzPolicyDocument`, `FuzzAdminErrorBody`
+  and `FuzzConfigKV` in `pkg/rustfs` and `FuzzTargetConfig` in `provider`, backed by a committed
+  seed corpus in `testdata/fuzz/` and a weekly `Fuzz` workflow (one minute per target). `make fuzz`
+  runs the same targets locally
+- The release workflow attaches SLSA v1.0 build provenance to every release: it attests the
+  artifacts listed in `terraform-provider-rustfs_<version>_SHA256SUMS` with
+  `actions/attest-build-provenance` (`id-token: write` and `attestations: write` on the release
+  job only) and publishes the Sigstore bundle as
+  `terraform-provider-rustfs_<version>_provenance.intoto.jsonl`, so `gh attestation verify` works
+  for a downloaded artifact — against the attestation record or, with `--bundle`, from the release
+  assets alone
 - The acceptance suite is instrumented for coverage (`-covermode=atomic -coverpkg=./...`, profile
   written to `coverage-acceptance.out`), `scripts/merge-coverage.sh` merges it with the unit
   profile, and the acceptance job publishes the combined number in its job summary. `make

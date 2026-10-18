@@ -225,6 +225,10 @@ or drop a schema change silently — an attribute that cannot be updated in plac
   (`acc_test/docker-compose.yml`) writes `coverage-acceptance.out` into the worktree, and
   `make coverage-merge` (→ `scripts/merge-coverage.sh`) merges both into `coverage-union.out` and
   prints the combined table. The acceptance job in `test.yml` publishes that table in its summary.
+- **Fuzz (parsers)**: `make fuzz` runs every fuzz target for `FUZZTIME` (default 30s); the weekly
+  `Fuzz` workflow runs the same four commands for 60s each. `go test ./...` replays the committed
+  seed corpus (`testdata/fuzz/<Target>/`) without fuzzing, so no target has to be fuzzed to keep
+  the suite green. Deeper campaigns: `make fuzz FUZZTIME=10m`
 - **Acceptance tests (Docker, as CI runs them)**:
   `docker compose -f acc_test/docker-compose.yml up -d` then
   `docker compose -f acc_test/docker-compose.yml --profile test run --rm test`

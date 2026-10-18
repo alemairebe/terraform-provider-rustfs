@@ -1,0 +1,7 @@
+go test fuzz v1
+string("redis")
+uint8(1)
+string("https://example.com/hook")
+int64(0)
+bool(false)
+string("")

@@ -1,0 +1,7 @@
+go test fuzz v1
+string("audit_amqp")
+uint8(2)
+string("amqps://mq:5671/")
+int64(0)
+bool(false)
+string("")

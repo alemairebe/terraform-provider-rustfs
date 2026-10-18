@@ -16,19 +16,27 @@ resources, 17 data sources, tested against RustFS `1.0.1`, `1.0.2`, `1.0.3` and 
 
 ## Now — supply-chain and process hardening
 
-The next release is about making the project's own guarantees as strong as the ones it configures in
-RustFS:
+The current cycle is about making the project's own guarantees as strong as the ones it configures
+in RustFS. Landed so far:
+
+* **Every GitHub Action is pinned to a commit SHA** ([#48](https://github.com/caberdo/terraform-provider-rustfs/issues/48)),
+  including the actions added by the later workflow changes.
+* **The parsers are fuzzed**: `FuzzPolicyDocument`, `FuzzAdminErrorBody` and `FuzzConfigKV` in
+  `pkg/rustfs` and `FuzzTargetConfig` in `provider`, backed by a committed seed corpus and a weekly
+  `Fuzz` workflow ([#50](https://github.com/caberdo/terraform-provider-rustfs/issues/50), closed).
+* **Releases carry SLSA v1.0 build provenance** next to the GPG-signed checksums
+  ([#52](https://github.com/caberdo/terraform-provider-rustfs/issues/52)), so `gh attestation verify`
+  works on a downloaded artifact.
+
+Still open in this cycle, roughly in the order they unblock each other:
 
 | Work | Issue |
 |---|---|
-| Pin every GitHub Action to a commit SHA | [#48](https://github.com/caberdo/terraform-provider-rustfs/issues/48) |
 | Clear the OSV advisories (`x/net`, `goldmark`, Go 1.27.2) and add `govulncheck` to CI | [#49](https://github.com/caberdo/terraform-provider-rustfs/issues/49) |
-| Fuzz the parsers (`FuzzPolicyDocument`, `FuzzAdminErrorBody`, `FuzzTargetConfig`, `FuzzConfigKV`) | [#50](https://github.com/caberdo/terraform-provider-rustfs/issues/50) |
 | Make branch protection maximal within a single-maintainer setup | [#51](https://github.com/caberdo/terraform-provider-rustfs/issues/51) |
-| Attach SLSA build provenance to releases | [#52](https://github.com/caberdo/terraform-provider-rustfs/issues/52) |
 | Earn and maintain the OpenSSF Best Practices badge | [#53](https://github.com/caberdo/terraform-provider-rustfs/issues/53) |
 | Decide how code review gets a second reviewer | [#54](https://github.com/caberdo/terraform-provider-rustfs/issues/54) |
-| Track the OpenSSF Scorecard climb (6.1 → 8+) | [#55](https://github.com/caberdo/terraform-provider-rustfs/issues/55) |
+| Track the OpenSSF Scorecard climb | [#55](https://github.com/caberdo/terraform-provider-rustfs/issues/55) |
 
 ## Next — correctness and coverage
 

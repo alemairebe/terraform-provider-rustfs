@@ -127,7 +127,7 @@ Notes:
 | `crypto_password_storage` | N/A | The provider authenticates *to* RustFS with the credentials you give it; it never stores passwords for authenticating external users (that is the RustFS server's job, not this project's software). | — |
 | `crypto_random` | N/A | The provider generates no cryptographic keys and no nonces: credentials are supplied by the user and SigV4 needs only the request hash and a timestamp. | — |
 | `delivery_mitm` | Met | Releases are downloaded over HTTPS/SSH from GitHub Releases and the Terraform Registry; Terraform records the checksums in `.terraform.lock.hcl`. | `blob/README.md#verifying-a-release` |
-| `delivery_unsigned` | Met | Nothing is verified by an unsigned hash: `SHA256SUMS` is GPG-signed with the release key (published in the repository), the tag itself is GPG-signed and GitHub-verified, and Terraform checks the release checksums. | `blob/.github/release-signing-key.asc` |
+| `delivery_unsigned` | Met | Nothing is verified by an unsigned hash: `SHA256SUMS` is GPG-signed with the release key (published in the repository), the tag itself is GPG-signed and GitHub-verified, every artifact carries SLSA v1.0 build provenance (`gh attestation verify`), and Terraform checks the release checksums. | `blob/.github/release-signing-key.asc`, `blob/.github/workflows/release.yml` |
 | `vulnerabilities_fixed_60_days` | Met (see §6, judgement call) | The two advisories older than 60 days are not reachable in released software: the goldmark advisory is confined to the docs-generation tooling (reachable only from `tools/` → `tfplugindocs`, not from the provider binary) and the `x/crypto/openpgp` advisory is for a package the main module does not need and that has no fixed version. Everything reachable was raised within 60 days and is tracked in [#49](https://github.com/caberdo/terraform-provider-rustfs/issues/49). | `https://github.com/caberdo/terraform-provider-rustfs/issues/49` |
 | `no_leaked_credentials` | Met | No valid private credential is in the repository or its history; the only credential-shaped strings are AWS's documented `AKIAIOSFODNN7EXAMPLE` in examples. `.gitignore` excludes key material, secrets are supplied via the provider block or `RUSTFS_*` environment variables at runtime, and `secret_key`/`access_secret` are `Sensitive`. | `blob/.gitignore`, `blob/provider/provider.go` |
 | `static_analysis` | Met | Static analysis runs before every release and on every pull request: gosec (security rules, SARIF uploaded to GitHub code scanning) and golangci-lint (staticcheck, govet, errcheck, bodyclose). | `blob/.github/workflows/test.yml`, `blob/.github/golangci.yml` |
@@ -156,7 +156,7 @@ Notes:
 | `vulnerabilities_critical_fixed` | Met | No open critical vulnerability; Dependabot and the Scorecard `Vulnerabilities` check watch the module graph. |
 | `static_analysis_common_vulnerabilities` | Met | gosec's rule set targets common Go/CWE classes (G4xx), in addition to staticcheck's correctness rules. |
 | `static_analysis_often` | Met | Both tools run on every pull request, far more often than once per six months. |
-| `dynamic_analysis` | Met | The acceptance suite exercises every resource against a real RustFS server; `-race` builds the provider and the client under the race detector. |
+| `dynamic_analysis` | Met | The acceptance suite exercises every resource against a real RustFS server, `-race` builds provider and client under the race detector, and four fuzz targets replay their seed corpus on every run. |
 | `dynamic_analysis_unsafe` | N/A | The provider is written in Go, which is memory-safe; no C/C++ is compiled (`CGO_ENABLED=0`). |
 | `dynamic_analysis_enable_assertions` | Met | CI runs the unit suite with `-race`; test failures and panics fail the job. |
 | `version_semver` | Met | Releases follow semantic versioning (`v0.1.0` … `v0.4.1`), with breaking changes called out in `CHANGELOG.md`. |
@@ -245,7 +245,7 @@ so the level can be claimed the moment the people-side items are true.
 | `hardened_site` | Met | The project sites send the hardening headers with non-permissive values: `strict-transport-security: max-age=31536000; includeSubdomains; preload`, `x-frame-options: deny`, `x-content-type-options: nosniff` and a restrictive `content-security-policy` (GitHub repository/releases and the Terraform Registry). | `https://github.com/caberdo/terraform-provider-rustfs` |
 | `security_review` | **Unmet — see §5** | The assurance case and threat model exist and define the review's scope, but no dated security review against a released version has been performed yet; record it in `SECURITY.md` once done. | `blob/.github/SECURITY.md#security-review-status` |
 | `hardening` | Met | See §4.3: hardening mechanisms are documented and in place. | `blob/.github/SECURITY.md#hardening-in-place` |
-| `dynamic_analysis` | Met | Both dynamic analyses run before a release: the acceptance suite executes every resource against a real RustFS server (with coverage instrumentation) and the unit suite runs under `-race`; fuzzing for the parsers is added in [#50](https://github.com/caberdo/terraform-provider-rustfs/issues/50). | `blob/acc_test/docker-compose.yml` |
+| `dynamic_analysis` | Met | Both dynamic analyses run before a release: the acceptance suite executes every resource against a real RustFS server (with coverage instrumentation), the unit suite runs under `-race`, and four fuzz targets (`FuzzPolicyDocument`, `FuzzAdminErrorBody`, `FuzzConfigKV`, `FuzzTargetConfig`) replay a committed seed corpus in every run with a weekly one-minute-per-target job in CI. | `blob/acc_test/docker-compose.yml`, `blob/.github/workflows/fuzz.yml` |
 
 ## 5. Open items — what is not met yet, and who can fix it
 
@@ -301,7 +301,7 @@ so the level can be claimed the moment the people-side items are true.
 | Runtime design and trust boundaries | [`ARCHITECTURE.md`](../ARCHITECTURE.md) |
 | Upstream attribution and dependency licences | [`NOTICE`](../NOTICE) |
 | Release plan of record | [`CHANGELOG.md`](../CHANGELOG.md) |
-| CI: lint/gosec/unit/acceptance/coverage · docs drift · releases · Scorecard | [`.github/workflows/`](./workflows) |
+| CI: lint/gosec/unit/acceptance/coverage · fuzz targets + weekly job · docs drift · releases · Scorecard | [`.github/workflows/`](./workflows) |
 | Licence | [`LICENSE`](../LICENSE) |
 
 ## 8. Re-measuring and keeping this pack true
