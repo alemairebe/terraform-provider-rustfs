@@ -20,7 +20,7 @@ cluster health all live in the same Terraform state as the rest of your infrastr
 |---|---|
 | 🎯 **Broadest RustFS coverage** | Buckets, IAM (users, groups, policies, service accounts, LDAP), KMS keys, quotas, bucket + site replication, storage tiers and ILM, audit and notification targets, durability, module switches, cluster health, metrics and diagnostics |
 | 🧪 **Tested against real servers** | 235 unit tests plus 52 acceptance tests that run against RustFS in Docker, on a version matrix (RustFS `1.0.1`, `1.0.2`, `1.0.3` and `latest`) |
-| 🔐 **Verifiable supply chain** | GPG-signed release tags, signed `SHA256SUMS`, SPDX SBOM and the Terraform registry manifest in every release |
+| 🔐 **Verifiable supply chain** | GPG-signed release tags, signed `SHA256SUMS`, SLSA build provenance for every artifact, SPDX SBOM and the Terraform registry manifest in every release |
 | 🚚 **Drop-in successor** | 12 of the 16 resources of `weinmann-emt/rustfs` migrate with **zero** config changes, 1 has a rename, 3 need a small edit — see [Migrating](#migrating-from-weinmann-emtrustfs) |
 | ⚡ **Modern internals** | terraform-plugin-framework (plugin protocol 6.0), AWS SDK for Go v2, Go 1.27, Docker/Podman acceptance harness |
 
@@ -286,6 +286,7 @@ GitHub-verified tag, and ships:
 | `terraform-provider-rustfs_<version>_<os>_<arch>.zip` | The provider binaries |
 | `terraform-provider-rustfs_<version>_SHA256SUMS` | Checksums for all artifacts |
 | `terraform-provider-rustfs_<version>_SHA256SUMS.sig` | GPG signature over the checksums |
+| `terraform-provider-rustfs_<version>_provenance.intoto.jsonl` | SLSA v1.0 build provenance over every checksummed artifact |
 | `terraform-provider-rustfs_<version>_manifest.json` | Terraform registry manifest (plugin protocol versions) |
 | `sbom.spdx.json` | SPDX software bill of materials |
 
@@ -295,6 +296,27 @@ The release signing key is committed as [`.github/release-signing-key.asc`](./.g
 gpg --import .github/release-signing-key.asc     # fingerprint 77BEB69E5C039CB69017B060DFE36652ADCC2259
 gpg --verify terraform-provider-rustfs_0.4.1_SHA256SUMS.sig \
              terraform-provider-rustfs_0.4.1_SHA256SUMS
+```
+
+The checksum signature proves the checksums are ours; the build provenance proves *where the
+binaries come from*. It is generated in the release workflow by
+[`actions/attest-build-provenance`](https://github.com/actions/attest-build-provenance) and stored in
+the repository's attestation record, so it is checkable with the GitHub CLI:
+
+```bash
+gh attestation verify terraform-provider-rustfs_0.4.1_linux_amd64.zip \
+    --repo caberdo/terraform-provider-rustfs
+```
+
+That answers *which repository, tag, commit and workflow produced this archive*, and it fails if
+the file was rebuilt or modified after the fact. The same provenance is attached to the release as
+`terraform-provider-rustfs_<version>_provenance.intoto.jsonl`, so a release you already downloaded
+verifies without a lookup in the attestation record:
+
+```bash
+gh attestation verify terraform-provider-rustfs_0.4.1_linux_amd64.zip \
+    --repo caberdo/terraform-provider-rustfs \
+    --bundle terraform-provider-rustfs_0.4.1_provenance.intoto.jsonl
 ```
 
 Terraform itself verifies the checksums when it installs a provider and records them in
