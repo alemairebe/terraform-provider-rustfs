@@ -240,10 +240,11 @@ func TestAccNotificationTargetResource(t *testing.T) {
 // testAccNotificationTargetPreCheck verifies the environment and that the
 // running RustFS has the notification module enabled (the admin API rejects
 // target management otherwise). The list endpoint succeeds even when the module
-// is disabled, so the check probes an actual create and skips when the server
-// reports the notification module is disabled. The probe uses the webhook
-// target (the only type that activates without an external service) pointed at
-// RUSTFS_NOTIFY_TEST_ENDPOINT.
+// is disabled, so the check enables the module when it is console/default
+// sourced and probes an actual create; when the module is pinned by an
+// environment variable the test skips (testAccEnsureModuleEnabled). The probe
+// uses the webhook target (the only type that activates without an external
+// service) pointed at RUSTFS_NOTIFY_TEST_ENDPOINT.
 func testAccNotificationTargetPreCheck(t *testing.T) {
 	testAccPreCheck(t)
 
@@ -251,6 +252,7 @@ func testAccNotificationTargetPreCheck(t *testing.T) {
 	if endpoint == "" {
 		t.Skip("RUSTFS_NOTIFY_TEST_ENDPOINT must be set for the notification target acceptance test")
 	}
+	testAccEnsureModuleEnabled(t, "notify")
 
 	client := testAccRustClient()
 	probe := fmt.Sprintf("tf-notify-probe-%d", acctest.RandInt())

@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/caberdo/terraform-provider-rustfs/pkg/rustfs"
@@ -25,6 +26,64 @@ func readModuleSwitchState(t *testing.T) *rustfs.ModuleSwitchState {
 		t.Fatalf("failed to read original module switches: %v", err)
 	}
 	return state
+}
+
+// testAccEnsureModuleEnabled makes sure a feature module ("notify" or "audit")
+// is enabled before the test body runs, and restores the switch state it
+// changed when the test finishes. Acceptance tests that only need the module as
+// a precondition (the notification and audit target tests) use it so the CI
+// environment does not have to pin the module with an environment variable.
+//
+// The admin API only accepts switch updates for console/default sourced
+// modules: when a module is pinned by an environment variable the server
+// refuses the update. That state belongs to the deployment rather than to the
+// test, so the test skips instead of failing.
+func testAccEnsureModuleEnabled(t *testing.T, module string) {
+	t.Helper()
+
+	client := testAccRustClient()
+	original, err := client.GetModuleSwitches()
+	if err != nil {
+		t.Fatalf("failed to read module switches: %v", err)
+	}
+
+	enabled, source := original.NotifyEnabled, original.NotifySource
+	if module == "audit" {
+		enabled, source = original.AuditEnabled, original.AuditSource
+	}
+	if enabled {
+		return
+	}
+	if source == rustfs.ModuleSwitchSourceEnv {
+		t.Skipf("the %s module is pinned by an environment variable; skipping: enable it via the deployment environment instead", module)
+	}
+
+	// Only flip the module under test; keep the effective value of the other
+	// switch so a pinned sibling module is not part of the change.
+	update := rustfs.ModuleSwitchUpdate{
+		NotifyEnabled: original.NotifyEnabled,
+		AuditEnabled:  original.AuditEnabled,
+	}
+	if module == "audit" {
+		update.AuditEnabled = true
+	} else {
+		update.NotifyEnabled = true
+	}
+	if _, err := client.SetModuleSwitches(update); err != nil {
+		if strings.Contains(err.Error(), "managed by environment variable") {
+			t.Skipf("the %s module is pinned by an environment variable; skipping: %v", module, err)
+		}
+		t.Fatalf("failed to enable the %s module: %v", module, err)
+	}
+	t.Cleanup(func() {
+		restore := rustfs.ModuleSwitchUpdate{
+			NotifyEnabled: original.NotifyEnabled,
+			AuditEnabled:  original.AuditEnabled,
+		}
+		if _, err := client.SetModuleSwitches(restore); err != nil {
+			t.Errorf("failed to restore module switches: %v", err)
+		}
+	})
 }
 
 func TestAccModuleSwitchResource(t *testing.T) {

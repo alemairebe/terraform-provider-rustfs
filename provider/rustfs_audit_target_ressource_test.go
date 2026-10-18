@@ -292,10 +292,12 @@ func TestAccAuditTargetResource(t *testing.T) {
 // testAccAuditTargetPreCheck verifies the environment and that the running
 // RustFS has the audit module enabled (the admin API rejects target management
 // otherwise). The list endpoint succeeds even when the module is disabled, so
-// the check probes an actual create and skips when the server reports the
-// audit module is disabled.
+// the check enables the module when it is console/default sourced and probes an
+// actual create; when the module is pinned by an environment variable the test
+// skips (testAccEnsureModuleEnabled).
 func testAccAuditTargetPreCheck(t *testing.T) {
 	testAccPreCheck(t)
+	testAccEnsureModuleEnabled(t, "audit")
 
 	client := testAccRustClient()
 	probe := fmt.Sprintf("tf-audit-probe-%d", acctest.RandInt())

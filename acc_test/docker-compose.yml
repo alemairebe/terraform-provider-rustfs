@@ -46,8 +46,12 @@ services:
     environment:
       RUSTFS_ACCESS_KEY: rustfsadmin
       RUSTFS_SECRET_KEY: rustfsadmin
-      RUSTFS_NOTIFY_ENABLE: "true"
-      RUSTFS_AUDIT_ENABLE: "true"
+      # The notify and audit feature modules are intentionally NOT pinned with
+      # RUSTFS_NOTIFY_ENABLE/RUSTFS_AUDIT_ENABLE here: RustFS then rejects every
+      # admin API update to those modules, which breaks the acceptance tests
+      # (TestAccModuleSwitchResource, and the target prechecks). The audit and
+      # notification target tests enable their own module through the admin API
+      # and restore it afterwards.
       RUSTFS_OUTBOUND_ALLOW_ORIGINS: "http://127.0.0.1:9001"
       RUSTFS_KMS_ENABLE: "true"
       RUSTFS_KMS_BACKEND: "local"
