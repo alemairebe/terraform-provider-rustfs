@@ -6,8 +6,9 @@ CHORES:
   env-pinned module, which broke `TestAccModuleSwitchResource`. The audit and notification
   target tests now enable their own module through the admin API and restore it afterwards, so
   the module switch resource is testable again
-- `TestAccStorageInfo` accepts the non-empty refresh plan its live disk metrics (`avail_space`,
-  `free_inodes`, `used_space`) produce while the concurrent acceptance tests write objects
+- `TestAccStorageInfo` no longer mirrors the volatile `raw_json` of its live disk metrics
+  (`avail_space`, `free_inodes`, `used_space`) into an output, which made the second step flap
+  between an empty and a non-empty refresh plan depending on whether the metrics had moved
 
 ## 0.4.0 (2026-10-18)
 

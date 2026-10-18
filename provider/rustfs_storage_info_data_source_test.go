@@ -2,6 +2,7 @@ package provider
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
@@ -13,6 +14,14 @@ func TestAccStorageInfo(t *testing.T) {
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
+				// The data source reports live disk metrics (avail_space,
+				// free_inodes, used_space) that move while other tests write
+				// objects, so this test deliberately stays a single step and
+				// never mirrors raw_json into an output: a second step would
+				// compare those values against the previous read and fail
+				// whenever they changed. ExpectNonEmptyPlan is not usable
+				// either, because the refresh plan is empty when the metrics
+				// happen to be stable.
 				Config: testAccProviderConfig() + `
 data "rustfs_storage_info" "test" {}
 `,
@@ -23,30 +32,13 @@ data "rustfs_storage_info" "test" {}
 					resource.TestCheckResourceAttrSet("data.rustfs_storage_info.test", "disks.0.path"),
 					resource.TestCheckResourceAttrSet("data.rustfs_storage_info.test", "disks.0.total_space"),
 					resource.TestCheckResourceAttrSet("data.rustfs_storage_info.test", "disks.0.state"),
-				),
-			},
-			{
-				// The data source reports live disk metrics (avail_space,
-				// free_inodes, used_space), which change while the concurrent
-				// acceptance tests write objects, so a non-empty refresh plan is
-				// expected here rather than a defect.
-				ExpectNonEmptyPlan: true,
-				Config: testAccProviderConfig() + `
-data "rustfs_storage_info" "test" {}
-
-output "storage_raw" {
-  value = data.rustfs_storage_info.test.raw_json
-}
-`,
-				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttrSet("data.rustfs_storage_info.test", "raw_json"),
 					resource.TestCheckResourceAttrWith("data.rustfs_storage_info.test", "raw_json", func(v string) error {
 						var parsed map[string]interface{}
 						if err := json.Unmarshal([]byte(v), &parsed); err != nil {
 							return err
 						}
 						if _, ok := parsed["info"]; !ok {
-							t.Errorf("raw_json missing info field")
+							return fmt.Errorf("raw_json missing info field")
 						}
 						return nil
 					}),
