@@ -9,6 +9,14 @@ build:
 test:
 	go test -v -cover ./...
 
+coverage:
+	go test -count=1 -skip '^TestAcc' -covermode=atomic -coverprofile=coverage.out ./...
+	@echo
+	@./scripts/coverage-summary.sh coverage.out
+
+coverage-html: coverage
+	go tool cover -html=coverage.out
+
 testacc:
 	TF_ACC=1 go test -v -cover ./...
 
@@ -41,4 +49,4 @@ validate-examples:
 generate:
 	go generate ./...
 
-.PHONY: build test testacc lint lint-fix fmt vet install testacc-docker testacc-live validate-examples generate
+.PHONY: build test coverage coverage-html testacc lint lint-fix fmt vet install testacc-docker testacc-live validate-examples generate
