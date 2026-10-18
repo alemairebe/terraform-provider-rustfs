@@ -5,19 +5,118 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/url"
+	"strconv"
 )
 
+// PolicyCondition is the condition block of a policy statement: it maps a
+// condition operator (for example "StringLike") to the condition keys it
+// applies to and their values.
+//
+// The IAM policy grammar allows a condition value to be a string, a boolean, a
+// number or a list of those; PolicyCondition decodes all four into a list of
+// strings so the Terraform state stays stable across reads.
+type PolicyCondition map[string]map[string][]string
+
+// UnmarshalJSON normalizes every condition value to a list of strings.
+func (c *PolicyCondition) UnmarshalJSON(data []byte) error {
+	var raw map[string]map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("condition: %w", err)
+	}
+	if raw == nil {
+		*c = nil
+		return nil
+	}
+
+	condition := make(PolicyCondition, len(raw))
+	for operator, keys := range raw {
+		values := make(map[string][]string, len(keys))
+		for key, value := range keys {
+			normalized, err := policyConditionValues(value)
+			if err != nil {
+				return fmt.Errorf("condition %q key %q: %w", operator, key, err)
+			}
+			values[key] = normalized
+		}
+		condition[operator] = values
+	}
+	*c = condition
+	return nil
+}
+
+// policyConditionValues normalizes one condition value to a list of strings,
+// accepting either a single scalar or a list of scalars.
+func policyConditionValues(raw json.RawMessage) ([]string, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) > 0 && trimmed[0] == '[' {
+		var items []json.RawMessage
+		if err := json.Unmarshal(trimmed, &items); err != nil {
+			return nil, err
+		}
+		values := make([]string, 0, len(items))
+		for _, item := range items {
+			value, err := policyConditionScalar(item)
+			if err != nil {
+				return nil, err
+			}
+			values = append(values, value)
+		}
+		return values, nil
+	}
+
+	value, err := policyConditionScalar(trimmed)
+	if err != nil {
+		return nil, err
+	}
+	return []string{value}, nil
+}
+
+// policyConditionScalar renders one string, boolean, number or null JSON
+// condition value as a string. Numbers keep their original representation
+// because the document is decoded with json.Number.
+func policyConditionScalar(raw json.RawMessage) (string, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+
+	var decoded any
+	if err := decoder.Decode(&decoded); err != nil {
+		return "", err
+	}
+
+	switch value := decoded.(type) {
+	case string:
+		return value, nil
+	case bool:
+		return strconv.FormatBool(value), nil
+	case json.Number:
+		return value.String(), nil
+	case nil:
+		return "", nil
+	default:
+		return "", fmt.Errorf("unsupported condition value %s", string(raw))
+	}
+}
+
 type PolicyStatement struct {
-	Effect   string   `json:"Effect"`
-	Action   []string `json:"Action"`
-	Resource []string `json:"Resource,omitempty"`
+	Effect      string          `json:"Effect"`
+	Sid         string          `json:"Sid,omitempty"`
+	Action      []string        `json:"Action,omitempty"`
+	NotAction   []string        `json:"NotAction,omitempty"`
+	Resource    []string        `json:"Resource,omitempty"`
+	NotResource []string        `json:"NotResource,omitempty"`
+	Condition   PolicyCondition `json:"Condition,omitempty"`
 }
 
 type PolicyStatementSinle struct {
-	Effect   string   `json:"Effect"`
-	Action   string   `json:"Action"`
-	Resource []string `json:"Resource"`
+	Effect      string          `json:"Effect"`
+	Sid         string          `json:"Sid"`
+	Action      string          `json:"Action"`
+	NotAction   string          `json:"NotAction"`
+	Resource    []string        `json:"Resource"`
+	NotResource []string        `json:"NotResource"`
+	Condition   PolicyCondition `json:"Condition"`
 }
 
 type Policy struct {
@@ -102,11 +201,20 @@ func parsePolicyField(policy json.RawMessage) ([]PolicyStatement, error) {
 	if errSingle == nil {
 		statements := make([]PolicyStatement, 0, len(statementSingle.Statement))
 		for _, got := range statementSingle.Statement {
-			statements = append(statements, PolicyStatement{
-				Effect:   got.Effect,
-				Action:   []string{got.Action},
-				Resource: got.Resource,
-			})
+			statement := PolicyStatement{
+				Effect:      got.Effect,
+				Sid:         got.Sid,
+				Resource:    got.Resource,
+				NotResource: got.NotResource,
+				Condition:   got.Condition,
+			}
+			if got.Action != "" {
+				statement.Action = []string{got.Action}
+			}
+			if got.NotAction != "" {
+				statement.NotAction = []string{got.NotAction}
+			}
+			statements = append(statements, statement)
 		}
 		return statements, nil
 	}
