@@ -155,5 +155,34 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: "go.mod"
+          cache: true
+
+      # The acceptance container writes coverage-acceptance.out into the mounted
+      # worktree; the unit profile is produced here so both can be merged into the
+      # one statement-coverage number the project publishes (see
+      # .github/OPENSSF-BEST-PRACTICES.md).
+      - name: Unit-test coverage
+        run: go test -count=1 -skip '^TestAcc' -covermode=atomic -coverprofile=coverage-unit.out ./...
+
       - name: Run acceptance tests
         run: docker compose -f acc_test/docker-compose.yml --profile test run --rm test
+
+      - name: Combined coverage (unit + acceptance)
+        if: always()
+        run: |
+          if [[ ! -f coverage-acceptance.out ]]; then
+            echo "No acceptance coverage profile: the container run did not finish." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          ./scripts/merge-coverage.sh coverage-union.out coverage-unit.out coverage-acceptance.out
+          {
+            echo "## Coverage (unit + acceptance)"
+            echo ""
+            echo "\`coverage-unit.out\` and \`coverage-acceptance.out\` merged by \`scripts/merge-coverage.sh\`."
+            echo ""
+            ./scripts/coverage-summary.sh coverage-union.out
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -17,6 +17,13 @@ coverage:
 coverage-html: coverage
 	go tool cover -html=coverage.out
 
+# Unit coverage (coverage.out) plus the acceptance profile written by
+# acc_test/docker-compose.yml (coverage-acceptance.out) as one number.
+coverage-merge:
+	./scripts/merge-coverage.sh coverage-union.out coverage.out coverage-acceptance.out
+	@echo
+	@./scripts/coverage-summary.sh coverage-union.out
+
 testacc:
 	TF_ACC=1 go test -v -cover ./...
 
@@ -49,4 +56,4 @@ validate-examples:
 generate:
 	go generate ./...
 
-.PHONY: build test coverage coverage-html testacc lint lint-fix fmt vet install testacc-docker testacc-live validate-examples generate
+.PHONY: build test coverage coverage-html coverage-merge testacc lint lint-fix fmt vet install testacc-docker testacc-live validate-examples generate
