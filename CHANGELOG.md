@@ -1,6 +1,11 @@
 ## Unreleased
 
 FEATURES:
+- `rustfs_policy` statements gain `sid`, `not_action`, `not_resource` and `condition`, so
+  prefix-scoped and negative statements (`condition = { StringLike = { "s3:prefix" = ["tenant-42/*"] } }`)
+  can be applied through the provider. `action` is now optional: a statement must set `action` or
+  `not_action`, and condition values returned as strings, booleans or numbers are normalized to
+  lists of strings so the state does not diff
 - The provider docs publish the supported RustFS version matrix: the README and the provider index
   list every capability against RustFS `1.0.1`, `1.0.2` and `1.0.3`, and explain why a route that
   exists in the server's route table is not proof of support (RustFS answers `501 NotImplemented`
