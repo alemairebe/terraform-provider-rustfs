@@ -153,6 +153,25 @@ review. It has not yet been performed as a dated, recorded exercise against a re
 that review (and the resolution of the limitations above) is tracked in
 [#53](https://github.com/caberdo/terraform-provider-rustfs/issues/53).
 
+## Dependency Vulnerability Scanning
+
+Every pull request runs `govulncheck ./...` (the `Vulnerability Scan` job in
+`.github/workflows/test.yml`), so a newly published advisory that is reachable from the provider
+fails CI instead of only lowering the OpenSSF Scorecard result.
+
+One module-level advisory is accepted and tracked here:
+
+| Advisory | Package | Status |
+|---|---|---|
+| [GO-2026-5932](https://pkg.go.dev/vuln/GO-2026-5932) | `golang.org/x/crypto/openpgp` | Accepted: no fixed version exists |
+
+`golang.org/x/crypto/openpgp` is unmaintained and unsafe by design, so there is no release that
+fixes the advisory. The provider does not import it, and the released binary does not contain
+`golang.org/x/crypto`: the module is in `go.mod` only because `golang.org/x/crypto/ssh` is
+required by `terraform-plugin-testing`, which is used exclusively by the acceptance tests.
+Removing the module means dropping the acceptance-test framework, so the advisory is documented
+instead. Re-check this entry when `terraform-plugin-testing` changes its dependency graph.
+
 ## Security Best Practices for Users
 
 1. **Credential Management**

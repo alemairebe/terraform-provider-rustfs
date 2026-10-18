@@ -68,6 +68,29 @@ jobs:
           echo "See the **Security** tab for full details." >> $GITHUB_STEP_SUMMARY
           exit 1
 
+  govulncheck:
+    name: Vulnerability Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: "go.mod"
+          cache: true
+
+      # Pinned like golangci-lint so a new release cannot change the gate
+      # silently. The scanner needs no RustFS server: it walks the module
+      # graph and the call graph against the Go vulnerability database.
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+
+      - name: Run govulncheck
+        run: govulncheck ./...
+
   test:
     name: Test
     runs-on: ubuntu-latest

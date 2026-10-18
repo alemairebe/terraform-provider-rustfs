@@ -58,6 +58,13 @@ CHORES:
   (the evidence pack for the OpenSSF Best Practices badge); `SECURITY.md` now documents the security
   requirements, the threat model and the assurance case, and `CONTRIBUTING.md` documents the code
   review and testing requirements
+- Cleared the reachable OSV advisories: `golang.org/x/net` v0.61.0 (HTTP/2 framing, trailer and
+  flow-control fixes) and `github.com/yuin/goldmark` v1.8.6 (light/dark auto-link XSS), plus the
+  transitive `golang.org/x` bumps that `go mod tidy` selected; `docs/` regenerates identically
+- Go toolchain bumped to 1.27.2, which carries the matching `net/http` HTTP/2 stdlib fixes
+- CI now runs `govulncheck ./...` (`Vulnerability Scan` job), and the unfixable
+  `golang.org/x/crypto/openpgp` advisory is documented as accepted in
+  [`.github/SECURITY.md`](./.github/SECURITY.md)
 
 ## 0.4.1 (2026-10-18)
 
