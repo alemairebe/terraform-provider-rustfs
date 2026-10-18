@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/url"
 	"sort"
+	"strings"
 )
 
 type GroupInfo struct {
@@ -17,6 +18,19 @@ type GroupInfo struct {
 	Status  string   `json:"status"`
 	Members []string `json:"members"`
 	Policy  string   `json:"policy"`
+}
+
+// Policies returns the canned policies attached to the group. The admin API
+// stores and returns a group's policies as one comma-separated string, so an
+// empty (or unset) policy field yields an empty slice.
+func (g GroupInfo) Policies() []string {
+	policies := []string{}
+	for _, name := range strings.Split(g.Policy, ",") {
+		if name = strings.TrimSpace(name); name != "" {
+			policies = append(policies, name)
+		}
+	}
+	return policies
 }
 
 type GroupAddRemove struct {
