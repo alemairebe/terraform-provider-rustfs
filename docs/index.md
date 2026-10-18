@@ -111,11 +111,14 @@ for the three resources whose schemas differ and the one that was renamed.
 
 Releases are built from GPG-signed, GitHub-verified tags and ship checksums signed with the
 [release signing key](https://github.com/caberdo/terraform-provider-rustfs/blob/main/.github/release-signing-key.asc)
-(fingerprint `77BEB69E5C039CB69017B060DFE36652ADCC2259`), an SPDX SBOM and the registry manifest:
+(fingerprint `77BEB69E5C039CB69017B060DFE36652ADCC2259`), SLSA build provenance for every
+artifact, an SPDX SBOM and the registry manifest:
 
 ```bash
 gpg --verify terraform-provider-rustfs_<version>_SHA256SUMS.sig \
              terraform-provider-rustfs_<version>_SHA256SUMS
+gh attestation verify terraform-provider-rustfs_<version>_linux_amd64.zip \
+    --repo caberdo/terraform-provider-rustfs
 ```
 
 ## Authentication

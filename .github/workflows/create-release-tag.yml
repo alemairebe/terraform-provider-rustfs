@@ -121,8 +121,14 @@ jobs:
 
   release:
     needs: create-tag
+    # A reusable workflow can only use the permissions the calling job grants,
+    # so the release job passes on the two scopes it attests with on top of
+    # `contents: write`: `id-token` for the OIDC identity and `attestations` for
+    # the attestation record.
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     uses: ./.github/workflows/release.yml
     secrets: inherit
     with:
