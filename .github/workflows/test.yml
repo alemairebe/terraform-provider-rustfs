@@ -98,7 +98,25 @@ jobs:
 
       # Narrow to ./internal/... once the code layout lands (#8-#11).
       - name: Run tests
-        run: go test -v -cover -race ./...
+        run: go test -v -race -covermode=atomic -coverprofile=coverage.out ./...
+
+      - name: Coverage summary
+        if: always()
+        run: |
+          if [[ ! -f coverage.out ]]; then
+            echo "No coverage profile: the test step failed before writing one." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          {
+            echo "## Coverage"
+            echo ""
+            echo "Unit tests only: the acceptance suite skips itself without \`TF_ACC\`, so"
+            echo "packages whose behaviour is covered by \`TestAcc*\` (mostly \`provider\`) read low."
+            echo "Run \`make coverage\` locally, or see the acceptance job for the live suite."
+            echo ""
+            ./scripts/coverage-summary.sh coverage.out
+          } >> "$GITHUB_STEP_SUMMARY"
+          ./scripts/coverage-summary.sh coverage.out
 
   rustfs_versions:
     name: Supported RustFS Versions
