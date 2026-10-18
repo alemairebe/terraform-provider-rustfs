@@ -12,15 +12,20 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 // Data models.
 type policyStatementModel struct {
-	Effect   string   `tfsdk:"effect"`
-	Action   []string `tfsdk:"action"`
-	Resource []string `tfsdk:"resource"`
+	Effect      string                         `tfsdk:"effect"`
+	Sid         types.String                   `tfsdk:"sid"`
+	Action      []string                       `tfsdk:"action"`
+	NotAction   []string                       `tfsdk:"not_action"`
+	Resource    []string                       `tfsdk:"resource"`
+	NotResource []string                       `tfsdk:"not_resource"`
+	Condition   map[string]map[string][]string `tfsdk:"condition"`
 }
 
 type policyResourceModel struct {
@@ -65,19 +70,43 @@ func (r *PolicyResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 				Default:  stringdefault.StaticString("2012-10-17"),
 			},
 			"statement": schema.ListNestedAttribute{
-				Required: true,
+				Required:    true,
+				Description: "Statements of the policy document",
 				NestedObject: schema.NestedAttributeObject{
+					Validators: []validator.Object{policyStatementValidator{}},
 					Attributes: map[string]schema.Attribute{
 						"effect": schema.StringAttribute{
-							Required: true,
+							Required:    true,
+							Description: "Whether the statement allows (Allow) or denies (Deny) access",
+						},
+						"sid": schema.StringAttribute{
+							Optional:    true,
+							Description: "Optional statement identifier",
 						},
 						"action": schema.SetAttribute{
 							ElementType: types.StringType,
-							Required:    true,
+							Optional:    true,
+							Description: "Actions the statement applies to. Required unless not_action is set",
+						},
+						"not_action": schema.SetAttribute{
+							ElementType: types.StringType,
+							Optional:    true,
+							Description: "Actions the statement does not apply to. Required unless action is set",
 						},
 						"resource": schema.SetAttribute{
 							ElementType: types.StringType,
 							Optional:    true,
+							Description: "Resources the statement applies to",
+						},
+						"not_resource": schema.SetAttribute{
+							ElementType: types.StringType,
+							Optional:    true,
+							Description: "Resources the statement does not apply to",
+						},
+						"condition": schema.MapAttribute{
+							ElementType: types.MapType{ElemType: types.ListType{ElemType: types.StringType}},
+							Optional:    true,
+							Description: "Conditions that must be met for the statement to apply, as a map of condition operator (for example StringLike) to a map of condition key to its value list",
 						},
 					},
 				},
@@ -113,20 +142,10 @@ func (r *PolicyResource) Create(ctx context.Context, req resource.CreateRequest,
 		return
 	}
 
-	statements := []rustfs.PolicyStatement{}
-	for _, i := range plan.Statement {
-		statements = append(statements,
-			rustfs.PolicyStatement{
-				Effect:   i.Effect,
-				Action:   i.Action,
-				Resource: i.Resource,
-			},
-		)
-	}
 	policy := rustfs.Policy{
 		Version:   plan.Version.ValueString(),
 		Name:      plan.Name.ValueString(),
-		Statement: statements,
+		Statement: policyStatementsFromModel(plan.Statement),
 	}
 	err := r.client.RustClient.CreatePolicy(policy)
 	if err != nil {
@@ -168,16 +187,7 @@ func (r *PolicyResource) Read(ctx context.Context, req resource.ReadRequest, res
 
 	state.Name = types.StringValue(actual.Name)
 	state.Version = types.StringValue(actual.Version)
-	state.Statement = []policyStatementModel{}
-	for _, read_statement := range actual.Statement {
-		state.Statement = append(state.Statement,
-			policyStatementModel{
-				Effect:   read_statement.Effect,
-				Action:   read_statement.Action,
-				Resource: read_statement.Resource,
-			},
-		)
-	}
+	state.Statement = policyStatementModelsFromAPI(actual.Statement)
 	// Save update status
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
@@ -194,20 +204,10 @@ func (r *PolicyResource) Update(ctx context.Context, req resource.UpdateRequest,
 		return
 	}
 
-	statements := []rustfs.PolicyStatement{}
-	for _, i := range plan.Statement {
-		statements = append(statements,
-			rustfs.PolicyStatement{
-				Effect:   i.Effect,
-				Action:   i.Action,
-				Resource: i.Resource,
-			},
-		)
-	}
 	policy := rustfs.Policy{
 		Version:   plan.Version.ValueString(),
 		Name:      plan.Name.ValueString(),
-		Statement: statements,
+		Statement: policyStatementsFromModel(plan.Statement),
 	}
 	err := r.client.RustClient.CreatePolicy(policy)
 	if err != nil {
@@ -248,4 +248,87 @@ func (r *PolicyResource) Delete(ctx context.Context, req resource.DeleteRequest,
 
 func (r *PolicyResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	resource.ImportStatePassthroughID(ctx, path.Root("name"), req, resp)
+}
+
+const policyStatementValidatorDescription = "Ensures every statement sets either action or not_action"
+
+// policyStatementValidator requires every statement to carry an action or a
+// not_action. objectvalidator.AtLeastOneOf cannot express this rule for the
+// elements of a nested attribute list: it returns early whenever the object it
+// validates is not null, which always holds for a list element.
+type policyStatementValidator struct{}
+
+var _ validator.Object = policyStatementValidator{}
+
+func (policyStatementValidator) Description(_ context.Context) string {
+	return policyStatementValidatorDescription
+}
+
+func (policyStatementValidator) MarkdownDescription(_ context.Context) string {
+	return policyStatementValidatorDescription
+}
+
+func (policyStatementValidator) ValidateObject(_ context.Context, req validator.ObjectRequest, resp *validator.ObjectResponse) {
+	attributes := req.ConfigValue.Attributes()
+
+	action, hasAction := attributes["action"]
+	notAction, hasNotAction := attributes["not_action"]
+	if !hasAction || !hasNotAction {
+		return
+	}
+
+	// A statement whose action is still unknown cannot be validated yet.
+	if action.IsUnknown() || notAction.IsUnknown() {
+		return
+	}
+	if !action.IsNull() || !notAction.IsNull() {
+		return
+	}
+
+	resp.Diagnostics.AddAttributeError(
+		req.Path.AtName("not_action"),
+		"Invalid policy statement",
+		"A policy statement must set either action or not_action.",
+	)
+}
+
+// policyStatementsFromModel builds the statement list of the policy document
+// sent to the API from the planned statement blocks.
+func policyStatementsFromModel(statements []policyStatementModel) []rustfs.PolicyStatement {
+	out := make([]rustfs.PolicyStatement, 0, len(statements))
+	for _, statement := range statements {
+		out = append(out, rustfs.PolicyStatement{
+			Effect:      statement.Effect,
+			Sid:         statement.Sid.ValueString(),
+			Action:      statement.Action,
+			NotAction:   statement.NotAction,
+			Resource:    statement.Resource,
+			NotResource: statement.NotResource,
+			Condition:   rustfs.PolicyCondition(statement.Condition),
+		})
+	}
+	return out
+}
+
+// policyStatementModelsFromAPI converts the statements of a policy document
+// read from the API into statement blocks. An unset statement identifier
+// becomes null so it does not differ from a configuration that omits sid.
+func policyStatementModelsFromAPI(statements []rustfs.PolicyStatement) []policyStatementModel {
+	out := make([]policyStatementModel, 0, len(statements))
+	for _, statement := range statements {
+		sid := types.StringNull()
+		if statement.Sid != "" {
+			sid = types.StringValue(statement.Sid)
+		}
+		out = append(out, policyStatementModel{
+			Effect:      statement.Effect,
+			Sid:         sid,
+			Action:      statement.Action,
+			NotAction:   statement.NotAction,
+			Resource:    statement.Resource,
+			NotResource: statement.NotResource,
+			Condition:   statement.Condition,
+		})
+	}
+	return out
 }
