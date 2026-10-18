@@ -1,3 +1,14 @@
+# Creates a release tag and publishes the release.
+#
+# The tag is GPG-signed with the key in the `GPG_PRIVATE_KEY` secret. GitHub only
+# shows the tag as "Verified" when the signature can be checked against a key
+# registered to the account that owns the tagger email, so the git identity is
+# taken from the imported key instead of the github-actions[bot] identity.
+#
+# Tags pushed with the default GITHUB_TOKEN do not trigger other workflows, so
+# the release workflow is invoked explicitly in the `release` job below rather
+# than relying on the `push: tags: v*` trigger in release.yml. That trigger is
+# still needed for signed tags pushed from a developer machine.
 name: Create Release Tag
 
 on:
@@ -72,11 +83,23 @@ jobs:
             exit 1
           fi
 
-      - name: Create and push tag
+      - name: Import GPG key
+        id: import_gpg
+        uses: crazy-max/ghaction-import-gpg@v7
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.PASSPHRASE }}
+          git_user_signingkey: true
+          git_tag_gpgsign: true
+
+      - name: Create and push signed tag
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "${{ env.VERSION }}" -m "Release ${{ env.VERSION }}"
+          # GitHub maps the tagger email to an account and looks the signature up
+          # in that account's registered keys, so use the signing key identity.
+          git config user.name "${{ steps.import_gpg.outputs.name }}"
+          git config user.email "${{ steps.import_gpg.outputs.email }}"
+          git tag -s "${{ env.VERSION }}" -m "Release ${{ env.VERSION }}"
+          git tag -v "${{ env.VERSION }}"
           git push origin "${{ env.VERSION }}"
 
       - name: Summary
@@ -85,5 +108,15 @@ jobs:
           echo "| Previous | **${{ steps.version.outputs.latest }}** |" >> $GITHUB_STEP_SUMMARY
           echo "| New Tag  | **${{ steps.version.outputs.new }}** |" >> $GITHUB_STEP_SUMMARY
           echo "| Commit   | **${{ github.sha }}** |" >> $GITHUB_STEP_SUMMARY
+          echo "| Signed by | **${{ steps.import_gpg.outputs.fingerprint }}** |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "The pushed tag triggers the Release workflow, which will build and publish the provider." >> $GITHUB_STEP_SUMMARY
+          echo "The release workflow is invoked next to build and publish the provider." >> $GITHUB_STEP_SUMMARY
+
+  release:
+    needs: create-tag
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release.yml
+    secrets: inherit
+    with:
+      tag: ${{ needs.create-tag.outputs.tag }}
