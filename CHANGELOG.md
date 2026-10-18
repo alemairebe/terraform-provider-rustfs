@@ -1,4 +1,4 @@
-## 0.4.1 (Unreleased)
+## 0.4.1 (2026-10-18)
 
 CHORES:
 - The acceptance environment no longer pins the notify and audit feature modules with
