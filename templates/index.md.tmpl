@@ -67,7 +67,7 @@ in detail, including the complete resource and data source tables.
   API v3 (`/rustfs/admin/v3`), both with SigV4-signed requests.
 - Terraform 1.0 or later is required (plugin protocol 6.0); the provider is also available for
   OpenTofu.
-- CI exercises the acceptance suite against RustFS `1.0.1` and `latest`; see
+- CI exercises the acceptance suite against RustFS `1.0.1`, `1.0.2`, `1.0.3` and `latest`; see
   [`.github/rustfs-versions.txt`](https://github.com/caberdo/terraform-provider-rustfs/blob/main/.github/rustfs-versions.txt).
 - Capabilities that depend on server-side sub-systems - KMS (`rustfs_kms_key`), LDAP
   (`rustfs_ldap_*`), storage tiers and ILM (`rustfs_tier`, `rustfs_rebalance`), audit
@@ -75,6 +75,22 @@ in detail, including the complete resource and data source tables.
   until the matching RustFS sub-system is enabled and configured.
 - Bucket encryption (`rustfs_bucket_encryption`) requires a KMS backend when using SSE-KMS;
   `AES256` (SSE-S3) works without one.
+
+### Supported RustFS versions
+
+| Capability | Provider types | `1.0.1` | `1.0.2` | `1.0.3` |
+|---|---|:--:|:--:|:--:|
+| S3 API and admin API v3 routes (buckets, IAM, quotas, replication, tiers, targets, config, health, info, ...) | every resource and data source except `rustfs_metrics` | ✅ | ✅ | ✅ |
+| Admin metrics stream - `GET /rustfs/admin/v3/metrics` | `rustfs_metrics` data source | ❌ | ❌ | ❌ |
+
+`1.0.3` is a console-only update: it ships the same server code as `1.0.2`, so its server
+capabilities are identical.
+
+RustFS registers admin routes before it implements them and answers `501 NotImplemented` instead of
+`404`, so a route in the server's route table is not proof of support - `DELETE
+/iceberg/v1/buckets/{warehouse}` is registered but unimplemented on these releases. For the routes
+it depends on, the provider treats `404`, `405` and `501` as a capability gap and reports the
+feature, the route and the server version instead of the raw error payload.
 
 ## Migrating from `weinmann-emt/rustfs`
 

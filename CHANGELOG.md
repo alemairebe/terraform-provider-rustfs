@@ -1,3 +1,23 @@
+## Unreleased
+
+FEATURES:
+- The provider docs publish the supported RustFS version matrix: the README and the provider index
+  list every capability against RustFS `1.0.1`, `1.0.2` and `1.0.3`, and explain why a route that
+  exists in the server's route table is not proof of support (RustFS answers `501 NotImplemented`
+  for routes it registered but has not implemented)
+- The provider now detects the server version (`GET /rustfs/admin/v3/healthinfo`) and maps `404`,
+  `405` and `501` on a version-gated route to an `UnsupportedFeatureError` naming the feature, the
+  route and the server version
+
+IMPROVEMENTS:
+- `rustfs_metrics` reports an unimplemented `GET /rustfs/admin/v3/metrics` route as an unsupported
+  capability naming the server version and the route, instead of surfacing the raw S3 XML payload.
+  RustFS 1.0.1 through 1.0.3 register the route but do not implement it, and `TestAccMetricsDataSource`
+  now skips only on that capability gap instead of on any error
+- CI runs the acceptance suite against RustFS `1.0.1`, `1.0.2`, `1.0.3` and `latest`, and
+  `TestAccServerVersion_supported` records the server version and metrics availability for every
+  server the suite runs against
+
 ## 0.4.1 (2026-10-18)
 
 CHORES:
