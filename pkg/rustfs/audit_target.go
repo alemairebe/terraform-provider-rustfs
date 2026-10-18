@@ -6,12 +6,6 @@ import (
 	"fmt"
 )
 
-// AuditTargetKeyValue is a single key/value pair in an audit target config.
-type AuditTargetKeyValue struct {
-	Key   string `json:"key"`
-	Value string `json:"value"`
-}
-
 // AuditTarget describes an audit-log target as returned by the admin list
 // endpoint. The admin list response does not echo the target configuration
 // (endpoint, auth token, ...) — only identity and runtime health metadata, so
@@ -32,7 +26,7 @@ type auditTargetListResponse struct {
 
 // auditTargetSetBody is the request body for PUT audit/target/{type}/{name}.
 type auditTargetSetBody struct {
-	KeyValues []AuditTargetKeyValue `json:"key_values"`
+	KeyValues []TargetKeyValue `json:"key_values"`
 }
 
 // ListAuditTargets lists all configured audit-log targets.
@@ -59,7 +53,7 @@ func (c *RustfsAdmin) ListAuditTargets() ([]AuditTarget, error) {
 // SetAuditTarget adds or edits an audit target, sending keyValues as the
 // target configuration. The server validates the keys against the target type
 // and automatically enables the target.
-func (c *RustfsAdmin) SetAuditTarget(targetType, targetName string, keyValues []AuditTargetKeyValue) error {
+func (c *RustfsAdmin) SetAuditTarget(targetType, targetName string, keyValues []TargetKeyValue) error {
 	body := auditTargetSetBody{KeyValues: keyValues}
 	//#nosec G117 — the marshaled body is the target's own configuration and
 	// may contain an auth token, which is expected to be transmitted to the

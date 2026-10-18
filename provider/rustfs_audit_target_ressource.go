@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -22,8 +23,9 @@ import (
 
 // Ensure the implementation satisfies the expected interfaces.
 var (
-	_ resource.Resource                = &auditTargetRessource{}
-	_ resource.ResourceWithImportState = &auditTargetRessource{}
+	_ resource.Resource                   = &auditTargetRessource{}
+	_ resource.ResourceWithImportState    = &auditTargetRessource{}
+	_ resource.ResourceWithValidateConfig = &auditTargetRessource{}
 )
 
 // NewAuditTargetRessource is a helper function to simplify the provider implementation.
@@ -39,6 +41,7 @@ type auditTargetRessource struct {
 type auditTargetRessourceModel struct {
 	TargetType    types.String `tfsdk:"target_type"`
 	TargetName    types.String `tfsdk:"target_name"`
+	Enable        types.Bool   `tfsdk:"enable"`
 	Endpoint      types.String `tfsdk:"endpoint"`
 	AuthToken     types.String `tfsdk:"auth_token"`
 	Comment       types.String `tfsdk:"comment"`
@@ -51,6 +54,32 @@ type auditTargetRessourceModel struct {
 	HealthState   types.String `tfsdk:"health_state"`
 	HealthReason  types.String `tfsdk:"health_reason"`
 	Status        types.String `tfsdk:"status"`
+
+	Webhook  *targetWebhookConfigModel  `tfsdk:"webhook_config"`
+	Amqp     *targetAmqpConfigModel     `tfsdk:"amqp_config"`
+	Kafka    *targetKafkaConfigModel    `tfsdk:"kafka_config"`
+	Mqtt     *targetMqttConfigModel     `tfsdk:"mqtt_config"`
+	Nats     *targetNatsConfigModel     `tfsdk:"nats_config"`
+	Postgres *targetPostgresConfigModel `tfsdk:"postgres_config"`
+	Mysql    *targetMysqlConfigModel    `tfsdk:"mysql_config"`
+	Redis    *targetRedisConfigModel    `tfsdk:"redis_config"`
+	Pulsar   *targetPulsarConfigModel   `tfsdk:"pulsar_config"`
+}
+
+// configBlocks assembles the per-type configuration blocks held on the model
+// into the shared targetConfigBlocks container.
+func (m *auditTargetRessourceModel) configBlocks() targetConfigBlocks {
+	return targetConfigBlocks{
+		Webhook:  m.Webhook,
+		Amqp:     m.Amqp,
+		Kafka:    m.Kafka,
+		Mqtt:     m.Mqtt,
+		Nats:     m.Nats,
+		Postgres: m.Postgres,
+		Mysql:    m.Mysql,
+		Redis:    m.Redis,
+		Pulsar:   m.Pulsar,
+	}
 }
 
 // Metadata returns the resource type name.
@@ -60,87 +89,99 @@ func (r *auditTargetRessource) Metadata(_ context.Context, req resource.Metadata
 
 // Schema defines the schema for the resource.
 func (r *auditTargetRessource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
-	resp.Schema = schema.Schema{
-		Description:         "Manage RustFS audit-log webhook/HTTP targets",
-		MarkdownDescription: "Manage RustFS audit-log webhook/HTTP targets",
-		Attributes: map[string]schema.Attribute{
-			"target_type": schema.StringAttribute{
-				Optional:    true,
-				Computed:    true,
-				Default:     stringdefault.StaticString("audit_webhook"),
-				Description: "Audit target subsystem. Defaults to audit_webhook.",
-				Validators: []validator.String{stringvalidator.OneOf(
-					"audit_webhook",
-					"audit_kafka",
-					"audit_amqp",
-					"audit_mqtt",
-					"audit_mysql",
-					"audit_nats",
-					"audit_postgres",
-					"audit_pulsar",
-					"audit_redis",
-				)},
-			},
-			"target_name": schema.StringAttribute{
-				Required:      true,
-				Description:   "Name of the audit target. Changing this forces recreation.",
-				PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()},
-			},
-			"endpoint": schema.StringAttribute{
-				Optional:    true,
-				Description: "Endpoint URL the audit target posts to (webhook).",
-			},
-			"auth_token": schema.StringAttribute{
-				Optional:    true,
-				Sensitive:   true,
-				Description: "Optional bearer token for the audit target (webhook). Not refreshed from the server on read.",
-			},
-			"comment": schema.StringAttribute{
-				Optional:    true,
-				Description: "Optional comment describing the audit target.",
-			},
-			"queue_limit": schema.Int64Attribute{
-				Optional:    true,
-				Description: "Optional in-memory queue limit for the audit target.",
-			},
-			"queue_dir": schema.StringAttribute{
-				Optional:    true,
-				Description: "Optional absolute path of the on-disk queue directory for the audit target.",
-			},
-			"client_cert": schema.StringAttribute{
-				Optional:    true,
-				Sensitive:   true,
-				Description: "Optional client certificate for mTLS to the audit target.",
-			},
-			"client_key": schema.StringAttribute{
-				Optional:    true,
-				Sensitive:   true,
-				Description: "Optional client private key for mTLS to the audit target.",
-			},
-			"client_ca": schema.StringAttribute{
-				Optional:    true,
-				Sensitive:   true,
-				Description: "Optional CA certificate used to verify the audit target.",
-			},
-			"skip_tls_verify": schema.BoolAttribute{
-				Optional:    true,
-				Computed:    true,
-				Default:     booldefault.StaticBool(false),
-				Description: "Skip TLS certificate verification for the audit target.",
-			},
-			"health_state": schema.StringAttribute{
-				Computed:    true,
-				Description: "Runtime health state of the audit target (offline/online/...).",
-			},
-			"health_reason": schema.StringAttribute{
-				Computed:    true,
-				Description: "Runtime health reason for the audit target.",
-			},
-			"status": schema.StringAttribute{
-				Computed:    true,
-				Description: "Runtime status of the audit target.",
-			},
+	attributes := map[string]schema.Attribute{
+		"target_type": schema.StringAttribute{
+			Optional:    true,
+			Computed:    true,
+			Default:     stringdefault.StaticString("audit_webhook"),
+			Description: "Audit target subsystem. Defaults to audit_webhook.",
+			Validators: []validator.String{stringvalidator.OneOf(
+				"audit_webhook",
+				"audit_kafka",
+				"audit_amqp",
+				"audit_mqtt",
+				"audit_mysql",
+				"audit_nats",
+				"audit_postgres",
+				"audit_pulsar",
+				"audit_redis",
+			)},
 		},
+		"target_name": schema.StringAttribute{
+			Required:      true,
+			Description:   "Name of the audit target. Changing this forces recreation.",
+			PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()},
+		},
+		"enable": schema.BoolAttribute{
+			Optional:    true,
+			Computed:    true,
+			Default:     booldefault.StaticBool(true),
+			Description: "Whether the audit target is enabled.",
+		},
+		"endpoint": schema.StringAttribute{
+			Optional:    true,
+			Description: "Endpoint URL the audit target posts to (webhook).",
+		},
+		"auth_token": schema.StringAttribute{
+			Optional:    true,
+			Sensitive:   true,
+			Description: "Optional bearer token for the audit target (webhook). Not refreshed from the server on read.",
+		},
+		"comment": schema.StringAttribute{
+			Optional:    true,
+			Description: "Optional comment describing the audit target.",
+		},
+		"queue_limit": schema.Int64Attribute{
+			Optional:    true,
+			Description: "Optional in-memory queue limit for the audit target.",
+		},
+		"queue_dir": schema.StringAttribute{
+			Optional:    true,
+			Description: "Optional absolute path of the on-disk queue directory for the audit target.",
+		},
+		"client_cert": schema.StringAttribute{
+			Optional:    true,
+			Sensitive:   true,
+			Description: "Optional client certificate for mTLS to the audit target.",
+		},
+		"client_key": schema.StringAttribute{
+			Optional:    true,
+			Sensitive:   true,
+			Description: "Optional client private key for mTLS to the audit target.",
+		},
+		"client_ca": schema.StringAttribute{
+			Optional:    true,
+			Sensitive:   true,
+			Description: "Optional CA certificate used to verify the audit target.",
+		},
+		"skip_tls_verify": schema.BoolAttribute{
+			Optional:    true,
+			Computed:    true,
+			Default:     booldefault.StaticBool(false),
+			Description: "Skip TLS certificate verification for the audit target.",
+		},
+		"health_state": schema.StringAttribute{
+			Computed:    true,
+			Description: "Runtime health state of the audit target (offline/online/...).",
+		},
+		"health_reason": schema.StringAttribute{
+			Computed:    true,
+			Description: "Runtime health reason for the audit target.",
+		},
+		"status": schema.StringAttribute{
+			Computed:    true,
+			Description: "Runtime status of the audit target.",
+		},
+	}
+
+	for name, attr := range targetConfigBlockSchema() {
+		attributes[name] = attr
+	}
+
+	resp.Schema = schema.Schema{
+		Description:         "Manage RustFS audit-log targets (webhook, amqp, kafka, mqtt, nats, postgres, mysql, redis, pulsar)",
+		MarkdownDescription: "Manage RustFS audit-log targets (webhook, amqp, kafka, mqtt, nats, postgres, mysql, redis, pulsar)",
+		Attributes:          attributes,
 	}
 }
 
@@ -159,35 +200,117 @@ func (r *auditTargetRessource) Configure(_ context.Context, req resource.Configu
 	r.client = client
 }
 
-// auditTargetKeyValues builds the key/value config body from the resource model,
-// including only the fields the user has actually set.
-func (r *auditTargetRessource) auditTargetKeyValues(plan *auditTargetRessourceModel) []rustfs.AuditTargetKeyValue {
-	var kvs []rustfs.AuditTargetKeyValue
-	add := func(key string, value string) {
-		if value != "" {
-			kvs = append(kvs, rustfs.AuditTargetKeyValue{Key: key, Value: value})
-		}
+// ValidateConfig enforces the two-path invariant the schema alone cannot
+// express: when a typed block is set it must be the single matching block and
+// the flat webhook attributes must be absent; when no block is set the target
+// type must be audit_webhook (the legacy flat path).
+func (r *auditTargetRessource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
+	var model auditTargetRessourceModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &model)...)
+	if resp.Diagnostics.HasError() {
+		return
 	}
-	add("endpoint", plan.Endpoint.ValueString())
-	add("auth_token", plan.AuthToken.ValueString())
-	add("comment", plan.Comment.ValueString())
-	add("queue_dir", plan.QueueDir.ValueString())
-	add("client_cert", plan.ClientCert.ValueString())
-	add("client_key", plan.ClientKey.ValueString())
-	add("client_ca", plan.ClientCA.ValueString())
-	if !plan.QueueLimit.IsNull() && !plan.QueueLimit.IsUnknown() {
-		kvs = append(kvs, rustfs.AuditTargetKeyValue{Key: "queue_limit", Value: strconv.FormatInt(plan.QueueLimit.ValueInt64(), 10)})
+
+	if err := model.validateConfig(); err != nil {
+		resp.Diagnostics.AddError(
+			"Invalid audit target configuration",
+			err.Error(),
+		)
 	}
-	if !plan.SkipTLSVerify.IsNull() && !plan.SkipTLSVerify.IsUnknown() {
-		kvs = append(kvs, rustfs.AuditTargetKeyValue{Key: "skip_tls_verify", Value: strconv.FormatBool(plan.SkipTLSVerify.ValueBool())})
-	}
-	return kvs
 }
 
-// serviceForType maps an audit target_type to the service reported by the list
-// endpoint (audit_webhook -> webhook, audit_kafka -> kafka, ...).
-func serviceForType(targetType string) string {
-	return strings.TrimPrefix(targetType, "audit_")
+// validateConfig enforces the audit target's two-path configuration rules and
+// returns a diagnostic-ready error when they are violated.
+func (m *auditTargetRessourceModel) validateConfig() error {
+	// target_type is Optional+Computed with a default of "audit_webhook". An
+	// unknown value cannot be resolved during config validation, so skip the
+	// two-path comparison rather than normalizing "" to "audit_webhook" and
+	// falsely rejecting a matching block.
+	if m.TargetType.IsUnknown() {
+		return nil
+	}
+
+	// target_type is Optional+Computed with a default of "audit_webhook", and
+	// ValidateConfig runs before defaults are applied, so an omitted target_type
+	// arrives as null/empty and must be normalized to the default before the
+	// two-path comparison.
+	targetType := m.TargetType.ValueString()
+	if targetType == "" {
+		targetType = "audit_webhook"
+	}
+
+	blocks := m.configBlocks()
+	if len(blocks.setBlocks()) == 0 {
+		// Legacy flat path: only audit_webhook may omit a typed block.
+		if targetType != "audit_webhook" {
+			return fmt.Errorf("target type %q requires the %s block", targetType, targetConfigBlockName(targetType))
+		}
+		return nil
+	}
+
+	// Typed path: exactly one block, matching target_type, and no flat attrs.
+	if err := blocks.validate(targetType); err != nil {
+		return err
+	}
+	if flatWebhookAttributesSet(m) {
+		return errors.New("the flat webhook attributes cannot be combined with a configuration block")
+	}
+	return nil
+}
+
+// flatWebhookAttributesSet reports whether any of the legacy flat webhook
+// attributes are set on the model.
+func flatWebhookAttributesSet(m *auditTargetRessourceModel) bool {
+	for _, v := range []types.String{m.Endpoint, m.AuthToken, m.QueueDir, m.ClientCert, m.ClientKey, m.ClientCA} {
+		if !v.IsNull() && !v.IsUnknown() {
+			return true
+		}
+	}
+	if !m.QueueLimit.IsNull() && !m.QueueLimit.IsUnknown() {
+		return true
+	}
+	if !m.SkipTLSVerify.IsNull() && !m.SkipTLSVerify.IsUnknown() {
+		return true
+	}
+	return false
+}
+
+// auditTargetKeyValues builds the key/value config body from the resource model.
+//
+// When no typed block is set it produces the legacy flat webhook output, with
+// the trailing enable pair appended last. When a block is set it delegates to
+// the shared per-type mapping.
+func (r *auditTargetRessource) auditTargetKeyValues(model *auditTargetRessourceModel) ([]rustfs.TargetKeyValue, error) {
+	if len(model.configBlocks().setBlocks()) > 0 {
+		return model.configBlocks().keyValues(model.TargetType.ValueString(), model.Enable.ValueBool(), model.Comment.ValueString())
+	}
+
+	// Legacy path: the previous flat ordering, unchanged, plus the enable pair.
+	var kvs []rustfs.TargetKeyValue
+	add := func(key string, value string) {
+		if value != "" {
+			kvs = append(kvs, rustfs.TargetKeyValue{Key: key, Value: value})
+		}
+	}
+	add("endpoint", model.Endpoint.ValueString())
+	add("auth_token", model.AuthToken.ValueString())
+	add("comment", model.Comment.ValueString())
+	add("queue_dir", model.QueueDir.ValueString())
+	add("client_cert", model.ClientCert.ValueString())
+	add("client_key", model.ClientKey.ValueString())
+	add("client_ca", model.ClientCA.ValueString())
+	if !model.QueueLimit.IsNull() && !model.QueueLimit.IsUnknown() {
+		kvs = append(kvs, rustfs.TargetKeyValue{Key: "queue_limit", Value: strconv.FormatInt(model.QueueLimit.ValueInt64(), 10)})
+	}
+	if !model.SkipTLSVerify.IsNull() && !model.SkipTLSVerify.IsUnknown() {
+		kvs = append(kvs, rustfs.TargetKeyValue{Key: "skip_tls_verify", Value: strconv.FormatBool(model.SkipTLSVerify.ValueBool())})
+	}
+	enable := "off"
+	if model.Enable.ValueBool() {
+		enable = "on"
+	}
+	kvs = append(kvs, rustfs.TargetKeyValue{Key: "enable", Value: enable})
+	return kvs, nil
 }
 
 // Create adds the audit target and sets the initial Terraform state.
@@ -198,10 +321,19 @@ func (r *auditTargetRessource) Create(ctx context.Context, req resource.CreateRe
 		return
 	}
 
+	kvs, err := r.auditTargetKeyValues(&plan)
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Invalid audit target configuration",
+			err.Error(),
+		)
+		return
+	}
+
 	if err := r.client.RustClient.SetAuditTarget(
 		plan.TargetType.ValueString(),
 		plan.TargetName.ValueString(),
-		r.auditTargetKeyValues(&plan),
+		kvs,
 	); err != nil {
 		resp.Diagnostics.AddError(
 			"Error creating audit target",
@@ -229,7 +361,7 @@ func (r *auditTargetRessource) refreshHealth(model *auditTargetRessourceModel) e
 	}
 
 	key := model.TargetName.ValueString()
-	service := serviceForType(model.TargetType.ValueString())
+	service := targetServiceName(model.TargetType.ValueString())
 	for i := range targets {
 		t := &targets[i]
 		if t.AccountID == key && (service == "" || t.Service == service) {
@@ -263,7 +395,7 @@ func (r *auditTargetRessource) Read(ctx context.Context, req resource.ReadReques
 	}
 
 	key := state.TargetName.ValueString()
-	service := serviceForType(state.TargetType.ValueString())
+	service := targetServiceName(state.TargetType.ValueString())
 	var found *rustfs.AuditTarget
 	for i := range targets {
 		t := &targets[i]
@@ -293,10 +425,19 @@ func (r *auditTargetRessource) Update(ctx context.Context, req resource.UpdateRe
 		return
 	}
 
+	kvs, err := r.auditTargetKeyValues(&plan)
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Invalid audit target configuration",
+			err.Error(),
+		)
+		return
+	}
+
 	if err := r.client.RustClient.SetAuditTarget(
 		plan.TargetType.ValueString(),
 		plan.TargetName.ValueString(),
-		r.auditTargetKeyValues(&plan),
+		kvs,
 	); err != nil {
 		resp.Diagnostics.AddError(
 			"Error updating audit target",

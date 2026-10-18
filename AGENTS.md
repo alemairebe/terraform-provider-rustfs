@@ -40,7 +40,8 @@ Registry address: `registry.terraform.io/caberdo/rustfs`.
 | `rustfs_kms_key` | `provider/rustfs_kms_key_ressource.go` | KMS master keys |
 | `rustfs_config` | `provider/rustfs_config_ressource.go` | Server sub-system configuration (config-kv) |
 | `rustfs_module_switch` | `provider/rustfs_module_switch_ressource.go` | Feature module switches |
-| `rustfs_audit_target` | `provider/rustfs_audit_target_ressource.go` | Audit-log webhook/HTTP targets |
+| `rustfs_audit_target` | `provider/rustfs_audit_target_ressource.go` | Audit-log targets (webhook, kafka, amqp, mqtt, mysql, nats, postgres, pulsar, redis) |
+| `rustfs_notification_target` | `provider/rustfs_notification_target_resource.go` | Event-notification targets (webhook, amqp, kafka, mqtt, nats, postgres, mysql, redis, pulsar) |
 | `rustfs_iam_backup_import` | `provider/rustfs_iam_backup_import_resource.go` | IAM import from backup |
 | `rustfs_bucket_metadata_backup_import` | `provider/rustfs_bucket_metadata_backup_import_resource.go` | Bucket metadata import from backup |
 
