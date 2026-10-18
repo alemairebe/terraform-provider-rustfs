@@ -1,5 +1,6 @@
-# This GitHub action publishes assets for a release when a tag is created, or
-# when it is invoked through workflow_call with an explicit tag.
+# This GitHub action publishes assets for a release when a tag is created, when
+# it is invoked through workflow_call with an explicit tag, or when it is
+# dispatched manually with the tag to (re)publish.
 #
 # It uses an action (crazy-max/ghaction-import-gpg) that assumes you set your
 # private key in the `GPG_PRIVATE_KEY` secret and passphrase in the `PASSPHRASE`
@@ -16,6 +17,12 @@ on:
     inputs:
       tag:
         description: "Tag to release"
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to publish (or republish), e.g. v0.4.0"
         required: true
         type: string
   push:
