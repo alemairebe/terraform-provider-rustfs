@@ -1,0 +1,62 @@
+# Weekly fuzz smoke test of the parsers that consume untrusted input: the
+# canned-policy document decoder, the admin/S3 error-body parser, the config-kv
+# text parser and the target *_config mapper.
+#
+# `go test ./...` already runs every target's seed corpus (as a unit test), so
+# this workflow only adds the mutating part: one job per target, fuzzing for a
+# minute each. That is deliberately short — the goal is to keep the scorecard
+# Fuzzing check honest and to catch regressions early, not to run a campaign.
+# Longer runs belong on a developer machine: `make fuzz FUZZTIME=10m`, or
+# `go test -fuzz FuzzPolicyDocument -fuzztime 10m ./pkg/rustfs`.
+#
+# Caveat: `-fuzz` accepts exactly one target, which is why the targets are
+# enumerated in the matrix instead of passed as a single package-wide pattern.
+#
+# On failure the fuzzer writes the crashing input to testdata/fuzz/<target>/,
+# and the artifact step preserves it so it can be committed as a regression
+# seed (the next `go test ./...` then replays it).
+name: Fuzz
+
+on:
+  schedule:
+    # Mondays, 03:17 UTC (the weekly Scorecard assessment follows at 04:23).
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: Fuzz ${{ matrix.target.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - { name: FuzzPolicyDocument, package: ./pkg/rustfs }
+          - { name: FuzzAdminErrorBody, package: ./pkg/rustfs }
+          - { name: FuzzConfigKV, package: ./pkg/rustfs }
+          - { name: FuzzTargetConfig, package: ./provider }
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: "go.mod"
+          cache: true
+
+      - name: Fuzz ${{ matrix.target.name }}
+        run: go test -run '^$' -fuzz '^${{ matrix.target.name }}$' -fuzztime 60s ${{ matrix.target.package }}
+
+      - name: Upload the failing corpus
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-corpus-${{ matrix.target.name }}
+          path: "**/testdata/fuzz/${{ matrix.target.name }}/"
+          if-no-files-found: ignore
+          retention-days: 14

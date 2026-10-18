@@ -1,0 +1,7 @@
+go test fuzz v1
+string("webhook")
+uint8(1)
+string("https://example.com/hook")
+int64(1000)
+bool(true)
+string("primary")

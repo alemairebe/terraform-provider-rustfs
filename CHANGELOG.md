@@ -18,6 +18,12 @@ IMPROVEMENTS:
   `TestAccServerVersion_supported` records the server version and metrics availability for every
   server the suite runs against
 
+CHORES:
+- The parsers that consume untrusted input are fuzzed: `FuzzPolicyDocument`, `FuzzAdminErrorBody`
+  and `FuzzConfigKV` in `pkg/rustfs` and `FuzzTargetConfig` in `provider`, backed by a committed
+  seed corpus in `testdata/fuzz/` and a weekly `Fuzz` workflow (one minute per target). `make fuzz`
+  runs the same targets locally
+
 ## 0.4.1 (2026-10-18)
 
 CHORES:

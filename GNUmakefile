@@ -3,6 +3,9 @@ default: build
 BINARY_NAME=terraform-provider-rustfs
 VERSION=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 
+# Duration of each target's run in `make fuzz`; the weekly Fuzz workflow uses 60s.
+FUZZTIME ?= 30s
+
 build:
 	go build -o bin/$(BINARY_NAME) -ldflags "-X main.version=$(VERSION)" .
 
@@ -16,6 +19,16 @@ coverage:
 
 coverage-html: coverage
 	go tool cover -html=coverage.out
+
+# Short fuzz run of every target. `-fuzz` takes exactly one target, so each is
+# listed explicitly; the weekly Fuzz workflow runs the same commands (60s each).
+# `go test ./...` replays the committed seed corpus, so no target needs fuzzing
+# to stay green — use this for real campaigns: `make fuzz FUZZTIME=10m`.
+fuzz:
+	go test -run '^$$' -fuzz '^FuzzPolicyDocument$$' -fuzztime $(FUZZTIME) ./pkg/rustfs
+	go test -run '^$$' -fuzz '^FuzzAdminErrorBody$$' -fuzztime $(FUZZTIME) ./pkg/rustfs
+	go test -run '^$$' -fuzz '^FuzzConfigKV$$' -fuzztime $(FUZZTIME) ./pkg/rustfs
+	go test -run '^$$' -fuzz '^FuzzTargetConfig$$' -fuzztime $(FUZZTIME) ./provider
 
 testacc:
 	TF_ACC=1 go test -v -cover ./...
@@ -49,4 +62,4 @@ validate-examples:
 generate:
 	go generate ./...
 
-.PHONY: build test coverage coverage-html testacc lint lint-fix fmt vet install testacc-docker testacc-live validate-examples generate
+.PHONY: build test coverage coverage-html testacc lint lint-fix fmt vet install testacc-docker testacc-live validate-examples generate fuzz

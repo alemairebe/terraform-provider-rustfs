@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"Statement\":[{\"Effect\":\"Allow\",\"Action\":[\"s3:\\u00e9\"],\"Resource\":[\"arn:aws:s3:::b\\u00fccket/*\"]}]}")
