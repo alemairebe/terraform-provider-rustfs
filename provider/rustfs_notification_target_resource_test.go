@@ -6,11 +6,13 @@ package provider
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/caberdo/terraform-provider-rustfs/pkg/rustfs"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	frameworkresource "github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/defaults"
@@ -334,4 +336,183 @@ func testAccCheckNotificationTargetDestroy(s *terraform.State) error {
 		}
 	}
 	return nil
+}
+
+// TestNotificationTargetResourceLifecyclePaths covers the paths the acceptance
+// suite cannot reach with a live server: a target that disappeared behind
+// Terraform's back, a destroy that arrives after the target is already gone,
+// and every failing API call in Create, Read and Delete.
+//
+// The reset endpoint is idempotent: the RustFS handler for
+// DELETE target/{type}/{name}/reset calls remove_target_config, which only
+// rewrites the server config when the entry exists and otherwise returns
+// success, so a reset of an already-removed target is 200 OK and must not
+// report a diagnostic. The live server at 127.0.0.1:9301 cannot show that path
+// because its notify module is disabled and the handler rejects every target
+// mutation with 400 InvalidRequest before it looks the target up (probed
+// 2026-10-19: "notify module is disabled; enable the notify module first ...").
+func TestNotificationTargetResourceLifecyclePaths(t *testing.T) {
+	t.Parallel()
+
+	readCases := []struct {
+		name        string
+		routes      []requestRoute
+		wantRemoved bool
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			// The list endpoint answers 200 with an empty
+			// notification_endpoints array for a target that is gone.
+			name: "target absent from the list is removed from state",
+			routes: []requestRoute{{
+				method: http.MethodGet, pathContains: "target/list",
+				status: http.StatusOK, body: `{"notify_enabled":true,"notification_endpoints":[]}`,
+			}},
+			wantRemoved: true,
+		},
+		{
+			name: "listed target keeps state and mirrors its health",
+			routes: []requestRoute{{
+				method: http.MethodGet, pathContains: "target/list", status: http.StatusOK,
+				body: `{"notify_enabled":true,"notification_endpoints":[{"account_id":"tf-test","service":"webhook","status":"online","health_state":"online","health_reason":"reachable"}]}`,
+			}},
+		},
+		{
+			name:        "server error keeps state and names the failing call",
+			routes:      []requestRoute{{status: http.StatusForbidden, body: s3ErrorXML("AccessDenied", "nope")}},
+			wantSummary: "Error listing notification targets",
+			wantDetail:  "Could not list notification targets, unexpected error: ",
+		},
+	}
+
+	for _, tc := range readCases {
+		t.Run("read: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewNotificationTargetResource(), client)
+
+			resp := h.read(&notificationTargetResourceModel{
+				TargetType: types.StringValue("notify_webhook"),
+				TargetName: types.StringValue("tf-test"),
+			})
+
+			if tc.wantRemoved {
+				requireNoDiagnostics(t, resp.Diagnostics)
+				assertStateRemoved(t, resp.State)
+				return
+			}
+			if tc.wantSummary != "" {
+				assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+				assertDiagnosticDetail(t, resp.Diagnostics, "AccessDenied")
+				assertStatePresent(t, resp.State)
+				return
+			}
+			requireNoDiagnostics(t, resp.Diagnostics)
+			assertStatePresent(t, resp.State)
+			assertStateString(t, resp.State, path.Root("health_state"), "online")
+			assertStateString(t, resp.State, path.Root("status"), "online")
+		})
+	}
+
+	deleteCases := []struct {
+		name        string
+		routes      []requestRoute
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			// A reset of a target that is already gone is 200 OK, so a
+			// repeated destroy stays a no-op instead of failing the apply.
+			name:   "already removed target is not an error",
+			routes: []requestRoute{{method: http.MethodDelete, pathContains: "/reset", status: http.StatusOK}},
+		},
+		{
+			// A disabled notify module is a real server error, not a missing
+			// target, and must reach the user.
+			name: "real server error is reported",
+			routes: []requestRoute{{
+				method: http.MethodDelete, pathContains: "/reset", status: http.StatusBadRequest,
+				body: s3ErrorXML("InvalidRequest", "notify module is disabled; enable the notify module first"),
+			}},
+			wantSummary: "Error resetting notification target",
+			wantDetail:  "Could not reset notification target, unexpected error: ",
+		},
+	}
+
+	for _, tc := range deleteCases {
+		t.Run("delete: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewNotificationTargetResource(), client)
+
+			resp := h.delete(&notificationTargetResourceModel{
+				TargetType: types.StringValue("notify_webhook"),
+				TargetName: types.StringValue("tf-test"),
+			})
+
+			if tc.wantSummary == "" {
+				requireNoDiagnostics(t, resp.Diagnostics)
+				return
+			}
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+			assertDiagnosticDetail(t, resp.Diagnostics, "notify module is disabled")
+		})
+	}
+
+	createCases := []struct {
+		name        string
+		routes      []requestRoute
+		plan        *notificationTargetResourceModel
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			// The schema alone cannot express "exactly one matching block", so
+			// a plan with no block at all is refused before any API call.
+			name: "missing configuration block writes no state",
+			plan: &notificationTargetResourceModel{
+				TargetType: types.StringValue("notify_webhook"),
+				TargetName: types.StringValue("tf-test"),
+			},
+			wantSummary: "Invalid notification target configuration",
+			wantDetail:  "exactly one target configuration block may be set",
+		},
+		{
+			name: "invalid key/value set is rejected by the server",
+			routes: []requestRoute{{
+				method: http.MethodPut, pathContains: "target/notify_webhook", status: http.StatusBadRequest,
+				body: s3ErrorXML("InvalidArgument", "invalid key values: endpoint is required"),
+			}},
+			plan: &notificationTargetResourceModel{
+				TargetType: types.StringValue("notify_webhook"),
+				TargetName: types.StringValue("tf-test"),
+				Webhook: &targetWebhookConfigModel{
+					Endpoint: types.StringValue("https://hooks.example.com/webhook/tf-test"),
+				},
+			},
+			wantSummary: "Error creating notification target",
+			wantDetail:  "invalid key values: endpoint is required",
+		},
+	}
+
+	for _, tc := range createCases {
+		t.Run("create: "+tc.name, func(t *testing.T) {
+			client, rec := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewNotificationTargetResource(), client)
+
+			resp := h.create(tc.plan)
+
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+			h.assertNoPartialState(resp, tc.plan)
+			// A failed create must not go on to list and refresh health.
+			rec.assertNoRequest(t, "target/list")
+		})
+	}
+
+	t.Run("configure: rejects foreign provider data", func(t *testing.T) {
+		h := newCRUDHarness(t, NewNotificationTargetResource(), cannedClient(t, http.StatusOK, ""))
+
+		resp := h.configure("not-a-client")
+
+		assertErrorDiagnostic(t, resp.Diagnostics, "Unexpected Resource Configure Type", "Expected *AllClient, got: string.")
+	})
 }

@@ -213,7 +213,11 @@ func (r *BucketEncryptionResource) Read(ctx context.Context, req resource.ReadRe
 	}
 
 	if err := r.refreshEncryption(ctx, &state); err != nil {
-		if isBucketSubresourceAbsent(err, "ServerSideEncryptionConfigurationNotFoundError") {
+		// AWS S3 reports the missing configuration as
+		// ServerSideEncryptionConfigurationNotFoundError; MinIO-derived servers
+		// (RustFS) also use the NoSuchEncryptionConfiguration code. Either means
+		// the configuration is gone, so the resource is removed from state.
+		if isBucketSubresourceAbsent(err, "ServerSideEncryptionConfigurationNotFoundError", "NoSuchEncryptionConfiguration") {
 			resp.State.RemoveResource(ctx)
 			return
 		}
@@ -271,6 +275,14 @@ func (r *BucketEncryptionResource) Delete(ctx context.Context, req resource.Dele
 		Bucket: aws.String(data.Bucket.ValueString()),
 	})
 	if err != nil {
+		// Deleting the configuration of a bucket that no longer has one (or no
+		// longer exists) is already the desired end state. A live RustFS
+		// answers 404 NoSuchBucket for a missing bucket; S3 answers
+		// ServerSideEncryptionConfigurationNotFoundError when only the
+		// configuration is gone.
+		if isBucketSubresourceAbsent(err, "ServerSideEncryptionConfigurationNotFoundError", "NoSuchEncryptionConfiguration") {
+			return
+		}
 		resp.Diagnostics.AddError(
 			"Error removing bucket encryption",
 			"Could not remove bucket encryption: "+err.Error(),

@@ -6,6 +6,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -101,6 +102,193 @@ func TestAccBucketPublicAccessBlock_basic(t *testing.T) {
 				ImportStateId:     name,
 			},
 		},
+	})
+}
+
+// publicAccessBlockModel returns the state/plan value every case uses.
+func publicAccessBlockModel() *bucketPublicAccessBlockModel {
+	return &bucketPublicAccessBlockModel{
+		Bucket:                types.StringValue("tf-test"),
+		BlockPublicAcls:       types.BoolValue(true),
+		IgnorePublicAcls:      types.BoolValue(false),
+		BlockPublicPolicy:     types.BoolValue(true),
+		RestrictPublicBuckets: types.BoolValue(false),
+	}
+}
+
+// TestBucketPublicAccessBlockRessourceLifecyclePaths covers the paths the
+// acceptance suite cannot reach with a live server: a public access block that
+// disappeared behind Terraform's back, a delete that arrives after the
+// configuration is already gone, and every failing API call in Create, Read and
+// Delete.
+func TestBucketPublicAccessBlockRessourceLifecyclePaths(t *testing.T) {
+	t.Parallel()
+
+	readCases := []struct {
+		name        string
+		routes      []requestRoute
+		wantRemoved bool
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			// GetPublicAccessBlock answers NoSuchPublicAccessBlockConfiguration
+			// when the bucket has no explicit configuration.
+			name:        "unset public access block is removed from state",
+			routes:      []requestRoute{{status: http.StatusNotFound, body: s3ErrorXML("NoSuchPublicAccessBlockConfiguration", "The public access block configuration was not found")}},
+			wantRemoved: true,
+		},
+		{
+			name:        "missing bucket is removed from state",
+			routes:      []requestRoute{{status: http.StatusNotFound, body: s3ErrorXML("NoSuchBucket", "The specified bucket does not exist")}},
+			wantRemoved: true,
+		},
+		{
+			name:        "server error keeps state and names the failing call",
+			routes:      []requestRoute{{status: http.StatusForbidden, body: s3ErrorXML("AccessDenied", "Access Denied")}},
+			wantSummary: "Error reading bucket public access block",
+			wantDetail:  "Could not read public access block: ",
+		},
+	}
+
+	for _, tc := range readCases {
+		t.Run("read: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewBucketPublicAccessBlockRessource(), client)
+
+			resp := h.read(publicAccessBlockModel())
+
+			if tc.wantRemoved {
+				requireNoDiagnostics(t, resp.Diagnostics)
+				assertStateRemoved(t, resp.State)
+				return
+			}
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+			assertStatePresent(t, resp.State)
+		})
+	}
+
+	deleteCases := []struct {
+		name        string
+		routes      []requestRoute
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			name:   "already deleted public access block is not an error",
+			routes: []requestRoute{{status: http.StatusNotFound, body: s3ErrorXML("NoSuchPublicAccessBlockConfiguration", "The public access block configuration was not found")}},
+		},
+		{
+			name:   "already deleted bucket is not an error",
+			routes: []requestRoute{{status: http.StatusNotFound, body: s3ErrorXML("NoSuchBucket", "The specified bucket does not exist")}},
+		},
+		{
+			name:        "real server error is reported",
+			routes:      []requestRoute{{status: http.StatusForbidden, body: s3ErrorXML("AccessDenied", "Access Denied")}},
+			wantSummary: "Error deleting bucket public access block",
+			wantDetail:  "Could not delete public access block: ",
+		},
+	}
+
+	for _, tc := range deleteCases {
+		t.Run("delete: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewBucketPublicAccessBlockRessource(), client)
+
+			resp := h.delete(publicAccessBlockModel())
+
+			if tc.wantSummary == "" {
+				requireNoDiagnostics(t, resp.Diagnostics)
+				return
+			}
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+		})
+	}
+
+	createCases := []struct {
+		name        string
+		routes      []requestRoute
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			name:        "rejected configuration reports the server error and writes no state",
+			routes:      []requestRoute{{method: http.MethodPut, status: http.StatusBadRequest, body: s3ErrorXML("InvalidRequest", "invalid public access block configuration")}},
+			wantSummary: "Error creating bucket public access block",
+			wantDetail:  "invalid public access block configuration",
+		},
+		{
+			name:        "missing bucket is reported",
+			routes:      []requestRoute{{method: http.MethodPut, status: http.StatusNotFound, body: s3ErrorXML("NoSuchBucket", "The specified bucket does not exist")}},
+			wantSummary: "Error creating bucket public access block",
+			wantDetail:  "NoSuchBucket",
+		},
+		{
+			// Create writes first and then reads the effective configuration
+			// back; a failing read-back must not leave half-written state.
+			name: "failed read-back after create is reported",
+			routes: []requestRoute{
+				{method: http.MethodPut, status: http.StatusOK},
+				{method: http.MethodGet, status: http.StatusForbidden, body: s3ErrorXML("AccessDenied", "Access Denied")},
+			},
+			wantSummary: "Error reading bucket public access block after create",
+			wantDetail:  "Could not read public access block: ",
+		},
+	}
+
+	for _, tc := range createCases {
+		t.Run("create: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewBucketPublicAccessBlockRessource(), client)
+			plan := publicAccessBlockModel()
+
+			resp := h.create(plan)
+
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+			h.assertNoPartialState(resp, plan)
+		})
+	}
+
+	updateCases := []struct {
+		name        string
+		routes      []requestRoute
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			name:        "rejected update reports the server error",
+			routes:      []requestRoute{{method: http.MethodPut, status: http.StatusBadRequest, body: s3ErrorXML("InvalidRequest", "invalid public access block configuration")}},
+			wantSummary: "Error updating bucket public access block",
+			wantDetail:  "Could not set public access block: ",
+		},
+		{
+			name: "failed read-back after update is reported",
+			routes: []requestRoute{
+				{method: http.MethodPut, status: http.StatusOK},
+				{method: http.MethodGet, status: http.StatusForbidden, body: s3ErrorXML("AccessDenied", "Access Denied")},
+			},
+			wantSummary: "Error reading bucket public access block after update",
+			wantDetail:  "Could not read public access block: ",
+		},
+	}
+
+	for _, tc := range updateCases {
+		t.Run("update: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewBucketPublicAccessBlockRessource(), client)
+
+			resp := h.update(publicAccessBlockModel(), publicAccessBlockModel())
+
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+		})
+	}
+
+	t.Run("configure: rejects foreign provider data", func(t *testing.T) {
+		h := newCRUDHarness(t, NewBucketPublicAccessBlockRessource(), cannedClient(t, http.StatusOK, ""))
+
+		resp := h.configure("not-a-client")
+
+		assertErrorDiagnostic(t, resp.Diagnostics, "Unexpected Resource Configure Type", "Expected *AllClient, got: string.")
 	})
 }
 

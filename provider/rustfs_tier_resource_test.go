@@ -201,34 +201,12 @@ func TestTierResourceCreate(t *testing.T) {
 	})
 }
 
-func TestTierResourceRead(t *testing.T) {
-	srv, recorder := newRecorderServer(t, http.StatusOK, "")
-	r := NewTierResource().(*TierResource)
-	r.client = newUnitAllClient(srv)
-	sch := resourceSchemaOf(t, r)
-
-	state := tierResourceModel{
-		Name:       types.StringValue("S3COLD"),
-		TierType:   types.StringValue("s3"),
-		ConfigJson: types.StringValue("{}"),
-	}
-	resp := &frameworkresource.ReadResponse{State: resourceState(t, sch, tierResourceModel{})}
-	r.Read(context.Background(), frameworkresource.ReadRequest{State: resourceState(t, sch, state)}, resp)
-
-	if resp.Diagnostics.HasError() {
-		t.Fatalf("unexpected diagnostics: %v", resp.Diagnostics)
-	}
-	var got tierResourceModel
-	if diags := resp.State.Get(context.Background(), &got); diags.HasError() {
-		t.Fatalf("reading the state back: %v", diags)
-	}
-	if got.Name.ValueString() != "S3COLD" {
-		t.Errorf("Read dropped state: %+v", got)
-	}
-	if got := recorder.count(); got != 0 {
-		t.Errorf("Read must not call the admin API, saw %d requests", got)
-	}
-}
+// TestTierResourceRead was deleted with #74: it pinned Read as a no-op that
+// never calls the admin API, which is the behaviour the issue requires to
+// change (a tier removed outside Terraform stayed in state forever).
+// TestTierResourceLifecyclePaths covers the new contract: the read calls
+// tier-stats, keeps a listed tier, removes a tier the server no longer lists,
+// and reports a server error.
 
 func TestTierResourceUpdate(t *testing.T) {
 	t.Run("edits the tier", func(t *testing.T) {
@@ -542,4 +520,206 @@ resource "rustfs_tier" "test" {
   })
 }
 `, name, name, tierEndpoint, os.Getenv("RUSTFS_USER"), os.Getenv("RUSTFS_SECRET"), bucket)
+}
+
+// TestTierResourceLifecyclePaths covers the paths the acceptance suite cannot
+// reach with a live server: a tier that disappeared behind Terraform's back, a
+// delete of a tier that is already gone, and every failing API call in Create,
+// Read and Delete.
+func TestTierResourceLifecyclePaths(t *testing.T) {
+	t.Parallel()
+
+	readCases := []struct {
+		name        string
+		routes      []requestRoute
+		wantRemoved bool
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			// Probed on 1.0.1 and latest: GET tier/<name> answers 500
+			// TierNotFound for a tier the server does not hold.
+			name:        "TierNotFound is removed from state",
+			routes:      []requestRoute{{status: http.StatusInternalServerError, body: s3ErrorXML("TierNotFound", "tier not found!")}},
+			wantRemoved: true,
+		},
+		{
+			name:       "configured tier stays in state",
+			routes:     []requestRoute{{status: http.StatusOK}},
+			wantDetail: "",
+		},
+		{
+			// A server that does not implement the verify route cannot answer
+			// the question, so the last known state is kept rather than
+			// planning a destructive recreation.
+			name:       "unimplemented route keeps state without a diagnostic",
+			routes:     []requestRoute{{status: http.StatusNotImplemented, body: s3ErrorXML("NotImplemented", "not implemented")}},
+			wantDetail: "",
+		},
+		{
+			name:        "server error keeps state and names the failing call",
+			routes:      []requestRoute{{status: http.StatusForbidden, body: s3ErrorXML("AccessDenied", "nope")}},
+			wantSummary: "Error reading tier",
+			wantDetail:  "Could not read tier: ",
+		},
+	}
+
+	for _, tc := range readCases {
+		t.Run("read: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewTierResource(), client)
+
+			resp := h.read(&tierResourceModel{
+				Name:       types.StringValue("COLD"),
+				TierType:   types.StringValue("s3"),
+				ConfigJson: types.StringValue(`{"name":"COLD"}`),
+			})
+
+			if tc.wantRemoved {
+				requireNoDiagnostics(t, resp.Diagnostics)
+				assertStateRemoved(t, resp.State)
+				return
+			}
+			if tc.wantSummary != "" {
+				assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+				assertStatePresent(t, resp.State)
+				return
+			}
+			requireNoDiagnostics(t, resp.Diagnostics)
+			assertStatePresent(t, resp.State)
+			assertStateString(t, resp.State, path.Root("name"), "COLD")
+		})
+	}
+
+	deleteCases := []struct {
+		name        string
+		routes      []requestRoute
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			// Probed against RustFS latest: DELETE tier/<unknown> answers 200
+			// with no error, so deleting an already gone tier is idempotent on
+			// the server side.
+			name:   "already removed tier is not an error",
+			routes: []requestRoute{{status: http.StatusOK, body: ""}},
+		},
+		{
+			name:        "real server error is reported",
+			routes:      []requestRoute{{status: http.StatusForbidden, body: s3ErrorXML("AccessDenied", "nope")}},
+			wantSummary: "Error removing tier",
+			wantDetail:  "Could not remove tier: ",
+		},
+	}
+
+	for _, tc := range deleteCases {
+		t.Run("delete: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewTierResource(), client)
+
+			resp := h.delete(&tierResourceModel{
+				Name:       types.StringValue("COLD"),
+				TierType:   types.StringValue("s3"),
+				ConfigJson: types.StringValue(`{"name":"COLD"}`),
+			})
+
+			if tc.wantSummary == "" {
+				requireNoDiagnostics(t, resp.Diagnostics)
+				return
+			}
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+		})
+	}
+
+	createCases := []struct {
+		name        string
+		routes      []requestRoute
+		configJSON  string
+		wantSummary string
+		wantDetail  string
+		wantNoCall  bool
+	}{
+		{
+			name:        "invalid JSON is rejected before any API call",
+			routes:      []requestRoute{{status: http.StatusInternalServerError, body: s3ErrorXML("InternalError", "should not be called")}},
+			configJSON:  "not-json",
+			wantSummary: "Invalid JSON",
+			wantDetail:  "config_json must be valid JSON",
+			wantNoCall:  true,
+		},
+		{
+			name:        "rejected tier reports a diagnostic and writes no state",
+			routes:      []requestRoute{{status: http.StatusBadRequest, body: s3ErrorXML("InvalidRequest", "tier name must be uppercase")}},
+			configJSON:  `{"name":"cold","type":"s3"}`,
+			wantSummary: "Error adding tier",
+			wantDetail:  "Could not add tier: ",
+		},
+	}
+
+	for _, tc := range createCases {
+		t.Run("create: "+tc.name, func(t *testing.T) {
+			client, rec := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewTierResource(), client)
+			plan := &tierResourceModel{
+				Name:       types.StringValue("COLD"),
+				TierType:   types.StringValue("s3"),
+				ConfigJson: types.StringValue(tc.configJSON),
+			}
+
+			resp := h.create(plan)
+
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+			h.assertNoPartialState(resp, plan)
+			if tc.wantNoCall {
+				rec.assertNoRequest(t, "tier")
+			}
+		})
+	}
+
+	updateCases := []struct {
+		name        string
+		routes      []requestRoute
+		configJSON  string
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			name:        "invalid JSON is rejected",
+			routes:      []requestRoute{{status: http.StatusInternalServerError, body: s3ErrorXML("InternalError", "should not be called")}},
+			configJSON:  "not-json",
+			wantSummary: "Invalid JSON",
+			wantDetail:  "config_json must be valid JSON",
+		},
+		{
+			name:        "rejected edit reports a diagnostic",
+			routes:      []requestRoute{{status: http.StatusBadRequest, body: s3ErrorXML("InvalidRequest", "unknown tier backend")}},
+			configJSON:  `{"name":"COLD","type":"s3"}`,
+			wantSummary: "Error editing tier",
+			wantDetail:  "Could not edit tier: ",
+		},
+	}
+
+	for _, tc := range updateCases {
+		t.Run("update: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewTierResource(), client)
+			plan := &tierResourceModel{
+				Name:       types.StringValue("COLD"),
+				TierType:   types.StringValue("s3"),
+				ConfigJson: types.StringValue(tc.configJSON),
+			}
+
+			resp := h.update(plan, plan)
+
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+		})
+	}
+
+	t.Run("configure: rejects foreign provider data", func(t *testing.T) {
+		h := newCRUDHarness(t, NewTierResource(), cannedClient(t, http.StatusOK, ""))
+
+		resp := h.configure("not-a-client")
+
+		assertErrorDiagnostic(t, resp.Diagnostics, "Unexpected Resource Configure Type", "Expected *AllClient, got: string.")
+	})
 }

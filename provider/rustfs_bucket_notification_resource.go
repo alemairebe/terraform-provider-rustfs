@@ -318,6 +318,14 @@ func (r *BucketNotificationResource) Delete(ctx context.Context, req resource.De
 	}
 
 	if _, err := r.client.S3.PutBucketNotificationConfiguration(ctx, input); err != nil {
+		// An absent notification configuration (or an absent bucket) is the
+		// state this delete exists to reach, so it is already applied. Live
+		// RustFS answers 404 NoSuchBucket for the empty-notification PUT when
+		// the bucket is gone; NoSuchConfiguration is the code the S3 API uses
+		// for the missing sub-resource itself.
+		if isNotificationNotFound(err) {
+			return
+		}
 		resp.Diagnostics.AddError(
 			"Error removing bucket notification",
 			"Could not remove bucket notification: "+err.Error(),

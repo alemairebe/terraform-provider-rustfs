@@ -150,6 +150,12 @@ func (r *GroupResource) Read(ctx context.Context, req resource.ReadRequest, resp
 
 	info, err := r.client.RustClient.GetGroup(state.Name.ValueString())
 	if err != nil {
+		if rustfs.IsAPIErrorCode(err, "NoSuchResource", "NoSuchGroup") {
+			// The group is gone; dropping it from state makes Terraform plan a
+			// recreation instead of failing the refresh.
+			resp.State.RemoveResource(ctx)
+			return
+		}
 		resp.Diagnostics.AddError(
 			"Error reading group",
 			"Could not read group: "+err.Error(),
@@ -226,6 +232,10 @@ func (r *GroupResource) Delete(ctx context.Context, req resource.DeleteRequest, 
 	}
 
 	if err := r.client.RustClient.DeleteGroup(data.Name.ValueString()); err != nil {
+		if rustfs.IsAPIErrorCode(err, "NoSuchResource", "NoSuchGroup") {
+			// Already gone: destroying twice must not fail.
+			return
+		}
 		resp.Diagnostics.AddError(
 			"Error deleting group",
 			"Could not delete group: "+err.Error(),

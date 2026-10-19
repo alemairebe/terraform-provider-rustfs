@@ -5,6 +5,7 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -105,6 +106,32 @@ func settingsFromConfigKVs(ctx context.Context, kvs []rustfs.ConfigKV) types.Map
 	return value
 }
 
+// configScopeGone reports whether the admin API answered that the config scope
+// is not configured. Probed against RustFS 1.0.1 and latest, the endpoint
+// answers 400 InvalidRequest with exactly these messages:
+//
+//	get-config-kv   "config subsystem 'x' not found"
+//	                "config target 'y' not found for subsystem 'z'"
+//	del-config-kv   "unsupported config subsystem 'x'"
+//
+// The structured code plus the endpoint's own wording keeps an unrelated
+// InvalidRequest (a rejected setting, for example) from being mistaken for a
+// missing scope, which would drop a live scope from state and turn a destroy
+// into a silent no-op.
+func configScopeGone(err error) bool {
+	var apiErr *rustfs.APIError
+	if !errors.As(err, &apiErr) || apiErr.Code != "InvalidRequest" {
+		return false
+	}
+	switch {
+	case strings.HasPrefix(apiErr.Message, "config subsystem '"),
+		strings.HasPrefix(apiErr.Message, "config target '"),
+		strings.HasPrefix(apiErr.Message, "unsupported config subsystem"):
+		return true
+	}
+	return false
+}
+
 func (r *ConfigRessource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var plan ConfigRessourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
@@ -138,7 +165,7 @@ func (r *ConfigRessource) Read(ctx context.Context, req resource.ReadRequest, re
 
 	kvs, err := r.client.RustClient.GetConfig(state.SubSystem.ValueString())
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
+		if configScopeGone(err) {
 			resp.State.RemoveResource(ctx)
 			return
 		}
@@ -149,6 +176,12 @@ func (r *ConfigRessource) Read(ctx context.Context, req resource.ReadRequest, re
 		return
 	}
 
+	// A successful read with no rendered settings is not evidence that the
+	// scope is gone: get-config-kv answers the scope's current values, and a
+	// live scope whose settings are all defaults/empty renders no lines (probed
+	// on 1.0.1 and latest: an unset subsystem returns eight default keys, and a
+	// scope that does not exist at all answers 400 InvalidRequest instead). Only
+	// that structured answer removes the resource; an empty body keeps state.
 	state.Settings = settingsFromConfigKVs(ctx, kvs)
 	state.ID = state.SubSystem
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
@@ -186,6 +219,12 @@ func (r *ConfigRessource) Delete(ctx context.Context, req resource.DeleteRequest
 	}
 
 	if err := r.client.RustClient.DeleteConfig(data.SubSystem.ValueString()); err != nil {
+		if configScopeGone(err) {
+			// The scope is already gone; del-config-kv answers 400
+			// InvalidRequest "unsupported config subsystem" rather than
+			// succeeding silently (probed against RustFS latest).
+			return
+		}
 		resp.Diagnostics.AddError(
 			"Error deleting config",
 			"Could not delete config, unexpected error: "+err.Error(),

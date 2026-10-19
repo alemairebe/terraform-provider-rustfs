@@ -55,6 +55,33 @@ func (c *RustfsAdmin) RemoveTier(name string) error {
 	return nil
 }
 
+// TierExists reports whether the server holds a tier by that name. RustFS
+// answers GET tier/<name> with 200 for a configured tier and 500 TierNotFound
+// for one it does not have (probed on 1.0.1 and latest), so the answer is the
+// server's own verdict on that exact name rather than something inferred from a
+// list that may be incomplete. The name is matched exactly: the route is
+// case-sensitive.
+//
+// Any other failure, including a server that does not implement the route, is
+// returned as an error so the caller can decide whether it can verify at all.
+func (c *RustfsAdmin) TierExists(name string) (bool, error) {
+	reqData := RequestData{
+		Method:  "GET",
+		RelPath: "tier/" + name,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	resp, err := c.doRequest(ctx, reqData)
+	if err != nil {
+		if IsAPIErrorCode(err, "TierNotFound", "NoSuchTier") {
+			return false, nil
+		}
+		return false, err
+	}
+	defer drainClose(resp)
+	return true, nil
+}
+
 // TierStat holds a tier's total size, version count and object count.
 type TierStat struct {
 	TotalSize   int64 `json:"totalSize"`

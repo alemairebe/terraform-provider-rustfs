@@ -151,6 +151,13 @@ func (r *LDAPServiceAccountResource) Read(ctx context.Context, req resource.Read
 	// scoped to.
 	actual, err := r.client.RustClient.ReadServiceAccount(state.AccessKey.ValueString())
 	if err != nil {
+		// Same missing-account signal as the standard service account resource:
+		// a read answers 404 NoSuchResource, and a server that reports the
+		// delete-side shape here is accepted too.
+		if isMissingServiceAccount(err) {
+			resp.State.RemoveResource(ctx)
+			return
+		}
 		resp.Diagnostics.AddError(
 			"Error reading LDAP service account",
 			"Could not read service account, unexpected error: "+err.Error(),
@@ -220,6 +227,10 @@ func (r *LDAPServiceAccountResource) Delete(ctx context.Context, req resource.De
 	}
 	err := r.client.RustClient.DeleteServiceAccount(account)
 	if err != nil {
+		if isMissingServiceAccount(err) {
+			// Already gone: destroying twice must not fail.
+			return
+		}
 		resp.Diagnostics.AddError(
 			"Error deleting LDAP service account",
 			"Could not delete service account, unexpected error: "+err.Error(),

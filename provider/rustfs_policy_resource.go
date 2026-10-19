@@ -178,6 +178,11 @@ func (r *PolicyResource) Read(ctx context.Context, req resource.ReadRequest, res
 	// Make the read request
 	actual, err := r.client.RustClient.ReadPolicy(state.Name.ValueString())
 	if err != nil {
+		// RustFS answers 404 NoSuchResource for a policy it does not have.
+		if rustfs.IsAPIErrorCode(err, "NoSuchResource") {
+			resp.State.RemoveResource(ctx)
+			return
+		}
 		resp.Diagnostics.AddError(
 			"Error reading policy",
 			"Could not read policy, unexpected error: "+err.Error(),
@@ -238,6 +243,11 @@ func (r *PolicyResource) Delete(ctx context.Context, req resource.DeleteRequest,
 
 	err := r.client.RustClient.DeletePolicy(data.Name.ValueString())
 	if err != nil {
+		// RustFS answers 200 for an already-deleted policy, but treat an
+		// explicit NoSuchResource the same way if a server ever returns it.
+		if rustfs.IsAPIErrorCode(err, "NoSuchResource") {
+			return
+		}
 		resp.Diagnostics.AddError(
 			"Error deleting policy",
 			"Could not delete policy, unexpected error: "+err.Error(),

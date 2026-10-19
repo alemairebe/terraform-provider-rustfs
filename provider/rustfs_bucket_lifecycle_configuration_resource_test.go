@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"testing"
 	"time"
 
@@ -541,4 +542,171 @@ resource "rustfs_bucket_lifecycle_configuration" "test" {
   ]
 }
 `, bucket)
+}
+
+// TestBucketLifecycleConfigurationResourceLifecyclePaths covers the paths the
+// acceptance suite cannot reach with a live server: a lifecycle configuration
+// that disappeared behind Terraform's back, a delete that arrives after the
+// configuration is already gone, and every failing API call in Create, Read and
+// Delete.
+func TestBucketLifecycleConfigurationResourceLifecyclePaths(t *testing.T) {
+	t.Parallel()
+
+	newModel := func() *bucketLifecycleConfigurationModel {
+		return &bucketLifecycleConfigurationModel{
+			Bucket: types.StringValue("tf-test"),
+			Id:     types.StringValue("tf-test"),
+			Rule: []ruleModel{{
+				Id:         types.StringValue("rule-1"),
+				Status:     types.StringValue("Enabled"),
+				Filter:     &filterModel{Prefix: types.StringValue("logs/")},
+				Expiration: &expirationModel{Days: types.Int64Value(30)},
+			}},
+		}
+	}
+
+	readCases := []struct {
+		name        string
+		routes      []requestRoute
+		wantRemoved bool
+		wantSummary string
+		wantDetail  string
+		wantServer  string
+	}{
+		{
+			// S3 reports a missing lifecycle sub-resource as
+			// NoSuchLifecycleConfiguration.
+			name:        "absent lifecycle configuration is removed from state",
+			routes:      []requestRoute{{method: http.MethodGet, status: http.StatusNotFound, body: s3ErrorXML("NoSuchLifecycleConfiguration", "The lifecycle configuration does not exist")}},
+			wantRemoved: true,
+		},
+		{
+			// Live RustFS answers 404 NoSuchBucket when the bucket itself is gone.
+			name:        "missing bucket is removed from state",
+			routes:      []requestRoute{{method: http.MethodGet, status: http.StatusNotFound, body: s3ErrorXML("NoSuchBucket", "The specified bucket does not exist")}},
+			wantRemoved: true,
+		},
+		{
+			name:        "server error keeps state and names the failing call",
+			routes:      []requestRoute{{method: http.MethodGet, status: http.StatusForbidden, body: s3ErrorXML("AccessDenied", "access denied")}},
+			wantSummary: "Error reading bucket lifecycle configuration",
+			wantDetail:  "Could not read lifecycle configuration: ",
+			wantServer:  "access denied",
+		},
+	}
+
+	for _, tc := range readCases {
+		t.Run("read: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewBucketLifecycleConfigurationResource(), client)
+
+			resp := h.read(newModel())
+
+			if tc.wantRemoved {
+				requireNoDiagnostics(t, resp.Diagnostics)
+				assertStateRemoved(t, resp.State)
+				return
+			}
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+			assertDiagnosticDetail(t, resp.Diagnostics, tc.wantServer)
+			assertStatePresent(t, resp.State)
+		})
+	}
+
+	deleteCases := []struct {
+		name       string
+		routes     []requestRoute
+		wantTitle  string
+		wantDetail string
+		wantServer string
+	}{
+		{
+			name:   "already deleted lifecycle configuration is not an error",
+			routes: []requestRoute{{method: http.MethodDelete, status: http.StatusNotFound, body: s3ErrorXML("NoSuchLifecycleConfiguration", "The lifecycle configuration does not exist")}},
+		},
+		{
+			name:   "missing bucket is not an error",
+			routes: []requestRoute{{method: http.MethodDelete, status: http.StatusNotFound, body: s3ErrorXML("NoSuchBucket", "The specified bucket does not exist")}},
+		},
+		{
+			name:       "real server error is reported",
+			routes:     []requestRoute{{method: http.MethodDelete, status: http.StatusForbidden, body: s3ErrorXML("AccessDenied", "access denied")}},
+			wantTitle:  "Error deleting bucket lifecycle configuration",
+			wantDetail: "Could not delete lifecycle configuration: ",
+			wantServer: "access denied",
+		},
+	}
+
+	for _, tc := range deleteCases {
+		t.Run("delete: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewBucketLifecycleConfigurationResource(), client)
+
+			resp := h.delete(newModel())
+
+			if tc.wantTitle == "" {
+				requireNoDiagnostics(t, resp.Diagnostics)
+				return
+			}
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantTitle, tc.wantDetail)
+			assertDiagnosticDetail(t, resp.Diagnostics, tc.wantServer)
+		})
+	}
+
+	createCases := []struct {
+		name       string
+		routes     []requestRoute
+		plan       *bucketLifecycleConfigurationModel
+		wantTitle  string
+		wantDetail string
+		wantServer string
+	}{
+		{
+			// The server rejects this payload as malformed.
+			name: "rejected payload reports the server error and writes no state",
+			routes: []requestRoute{{
+				method: http.MethodPut,
+				status: http.StatusBadRequest,
+				body:   s3ErrorXML("MalformedXML", "The XML you provided was not well-formed or did not validate"),
+			}},
+			plan:       newModel(),
+			wantTitle:  "Error creating bucket lifecycle configuration",
+			wantDetail: "Could not create lifecycle configuration: ",
+			wantServer: "did not validate",
+		},
+		{
+			// Missing prerequisite: the bucket is gone.
+			name: "missing bucket reports the server error and writes no state",
+			routes: []requestRoute{{
+				method: http.MethodPut,
+				status: http.StatusNotFound,
+				body:   s3ErrorXML("NoSuchBucket", "The specified bucket does not exist"),
+			}},
+			plan:       newModel(),
+			wantTitle:  "Error creating bucket lifecycle configuration",
+			wantDetail: "Could not create lifecycle configuration: ",
+			wantServer: "NoSuchBucket",
+		},
+	}
+
+	for _, tc := range createCases {
+		t.Run("create: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewBucketLifecycleConfigurationResource(), client)
+
+			resp := h.create(tc.plan)
+
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantTitle, tc.wantDetail)
+			assertDiagnosticDetail(t, resp.Diagnostics, tc.wantServer)
+			h.assertNoPartialState(resp, tc.plan)
+		})
+	}
+
+	t.Run("configure: rejects foreign provider data", func(t *testing.T) {
+		h := newCRUDHarness(t, NewBucketLifecycleConfigurationResource(), cannedClient(t, http.StatusOK, ""))
+
+		resp := h.configure("not-a-client")
+
+		assertErrorDiagnostic(t, resp.Diagnostics, "Unexpected Resource Configure Type", "Expected *AllClient, got: string.")
+	})
 }

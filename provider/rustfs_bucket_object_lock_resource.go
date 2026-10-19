@@ -253,6 +253,13 @@ func (r *BucketObjectLockResource) Read(ctx context.Context, req resource.ReadRe
 	}
 
 	if err := r.refreshObjectLock(ctx, &state); err != nil {
+		// A bucket without Object Lock configured answers 404
+		// ObjectLockConfigurationNotFoundError (a missing bucket answers
+		// NoSuchBucket, which the same matcher also treats as absent).
+		if isBucketSubresourceAbsent(err, "ObjectLockConfigurationNotFoundError") {
+			resp.State.RemoveResource(ctx)
+			return
+		}
 		resp.Diagnostics.AddError(
 			"Error reading object lock",
 			"Could not read object lock: "+err.Error(),
