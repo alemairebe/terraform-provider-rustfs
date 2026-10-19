@@ -123,7 +123,9 @@ func TestLDAPServiceAccountResourceImportState(t *testing.T) {
 	ctx := context.Background()
 	r := NewLDAPServiceAccountResource().(*LDAPServiceAccountResource)
 
-	resp := &fwresource.ImportStateResponse{State: newNullImportState(t, r)}
+	resp := &fwresource.ImportStateResponse{
+		State: resourceState(t, resourceSchemaOf(t, r), LDAPServiceAccountResourceModel{}),
+	}
 	r.ImportState(ctx, fwresource.ImportStateRequest{ID: "tf-ldap-sa-1234"}, resp)
 	if resp.Diagnostics.HasError() {
 		t.Fatalf("unexpected import diagnostics: %s", resp.Diagnostics)

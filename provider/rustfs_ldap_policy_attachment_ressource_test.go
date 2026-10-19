@@ -133,7 +133,9 @@ resource "rustfs_ldap_policy_attachment" "` + resourceLabel + `" {
 func newLdapPolicyImportState(t *testing.T, r *LDAPPolicyAttachmentRessource) *fwresource.ImportStateResponse {
 	t.Helper()
 
-	return &fwresource.ImportStateResponse{State: newNullImportState(t, r)}
+	return &fwresource.ImportStateResponse{
+		State: resourceState(t, resourceSchemaOf(t, r), LDAPPolicyAttachmentRessourceModel{}),
+	}
 }
 
 func importLdapPolicyState(t *testing.T, r *LDAPPolicyAttachmentRessource, id string) LDAPPolicyAttachmentRessourceModel {
