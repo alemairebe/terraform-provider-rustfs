@@ -217,7 +217,8 @@ func TestSiteReplicationRessourceUpdate(t *testing.T) {
 				t.Errorf("edit body endpoint = %q, want the trailing slash trimmed", site.Endpoint)
 			}
 			if site.AccessKey != "peeradmin" || site.SecretKey != "peersecret" {
-				t.Errorf("edit body credentials = %q/%q, want peeradmin/peersecret", site.AccessKey, site.SecretKey)
+				// The values are credentials: report the mismatch, not them.
+				t.Error("edit body credentials do not match the configured ones")
 			}
 			if !site.SkipTLSVerify {
 				t.Error("edit body skipTlsVerify = false, want true")

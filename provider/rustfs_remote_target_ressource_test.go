@@ -134,7 +134,8 @@ func testAccCheckRemoteTargetExists(resourceName string) resource.TestCheckFunc 
 				return fmt.Errorf("remote target %s has no credentials on the server", arn)
 			}
 			if want := rs.Primary.Attributes["access_key"]; target.Credentials.AccessKey != want {
-				return fmt.Errorf("remote target %s reports access key %q on the server, state has %q", arn, target.Credentials.AccessKey, want)
+				// The values are credentials: report the mismatch, not them.
+				return fmt.Errorf("remote target %s reports an access key on the server that does not match the one in state", arn)
 			}
 			return nil
 		}

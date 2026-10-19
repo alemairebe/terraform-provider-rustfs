@@ -292,8 +292,12 @@ func testAccCheckUserPolicies(user string, want ...string) resource.TestCheckFun
 func testAccCheckUserGone(user string) resource.TestCheckFunc {
 	return func(*terraform.State) error {
 		client := testAccRustClient()
-		if _, err := client.ReadUserAccount(user); err == nil {
+		_, err := client.ReadUserAccount(user)
+		if err == nil {
 			return fmt.Errorf("user %s still exists", user)
+		}
+		if !rustfs.IsAPIErrorCode(err, "NoSuchResource") {
+			return fmt.Errorf("could not determine whether user %s still exists: %w", user, err)
 		}
 		return nil
 	}

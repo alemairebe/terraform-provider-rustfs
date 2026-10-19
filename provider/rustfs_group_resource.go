@@ -254,7 +254,10 @@ func (r *GroupResource) Update(ctx context.Context, req resource.UpdateRequest, 
 		}
 	}
 
-	if plan.Status.ValueString() != "" {
+	// status has a schema default, so it is always known: only push it when it
+	// actually differs from the state, otherwise a members-only update issues a
+	// pointless call that would also undo an out-of-band status change.
+	if plan.Status.ValueString() != state.Status.ValueString() {
 		if err := r.client.RustClient.SetGroupStatus(name, plan.Status.ValueString()); err != nil {
 			resp.Diagnostics.AddError(
 				"Error updating group status",
