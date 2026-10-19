@@ -60,9 +60,26 @@ func (c *RustfsAdmin) SiteReplicationAdd(site SiteReplicationSite) error {
 	return c.siteReplicationWrite("site-replication/add", body)
 }
 
+// siteReplicationPeerEdit is the wire shape of site-replication/edit. RustFS
+// parses a single PeerInfo object on that route — unlike site-replication/add,
+// which takes an array of SiteReplicationSite — and names the endpoint field
+// "endpoint" (singular). Verified against RustFS 1.0.3: the array/plural shape
+// the add route accepts is rejected by the edit route with
+// "invalid JSON: invalid type: map, expected a string at line 1 column 1", and
+// "endpoints" leaves the endpoint empty
+// ("invalid site endpoint “: relative URL without a base").
+type siteReplicationPeerEdit struct {
+	Name          string `json:"name"`
+	Endpoint      string `json:"endpoint"`
+	AccessKey     string `json:"accessKey,omitempty"`
+	SecretKey     string `json:"secretKey,omitempty"`
+	SkipTLSVerify bool   `json:"skipTlsVerify,omitempty"`
+	CACertPEM     string `json:"caCertPem,omitempty"`
+}
+
 func (c *RustfsAdmin) SiteReplicationEdit(site SiteReplicationSite) error {
 	//#nosec G117 — AccessKey is a public identifier, not a secret
-	body, err := json.Marshal([]SiteReplicationSite{site})
+	body, err := json.Marshal(siteReplicationPeerEdit(site))
 	if err != nil {
 		return err
 	}

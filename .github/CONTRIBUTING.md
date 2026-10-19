@@ -176,6 +176,22 @@ skipping:
 * The bucket replication test registers its own `rustfs_remote_target` in Terraform and uses the
   returned ARN as the replication role; RustFS answers `replication config has a stale target` for
   any other role.
+* `RUSTFS_SITE_REPLICATION_PEER_ENDPOINT` is the peer as **RustFS** sees it
+  (`http://rustfs-peer:9000`) and is the site endpoint `TestAccSiteReplicationResource` hands the
+  server. Unlike `RUSTFS_PEER_ENDPOINT` it carries the scheme, and it must not be a loopback
+  address: `site-replication/add` refuses one and records the local site from the `Host` header of
+  the admin request, so a host-side run against a published port skips this test with the server's
+  own explanation.
+
+The LDAP acceptance tests are the exception. No RustFS release can be given an LDAP identity
+provider — `help-config-kv` lists `identity_openid` but no `identity_ldap`, the server binary
+carries no `RUSTFS_*LDAP*` environment variable, and `add-user` rejects the distinguished names the
+LDAP routes expect — so `idp/ldap/add-service-account` answers `target user not exist` on every
+supported version and `TestAccLdapServiceAccount` / `TestAccLdapPolicyAttachment_*` always skip.
+Their create, read, update, delete and import flows (including every documented import ID form) are
+covered by unit tests against a mocked admin API instead: `TestLDAPServiceAccountResource*` and
+`TestLDAPPolicyAttachmentResource*`, driving the real resource methods through
+`provider/resource_harness_test.go`.
 
 The acceptance container also writes `coverage-acceptance.out`; `make coverage` followed by
 `make coverage-merge` merges it with the unit profile (see the coverage table in
