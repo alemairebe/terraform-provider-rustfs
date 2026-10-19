@@ -267,7 +267,8 @@ func testAccCheckUserPolicyAttachmentAttached(resourceName string) resource.Test
 			return err
 		}
 		if !slices.Contains(attached, policy) {
-			return fmt.Errorf("user %s does not carry policy %s (carries %v)", user, policy, attached)
+			// The user is identified by its access key: name the fact, not it.
+			return fmt.Errorf("the user the attachment is for does not carry policy %s (carries %v)", policy, attached)
 		}
 		return nil
 	}
@@ -282,7 +283,7 @@ func testAccCheckUserPolicies(user string, want ...string) resource.TestCheckFun
 			return err
 		}
 		if !slices.Equal(got, want) {
-			return fmt.Errorf("user %s carries policies %v, expected %v", user, got, want)
+			return fmt.Errorf("the user does not carry the expected policies: got %v, want %v", got, want)
 		}
 		return nil
 	}
@@ -294,10 +295,11 @@ func testAccCheckUserGone(user string) resource.TestCheckFunc {
 		client := testAccRustClient()
 		_, err := client.ReadUserAccount(user)
 		if err == nil {
-			return fmt.Errorf("user %s still exists", user)
+			// user is the access key: report the fact, not the value.
+			return fmt.Errorf("the user that should have been destroyed still exists")
 		}
 		if !rustfs.IsAPIErrorCode(err, "NoSuchResource") {
-			return fmt.Errorf("could not determine whether user %s still exists: %w", user, err)
+			return fmt.Errorf("could not determine whether the user still exists: %w", err)
 		}
 		return nil
 	}
