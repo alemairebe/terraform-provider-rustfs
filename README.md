@@ -353,7 +353,7 @@ Statement coverage of this repository, merged from the unit and acceptance profi
 ```
 pkg/rustfs  ████████████████████  97.8%   floor 97.3%
 provider    ██████████████████░░  88.0%   floor 87.5%
-total       ██████████████████░░  90.2%   floor 89.5%   -> 80%, then 90%
+total       ██████████████████░░  90.2%   floor 89.5%   milestones 80% and 90% met
 ```
 
 Measured on `f84538b` (unit + acceptance) on 2026-10-19.

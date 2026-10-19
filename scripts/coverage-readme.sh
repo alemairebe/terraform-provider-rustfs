@@ -92,6 +92,14 @@ color() {
   }'
 }
 
+milestone() {
+  awk -v pct="$1" -v target="${2:-80}" -v gold="${3:-90}" 'BEGIN {
+    if (pct >= gold) printf "milestones %s%% and %s%% met", target, gold
+    else if (pct >= target) printf "%s%% met; %s%% next", target, gold
+    else printf "-> %s%%, then %s%%", target, gold
+  }'
+}
+
 badge_file="$(mktemp)"
 block_file="$(mktemp)"
 trap 'rm -f "$badge_file" "$block_file"' EXIT
@@ -103,8 +111,9 @@ printf '[![Coverage](https://img.shields.io/badge/coverage-%s%%25-%s)](#testing-
   echo '```'
   printf 'pkg/rustfs  %s  %s%%   floor %s%%\n' "$(bar "$measured_pkg_rustfs")" "$measured_pkg_rustfs" "$floor_pkg_rustfs"
   printf 'provider    %s  %s%%   floor %s%%\n' "$(bar "$measured_provider")" "$measured_provider" "$floor_provider"
-  printf 'total       %s  %s%%   floor %s%%   -> %s%%, then %s%%\n' \
-    "$(bar "$measured_total")" "$measured_total" "$floor_total" "${target:-80}" "${gold:-90}"
+  printf 'total       %s  %s%%   floor %s%%   %s\n' \
+    "$(bar "$measured_total")" "$measured_total" "$floor_total" \
+    "$(milestone "$measured_total" "${target:-80}" "${gold:-90}")"
   echo '```'
   echo
   if [[ -n "$measured_commit" ]]; then
