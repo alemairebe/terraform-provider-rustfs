@@ -487,10 +487,10 @@ func (b tierTestBucket) delete(t *testing.T) {
 }
 
 // testAccCheckTierDestroy requires every tier the fixture created to be gone.
-// The admin API answers 500 TierNotFound for a name it does not hold, and a
-// server that does not implement the verify route at all is not evidence of a
-// leaked tier, so both pass; an implemented route that still answers for the
-// name fails.
+// The admin API answers TierNotFound for a name it does not hold. A server that
+// does not implement the verify route at all (501 NotImplemented, 405) cannot
+// confirm the tier's absence and is not evidence of a leak, so that passes too;
+// an implemented route that still answers for the name fails.
 func testAccCheckTierDestroy(s *terraform.State) error {
 	client := testAccRustClient()
 	for _, rs := range s.RootModule().Resources {
@@ -503,12 +503,15 @@ func testAccCheckTierDestroy(s *terraform.State) error {
 		}
 
 		res, err := client.DoDirectRequest(context.Background(), rustfs.RequestData{
-			Method:  http.MethodGet,
+			Method: http.MethodGet,
+			// DoDirectRequest resolves against the host root, so the admin
+			// prefix the production client builds in createEndpointUrl is part
+			// of the path here.
 			RelPath: "rustfs/admin/v3/tier/" + name,
 		})
 		if err != nil {
-			if strings.Contains(err.Error(), "TierNotFound") ||
-				strings.Contains(err.Error(), "NotImplemented") ||
+			if rustfs.IsAPIErrorCode(err, "TierNotFound", "NoSuchTier") ||
+				rustfs.IsAPIErrorCode(err, "NotImplemented", "MethodNotAllowed") ||
 				rustfs.IsUnsupportedFeature(err) {
 				continue
 			}
