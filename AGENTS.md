@@ -243,11 +243,11 @@ or drop a schema change silently — an attribute that cannot be updated in plac
   `RUSTFS_ENDPOINT=127.0.0.1:9001 RUSTFS_USER=rustfsadmin RUSTFS_SECRET=rustfsadmin TF_ACC=1 go test -v ./provider -run TestAcc`
 
   `rustfs_tier` is the one acceptance test that needs extra environment: the server only saves a tier
-  after probing a reachable backend, so the compose file runs a second RustFS (`rustfs-tier`) and the
-  test skips without `RUSTFS_TIER_ENDPOINT`. Host-based runs add
-  `RUSTFS_TIER_ENDPOINT=http://rustfs-tier:9000 RUSTFS_TIER_S3_ENDPOINT=127.0.0.1:19000` (the first is
-  the endpoint the server probes, the second the published port the test process dials); inside the
-  compose test container `RUSTFS_TIER_ENDPOINT` alone is enough.
+  after probing a reachable backend, so the compose file runs a second RustFS (the `rustfs-peer`
+  instance that the replication tests use too) and the test skips without `RUSTFS_TIER_ENDPOINT`.
+  Host-based runs add `RUSTFS_TIER_ENDPOINT=http://rustfs-peer:9000 RUSTFS_TIER_S3_ENDPOINT=127.0.0.1:9002`
+  (the first is the endpoint the server probes, the second the published port the test process dials);
+  inside the compose test container `RUSTFS_TIER_ENDPOINT` alone is enough.
 - **Docs**: `make generate` (runs the `//go:generate` tfplugindocs directive in `main.go`)
 
 ### Testing

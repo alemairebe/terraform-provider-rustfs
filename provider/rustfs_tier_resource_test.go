@@ -428,7 +428,7 @@ func tierTestEndpoint(t *testing.T) string {
 	t.Helper()
 	full := os.Getenv(tierTestEndpointEnv)
 	if !strings.HasPrefix(full, "http://") && !strings.HasPrefix(full, "https://") {
-		t.Fatalf("%s must be a URL such as http://rustfs-tier:9000, got %q", tierTestEndpointEnv, full)
+		t.Fatalf("%s must be a URL such as http://rustfs-peer:9000, got %q", tierTestEndpointEnv, full)
 	}
 	return full
 }

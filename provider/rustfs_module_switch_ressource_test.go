@@ -7,6 +7,7 @@ import (
 	"context"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/caberdo/terraform-provider-rustfs/pkg/rustfs"
@@ -41,8 +42,19 @@ func readModuleSwitchState(t *testing.T) *rustfs.ModuleSwitchState {
 // modules: when a module is pinned by an environment variable the server
 // refuses the update. That state belongs to the deployment rather than to the
 // test, so the test skips instead of failing.
+
+// moduleSwitchMutex serializes the tests that use testAccEnsureModuleEnabled.
+// Two parallel acceptance tests both needing the notify module would otherwise
+// race: the first one to finish restores the switch to disabled while the
+// other is still running. The lock is held until the test's cleanup runs, so a
+// test's restore happens before the next caller observes the module state.
+var moduleSwitchMutex sync.Mutex
+
 func testAccEnsureModuleEnabled(t *testing.T, module string) {
 	t.Helper()
+
+	moduleSwitchMutex.Lock()
+	t.Cleanup(moduleSwitchMutex.Unlock)
 
 	client := testAccRustClient()
 	original, err := client.GetModuleSwitches()

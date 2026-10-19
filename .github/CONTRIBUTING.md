@@ -131,7 +131,13 @@ They need a RustFS server. Use the shipped environment:
 
 ```bash
 make testacc-docker      # Docker: rustfs + golang test runner (this is what CI runs)
-make testacc-live        # Podman: starts RustFS, runs the suite, leaves it running
+
+# Podman: starts RustFS and its replication peer, runs the suite, leaves them
+# running. The credentials are deployment inputs, so export them first with the
+# values the compose fixture gives its services.
+RUSTFS_USER=rustfsadmin RUSTFS_SECRET=rustfsadmin \
+  RUSTFS_PEER_ACCESS_KEY=rustfsadmin RUSTFS_PEER_SECRET_KEY=rustfsadmin \
+  make testacc-live
 ```
 
 Run a single test:
@@ -144,8 +150,32 @@ Or point the suite at your own server:
 
 ```bash
 RUSTFS_ENDPOINT=127.0.0.1:9001 RUSTFS_USER=rustfsadmin RUSTFS_SECRET=rustfsadmin \
+  RUSTFS_NOTIFY_TEST_ENDPOINT=http://127.0.0.1:9001/health/ready \
+  RUSTFS_PEER_ENDPOINT=rustfs-peer:9000 RUSTFS_PEER_ADMIN_ENDPOINT=127.0.0.1:9003 \
+  RUSTFS_PEER_S3_ENDPOINT=127.0.0.1:9002 \
+  RUSTFS_PEER_ACCESS_KEY=rustfsadmin RUSTFS_PEER_SECRET_KEY=rustfsadmin \
   TF_ACC=1 go test -v ./provider -run TestAcc
 ```
+
+The compose fixture provisions three server-side prerequisites, so the whole suite runs instead of
+skipping:
+
+* `rustfs-peer` is a second RustFS instance. `rustfs_remote_target` validates that its endpoint is
+  reachable and that the destination bucket exists and is versioned, so the remote-target and
+  bucket-replication tests need it. `RUSTFS_PEER_ENDPOINT` is the peer's S3 data API as seen by the
+  primary server (`rustfs-peer:9000`, the API a replication target writes to), while
+  `RUSTFS_PEER_ADMIN_ENDPOINT` and `RUSTFS_PEER_S3_ENDPOINT` are the admin and S3 endpoints as seen
+  by the test host (`127.0.0.1:9003` and `127.0.0.1:9002`, the peer's published ports). The test
+  host's admin endpoint is used to create the peer service account that supplies the second
+  credential pair for the remote-target update step. All five values are required; the test skips
+  when they are unset and never guesses a port from another endpoint.
+* `RUSTFS_NOTIFY_TEST_ENDPOINT` is a webhook endpoint reachable from the RustFS server. The bucket
+  notification test registers a `notify_webhook` target named `PRIMARY` and references it as
+  `arn:rustfs:sqs::PRIMARY:webhook`; RustFS rejects notification rules when no target is configured.
+  The primary server must allow that origin through `RUSTFS_OUTBOUND_ALLOW_ORIGINS`.
+* The bucket replication test registers its own `rustfs_remote_target` in Terraform and uses the
+  returned ARN as the replication role; RustFS answers `replication config has a stale target` for
+  any other role.
 
 The acceptance container also writes `coverage-acceptance.out`; `make coverage` followed by
 `make coverage-merge` merges it with the unit profile (see the coverage table in
