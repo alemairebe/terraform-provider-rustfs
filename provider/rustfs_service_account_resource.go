@@ -5,7 +5,9 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/caberdo/terraform-provider-rustfs/pkg/rustfs"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -63,6 +65,7 @@ func (r *ServiceAccountResource) Schema(_ context.Context, _ resource.SchemaRequ
 			"secret_key": schema.StringAttribute{
 				MarkdownDescription: "Secret Key",
 				Required:            true,
+				Sensitive:           true,
 			},
 			"name": schema.StringAttribute{
 				Required:            true,
@@ -168,11 +171,9 @@ func (r *ServiceAccountResource) Read(ctx context.Context, req resource.ReadRequ
 	// Make the read request
 	actual, err := r.client.RustClient.ReadServiceAccount(state.AccessKey.ValueString())
 	if err != nil {
-		if rustfs.IsAPIErrorCode(err, "NoSuchResource") {
-			// The account was removed outside Terraform, so it is dropped from
-			// state and planned for creation again instead of failing the
-			// whole refresh.
-			tflog.Trace(ctx, "service account no longer exists")
+		if isMissingServiceAccount(err) {
+			// Dropping it from state makes Terraform plan a recreation instead
+			// of failing the refresh.
 			resp.State.RemoveResource(ctx)
 			return
 		}
@@ -258,21 +259,10 @@ func (r *ServiceAccountResource) Delete(ctx context.Context, req resource.Delete
 		SecretKey:   data.SecretKey.ValueString(),
 		Description: data.Description.ValueString(),
 	}
-	if _, err := r.client.RustClient.ReadServiceAccount(account.AccessKey); err != nil {
-		if rustfs.IsAPIErrorCode(err, "NoSuchResource") {
-			// Already gone, so there is nothing left to destroy.
-			return
-		}
-		resp.Diagnostics.AddError(
-			"Error deleting service account",
-			"Could not read service account before deleting: "+err.Error(),
-		)
-		return
-	}
-
 	err := r.client.RustClient.DeleteServiceAccount(account)
 	if err != nil {
-		if rustfs.IsAPIErrorCode(err, "NoSuchResource") {
+		if isMissingServiceAccount(err) {
+			// Already gone: destroying twice must not fail.
 			return
 		}
 		resp.Diagnostics.AddError(
@@ -280,6 +270,26 @@ func (r *ServiceAccountResource) Delete(ctx context.Context, req resource.Delete
 			"Could not delete service account, unexpected error: "+err.Error(),
 		)
 	}
+}
+
+// isMissingServiceAccount reports whether err says the service account is not
+// on the server, whichever endpoint answered. Both signals were probed against
+// a running RustFS: the read endpoints (info-service-account) answer 404
+// NoSuchResource, while the delete endpoint (delete-service-accounts) has no
+// structured missing-object code and answers 400 InvalidRequest with the
+// message "service account not exist". The code alone is not enough there —
+// RustFS reuses InvalidRequest for unrelated request failures — so the
+// endpoint's own wording is required as well. Read and Delete share the
+// predicate so an account removed out of band is dropped from state and a
+// repeated destroy stays a no-op.
+func isMissingServiceAccount(err error) bool {
+	if rustfs.IsAPIErrorCode(err, "NoSuchResource") {
+		return true
+	}
+	var apiErr *rustfs.APIError
+	return errors.As(err, &apiErr) &&
+		apiErr.Code == "InvalidRequest" &&
+		strings.Contains(apiErr.Message, "service account not exist")
 }
 
 func (r *ServiceAccountResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {

@@ -5,9 +5,12 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
+	"github.com/caberdo/terraform-provider-rustfs/pkg/rustfs"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -152,7 +155,7 @@ func (r *kmsKeyRessource) Read(ctx context.Context, req resource.ReadRequest, re
 
 	key, err := r.client.RustClient.DescribeKmsKey(keyID)
 	if err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "not found") {
+		if isKmsKeyNotFound(err) {
 			resp.State.RemoveResource(ctx)
 			return
 		}
@@ -165,6 +168,27 @@ func (r *kmsKeyRessource) Read(ctx context.Context, req resource.ReadRequest, re
 	state.Enabled = types.BoolValue(key.KeyState == "Enabled")
 	state.CreatedAt = types.StringValue(key.CreationDate)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
+}
+
+// isKmsKeyNotFound reports whether err means the KMS master key is missing.
+//
+// Probed against a RustFS with the local KMS backend: describing a key the
+// server does not hold answers 404 with the body
+// `{"success":false,"message":"Failed to describe key: Key not found: <id>"}`,
+// and DescribeKmsKey turns a 200 body with a null key_metadata into a plain
+// error carrying that same message. Both shapes are matched on the endpoint's
+// own "Key not found" wording — not on any "not found" substring, so an
+// unrelated failure (for example 503 "kms service is not running") is still
+// reported instead of being mistaken for an idempotent delete.
+func isKmsKeyNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	var apiErr *rustfs.APIError
+	if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
+		return true
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "key not found")
 }
 
 // resolveKeyID maps a key name to its server-side key id by listing the keys
@@ -242,6 +266,12 @@ func (r *kmsKeyRessource) Delete(ctx context.Context, req resource.DeleteRequest
 		keyID = state.Name.ValueString()
 	}
 	if err := r.client.RustClient.DeleteKmsKey(keyID); err != nil {
+		// A key that is already gone (deleted or scheduled for deletion) has
+		// nothing left to destroy, so the destroy is a no-op rather than a
+		// failure.
+		if isKmsKeyNotFound(err) {
+			return
+		}
 		resp.Diagnostics.AddError(
 			"Error deleting KMS key",
 			"Could not delete KMS key, unexpected error: "+err.Error(),

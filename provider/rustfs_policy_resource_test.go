@@ -6,6 +6,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"reflect"
 	"regexp"
@@ -584,5 +585,142 @@ func TestAccPolicyResource_condition(t *testing.T) {
 				},
 			},
 		},
+	})
+}
+
+// TestPolicyResourceLifecyclePaths covers the paths the acceptance suite cannot
+// reach with a live server: a policy that disappeared behind Terraform's back, a
+// delete that arrives after the policy is already gone, and every failing API
+// call in Create, Read and Delete.
+func TestPolicyResourceLifecyclePaths(t *testing.T) {
+	t.Parallel()
+
+	state := func(name string) *policyResourceModel {
+		return &policyResourceModel{
+			Name:      types.StringValue(name),
+			Version:   types.StringValue("2012-10-17"),
+			Statement: []policyStatementModel{},
+		}
+	}
+
+	readCases := []struct {
+		name        string
+		routes      []requestRoute
+		wantRemoved bool
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			// RustFS answers 404 NoSuchResource for a policy it does not have.
+			name:        "missing policy is removed from state",
+			routes:      []requestRoute{{status: http.StatusNotFound, body: s3ErrorXML("NoSuchResource", "policy 'tf-test' does not exist")}},
+			wantRemoved: true,
+		},
+		{
+			name:        "server error keeps state and names the failing call",
+			routes:      []requestRoute{{status: http.StatusForbidden, body: s3ErrorXML("AccessDenied", "nope")}},
+			wantSummary: "Error reading policy",
+			wantDetail:  "Could not read policy, unexpected error: ",
+		},
+		{
+			// A 200 with an undecodable policy document is a real read failure:
+			// the client cannot parse what the server returned.
+			name:        "undecodable policy document is reported",
+			routes:      []requestRoute{{status: http.StatusOK, body: `{"policy_name":"tf-test","policy":"not-json"}`}},
+			wantSummary: "Error reading policy",
+			wantDetail:  "invalid character",
+		},
+	}
+
+	for _, tc := range readCases {
+		t.Run("read: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewPolicyResource(), client)
+
+			resp := h.read(state("tf-test"))
+
+			if tc.wantRemoved {
+				requireNoDiagnostics(t, resp.Diagnostics)
+				assertStateRemoved(t, resp.State)
+				return
+			}
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+			assertStatePresent(t, resp.State)
+		})
+	}
+
+	deleteCases := []struct {
+		name        string
+		routes      []requestRoute
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			// RustFS answers 200 for removing a policy that is already gone.
+			name:   "already deleted policy is not an error",
+			routes: []requestRoute{{status: http.StatusOK, body: ""}},
+		},
+		{
+			// Structured not-found is treated as already gone as well.
+			name:   "not-found response is not an error",
+			routes: []requestRoute{{status: http.StatusNotFound, body: s3ErrorXML("NoSuchResource", "policy 'tf-test' does not exist")}},
+		},
+		{
+			name:        "real server error is reported",
+			routes:      []requestRoute{{status: http.StatusForbidden, body: s3ErrorXML("AccessDenied", "delete exploded")}},
+			wantSummary: "Error deleting policy",
+			wantDetail:  "delete exploded",
+		},
+	}
+
+	for _, tc := range deleteCases {
+		t.Run("delete: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewPolicyResource(), client)
+
+			resp := h.delete(state("tf-test"))
+
+			if tc.wantSummary == "" {
+				requireNoDiagnostics(t, resp.Diagnostics)
+				return
+			}
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+		})
+	}
+
+	createCases := []struct {
+		name        string
+		routes      []requestRoute
+		plan        *policyResourceModel
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			name:        "rejected payload reports the server error and writes no state",
+			routes:      []requestRoute{{method: http.MethodPut, pathContains: "add-canned-policy", status: http.StatusBadRequest, body: s3ErrorXML("InvalidArgument", "invalid policy document")}},
+			plan:        &policyResourceModel{Name: types.StringValue("tf-test"), Version: types.StringValue("2012-10-17"), Statement: []policyStatementModel{{Effect: "Allow", Action: []string{"s3:ListBucket"}}}},
+			wantSummary: "Error creating policy",
+			wantDetail:  "invalid policy document",
+		},
+	}
+
+	for _, tc := range createCases {
+		t.Run("create: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewPolicyResource(), client)
+
+			resp := h.create(tc.plan)
+
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+			h.assertNoPartialState(resp, tc.plan)
+		})
+	}
+
+	t.Run("configure: rejects foreign provider data", func(t *testing.T) {
+		h := newCRUDHarness(t, NewPolicyResource(), cannedClient(t, http.StatusOK, ""))
+
+		resp := h.configure("not-a-client")
+
+		assertErrorDiagnostic(t, resp.Diagnostics, "Unexpected Resource Configure Type", "Expected *AllClient, got: string.")
 	})
 }

@@ -14,17 +14,16 @@
 # minimum, kept half a point below the measurement so environment jitter (a new
 # `latest` image, a skip that depends on the server) cannot fail a run on its own.
 
-# Last measurement. Taken from the `Coverage` job of the pull request that raised
-# the floor, so it is the same environment the gate runs in.
-measured_total=83.5
-measured_provider=79.1
+# Last measurement.
+measured_total=88.3
+measured_provider=85.5
 measured_pkg_rustfs=97.8
-measured_commit=26fc70c
+measured_commit=b9b7a5a
 measured_date=2026-10-19
 
 # Enforced floor.
-floor_total=83.0
-floor_provider=78.5
+floor_total=87.8
+floor_provider=85.0
 floor_pkg_rustfs=97.3
 
 # Milestones tracked in the issue tracker (see .github/OPENSSF-BEST-PRACTICES.md).

@@ -6,6 +6,7 @@ package provider
 import (
 	"context"
 	"errors"
+	"net/http"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -375,4 +376,185 @@ func TestBucketReplicationResourceSchemaMinutesRequired(t *testing.T) {
 	if !thresholdMinutes.Required {
 		t.Error("rule.destination.metrics.event_threshold.minutes must be Required")
 	}
+}
+
+// TestBucketReplicationResourceLifecyclePaths covers the paths the acceptance
+// suite cannot reach with a live server: a replication configuration that
+// disappeared behind Terraform's back, a delete that arrives after the
+// configuration is already gone, and every failing API call in Create, Read and
+// Delete.
+func TestBucketReplicationResourceLifecyclePaths(t *testing.T) {
+	t.Parallel()
+
+	newModel := func() *bucketReplicationResourceModel {
+		return &bucketReplicationResourceModel{
+			Bucket: types.StringValue("tf-test"),
+			Role:   types.StringValue("arn:minio:replication::id:tf-test"),
+			Rule: []bucketReplicationRuleModel{{
+				Id:       types.StringValue("rule-1"),
+				Priority: types.Int64Value(1),
+				Status:   types.StringValue("Enabled"),
+				Destination: &bucketReplicationDestinationModel{
+					Bucket: types.StringValue("arn:aws:s3:::dest"),
+				},
+			}},
+		}
+	}
+
+	readCases := []struct {
+		name        string
+		routes      []requestRoute
+		wantRemoved bool
+		wantSummary string
+		wantDetail  string
+		wantServer  string
+	}{
+		{
+			// S3 reports a missing replication sub-resource as
+			// ReplicationConfigurationNotFoundError.
+			name:        "absent replication configuration is removed from state",
+			routes:      []requestRoute{{method: http.MethodGet, status: http.StatusNotFound, body: s3ErrorXML("ReplicationConfigurationNotFoundError", "The replication configuration was not found")}},
+			wantRemoved: true,
+		},
+		{
+			// Live RustFS answers 404 NoSuchBucket when the bucket itself is gone.
+			name:        "missing bucket is removed from state",
+			routes:      []requestRoute{{method: http.MethodGet, status: http.StatusNotFound, body: s3ErrorXML("NoSuchBucket", "The specified bucket does not exist")}},
+			wantRemoved: true,
+		},
+		{
+			// GetBucketReplication can also succeed while reporting no
+			// configuration at all; readState maps that shape onto the same
+			// absent-configuration sentinel.
+			name: "empty replication configuration body is removed from state",
+			routes: []requestRoute{{
+				method: http.MethodGet,
+				status: http.StatusOK,
+				body:   `<ReplicationConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"></ReplicationConfiguration>`,
+			}},
+			wantRemoved: true,
+		},
+		{
+			name:        "server error keeps state and names the failing call",
+			routes:      []requestRoute{{method: http.MethodGet, status: http.StatusForbidden, body: s3ErrorXML("AccessDenied", "access denied")}},
+			wantSummary: "Error reading bucket replication",
+			wantDetail:  "Could not read: ",
+			wantServer:  "access denied",
+		},
+	}
+
+	for _, tc := range readCases {
+		t.Run("read: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewBucketReplicationResource(), client)
+
+			resp := h.read(newModel())
+
+			if tc.wantRemoved {
+				requireNoDiagnostics(t, resp.Diagnostics)
+				assertStateRemoved(t, resp.State)
+				return
+			}
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+			assertDiagnosticDetail(t, resp.Diagnostics, tc.wantServer)
+			assertStatePresent(t, resp.State)
+		})
+	}
+
+	deleteCases := []struct {
+		name       string
+		routes     []requestRoute
+		wantTitle  string
+		wantDetail string
+		wantServer string
+	}{
+		{
+			name:   "already deleted replication configuration is not an error",
+			routes: []requestRoute{{method: http.MethodDelete, status: http.StatusNotFound, body: s3ErrorXML("ReplicationConfigurationNotFoundError", "The replication configuration was not found")}},
+		},
+		{
+			name:   "missing bucket is not an error",
+			routes: []requestRoute{{method: http.MethodDelete, status: http.StatusNotFound, body: s3ErrorXML("NoSuchBucket", "The specified bucket does not exist")}},
+		},
+		{
+			name:       "real server error is reported",
+			routes:     []requestRoute{{method: http.MethodDelete, status: http.StatusForbidden, body: s3ErrorXML("AccessDenied", "access denied")}},
+			wantTitle:  "Error removing bucket replication",
+			wantDetail: "Could not remove: ",
+			wantServer: "access denied",
+		},
+	}
+
+	for _, tc := range deleteCases {
+		t.Run("delete: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewBucketReplicationResource(), client)
+
+			resp := h.delete(newModel())
+
+			if tc.wantTitle == "" {
+				requireNoDiagnostics(t, resp.Diagnostics)
+				return
+			}
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantTitle, tc.wantDetail)
+			assertDiagnosticDetail(t, resp.Diagnostics, tc.wantServer)
+		})
+	}
+
+	createCases := []struct {
+		name       string
+		routes     []requestRoute
+		plan       *bucketReplicationResourceModel
+		wantTitle  string
+		wantDetail string
+		wantServer string
+	}{
+		{
+			// Missing prerequisite: the destination bucket does not exist.
+			name: "rejected destination reports the server error and writes no state",
+			routes: []requestRoute{{
+				method: http.MethodPut,
+				status: http.StatusBadRequest,
+				body:   s3ErrorXML("InvalidRequest", "Destination bucket does not exist"),
+			}},
+			plan:       newModel(),
+			wantTitle:  "Error setting bucket replication",
+			wantDetail: "Could not set replication: ",
+			wantServer: "Destination bucket does not exist",
+		},
+		{
+			// Missing prerequisite: the source bucket is gone.
+			name: "missing bucket reports the server error and writes no state",
+			routes: []requestRoute{{
+				method: http.MethodPut,
+				status: http.StatusNotFound,
+				body:   s3ErrorXML("NoSuchBucket", "The specified bucket does not exist"),
+			}},
+			plan:       newModel(),
+			wantTitle:  "Error setting bucket replication",
+			wantDetail: "Could not set replication: ",
+			wantServer: "NoSuchBucket",
+		},
+	}
+
+	for _, tc := range createCases {
+		t.Run("create: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewBucketReplicationResource(), client)
+
+			resp := h.create(tc.plan)
+
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantTitle, tc.wantDetail)
+			assertDiagnosticDetail(t, resp.Diagnostics, tc.wantServer)
+			h.assertNoPartialState(resp, tc.plan)
+		})
+	}
+
+	t.Run("configure: rejects foreign provider data", func(t *testing.T) {
+		h := newCRUDHarness(t, NewBucketReplicationResource(), cannedClient(t, http.StatusOK, ""))
+
+		resp := h.configure("not-a-client")
+
+		assertErrorDiagnostic(t, resp.Diagnostics, "Unexpected Resource Configure Type", "Expected *AllClient, got: string.")
+	})
 }

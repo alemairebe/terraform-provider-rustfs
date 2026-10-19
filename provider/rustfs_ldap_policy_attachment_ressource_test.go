@@ -358,7 +358,11 @@ func TestLDAPPolicyAttachmentResourceDelete(t *testing.T) {
 func TestLDAPPolicyAttachmentResourceDeleteError(t *testing.T) {
 	r := &LDAPPolicyAttachmentRessource{}
 	sch := resourceSchemaOf(t, r)
-	srv, _ := newRecorderServer(t, http.StatusBadRequest, `<Error><Code>InvalidArgument</Code><Message>user not exist</Message></Error>`)
+	// A real failure: `400 InvalidArgument "user not exist"` is no longer an
+	// error here — an LDAP entity that is gone cannot still carry the policy,
+	// so the detach is already satisfied (see TestLdapPolicyAttachmentRessourceLifecyclePaths,
+	// which pins that case alongside the unrelated-message one).
+	srv, _ := newRecorderServer(t, http.StatusForbidden, `<Error><Code>AccessDenied</Code><Message>nope</Message></Error>`)
 	r.client = newUnitAllClient(srv)
 
 	state := ldapPolicyPlan(ldapSAUserDN, "readwrite", types.BoolValue(false))
@@ -439,4 +443,145 @@ func TestLDAPPolicyAttachmentResourceImportState(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestLdapPolicyAttachmentRessourceLifecyclePaths covers the paths the
+// acceptance suite cannot reach with a live server: the idempotent delete of
+// an LDAP entity that is already gone, and every failing API call in Create
+// and Delete. The admin API exposes no per-target read-back for LDAP policy
+// attachments, so Read cannot observe a missing entity and is covered for the
+// state it does preserve.
+func TestLdapPolicyAttachmentRessourceLifecyclePaths(t *testing.T) {
+	t.Parallel()
+
+	t.Run("read: preserves state because no read-back endpoint exists", func(t *testing.T) {
+		client, rec := routedClient(t)
+		h := newCRUDHarness(t, NewLDAPPolicyAttachmentRessource(), client)
+
+		resp := h.read(&LDAPPolicyAttachmentRessourceModel{
+			UserOrGroup: types.StringValue("uid=tf-test,ou=people,dc=example,dc=com"),
+			Policy:      types.StringValue("tf-test-policy"),
+			IsGroup:     types.BoolValue(false),
+			ID:          types.StringValue("uid=tf-test,ou=people,dc=example,dc=com/tf-test-policy"),
+		})
+
+		rec.assertNoRequest(t, "policy/")
+		requireNoDiagnostics(t, resp.Diagnostics)
+		assertStatePresent(t, resp.State)
+		assertStateString(t, resp.State, path.Root("id"), "uid=tf-test,ou=people,dc=example,dc=com/tf-test-policy")
+	})
+
+	deleteCases := []struct {
+		name        string
+		routes      []requestRoute
+		isGroup     bool
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			// The endpoint answers 400 InvalidArgument "user not exist" for an
+			// LDAP user it does not have (probed against RustFS latest).
+			name: "already deleted LDAP user is not an error",
+			routes: []requestRoute{{
+				method: http.MethodPost, pathContains: "policy/detach",
+				status: http.StatusBadRequest, body: s3ErrorXML("InvalidArgument", "user not exist"),
+			}},
+		},
+		{
+			// An LDAP group that is gone answers 404 NoSuchResource (probed
+			// against RustFS latest).
+			name: "already deleted LDAP group is not an error",
+			routes: []requestRoute{{
+				method: http.MethodPost, pathContains: "policy/detach",
+				status: http.StatusNotFound, body: s3ErrorXML("NoSuchResource", "group 'cn=tf-test' does not exist"),
+			}},
+			isGroup: true,
+		},
+		{
+			// Another InvalidArgument message is a real failure and must not
+			// be swallowed as "already gone".
+			name: "unrelated invalid argument is reported",
+			routes: []requestRoute{{
+				method: http.MethodPost, pathContains: "policy/detach",
+				status: http.StatusBadRequest, body: s3ErrorXML("InvalidArgument", "invalid policy name"),
+			}},
+			wantSummary: "Error detaching policy from LDAP entity",
+			wantDetail:  "Could not detach policy: ",
+		},
+		{
+			name: "real server error is reported",
+			routes: []requestRoute{{
+				method: http.MethodPost, pathContains: "policy/detach",
+				status: http.StatusForbidden, body: s3ErrorXML("AccessDenied", "nope"),
+			}},
+			wantSummary: "Error detaching policy from LDAP entity",
+			wantDetail:  "Could not detach policy: ",
+		},
+	}
+
+	for _, tc := range deleteCases {
+		t.Run("delete: "+tc.name, func(t *testing.T) {
+			client, rec := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewLDAPPolicyAttachmentRessource(), client)
+
+			resp := h.delete(&LDAPPolicyAttachmentRessourceModel{
+				UserOrGroup: types.StringValue("uid=tf-test,ou=people,dc=example,dc=com"),
+				Policy:      types.StringValue("tf-test-policy"),
+				IsGroup:     types.BoolValue(tc.isGroup),
+				ID:          types.StringValue("uid=tf-test,ou=people,dc=example,dc=com/tf-test-policy"),
+			})
+
+			rec.assertRequest(t, "policy/detach")
+			if tc.wantSummary == "" {
+				requireNoDiagnostics(t, resp.Diagnostics)
+				return
+			}
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+		})
+	}
+
+	createCases := []struct {
+		name        string
+		routes      []requestRoute
+		plan        *LDAPPolicyAttachmentRessourceModel
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			name: "rejected attach reports a diagnostic and writes no state",
+			routes: []requestRoute{{
+				method: http.MethodPost, pathContains: "policy/attach",
+				status: http.StatusBadRequest, body: s3ErrorXML("InvalidArgument", "user not exist"),
+			}},
+			plan: &LDAPPolicyAttachmentRessourceModel{
+				UserOrGroup: types.StringValue("uid=tf-test,ou=people,dc=example,dc=com"),
+				Policy:      types.StringValue("tf-test-policy"),
+				IsGroup:     types.BoolValue(false),
+				ID:          types.StringNull(),
+			},
+			wantSummary: "Error attaching policy to LDAP entity",
+			wantDetail:  "Could not attach policy: ",
+		},
+	}
+
+	for _, tc := range createCases {
+		t.Run("create: "+tc.name, func(t *testing.T) {
+			client, rec := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewLDAPPolicyAttachmentRessource(), client)
+
+			resp := h.create(tc.plan)
+
+			rec.assertRequest(t, "policy/attach")
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+			h.assertNoPartialState(resp, tc.plan)
+		})
+	}
+
+	t.Run("configure: rejects foreign provider data", func(t *testing.T) {
+		h := newCRUDHarness(t, NewLDAPPolicyAttachmentRessource(), cannedClient(t, http.StatusOK, ""))
+
+		resp := h.configure("not-a-client")
+
+		assertErrorDiagnostic(t, resp.Diagnostics, "Unexpected Resource Configure Type", "Expected *AllClient, got: string.")
+	})
 }

@@ -32,7 +32,7 @@ resource "rustfs_user" "example" {
 ### Required
 
 - `access_key` (String) Access Key
-- `secret_key` (String) Secret Key. Changing this rotates the secret in place.
+- `secret_key` (String, Sensitive) Secret Key. Changing this rotates the secret in place.
 
 ### Optional
 

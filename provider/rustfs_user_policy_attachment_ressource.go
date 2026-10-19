@@ -5,6 +5,7 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -115,10 +116,12 @@ func (r *UserPolicyAttachmentRessource) Create(ctx context.Context, req resource
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
-// Read keeps the state honest. The admin API reports a user's whole policy
-// list, so a policy that is missing from that list was detached outside
-// Terraform and the attachment is dropped from state (and planned again); a
-// user that no longer exists drops its attachments with it.
+// Read probes the user the attachment targets. The admin API answers 404
+// NoSuchResource for a user it does not have, and user-info returns the user's
+// whole policy list in policyName as one comma-separated string (what the
+// RustFS console splits to render a user's policies), so a policy missing from
+// that list was detached outside Terraform and the attachment is dropped from
+// state.
 func (r *UserPolicyAttachmentRessource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
 	var state UserPolicyAttachmentRessourceModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
@@ -129,9 +132,9 @@ func (r *UserPolicyAttachmentRessource) Read(ctx context.Context, req resource.R
 	user := state.User.ValueString()
 	policy := state.Policy.ValueString()
 
-	info, err := r.client.RustClient.ReadUserAccount(user)
+	account, err := r.client.RustClient.ReadUserAccount(user)
 	if err != nil {
-		if rustfs.IsAPIErrorCode(err, "NoSuchResource") {
+		if isMissingUserError(err) {
 			// The user is gone, so the attachment is gone with it.
 			resp.State.RemoveResource(ctx)
 			return
@@ -143,9 +146,9 @@ func (r *UserPolicyAttachmentRessource) Read(ctx context.Context, req resource.R
 		return
 	}
 
-	if !slices.Contains(userAttachedPolicies(info.Policy), policy) {
-		tflog.Trace(ctx, "user no longer carries the attached policy", map[string]any{
-			"user":   user,
+	if !slices.Contains(splitPolicyNames(account.Policy), policy) {
+		tflog.Trace(ctx, "user policy attachment no longer attached", map[string]any{
+			// The user is an access key, so only the policy name is logged.
 			"policy": policy,
 		})
 		resp.State.RemoveResource(ctx)
@@ -154,18 +157,6 @@ func (r *UserPolicyAttachmentRessource) Read(ctx context.Context, req resource.R
 
 	state.ID = types.StringValue(user + "/" + policy)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
-}
-
-// userAttachedPolicies splits the comma-separated policy list user-info
-// reports for a user, dropping empty entries.
-func userAttachedPolicies(list string) []string {
-	policies := []string{}
-	for _, name := range strings.Split(list, ",") {
-		if name = strings.TrimSpace(name); name != "" {
-			policies = append(policies, name)
-		}
-	}
-	return policies
 }
 
 // Update re-attaches the policy. All attributes are RequiresReplace, so
@@ -201,6 +192,13 @@ func (r *UserPolicyAttachmentRessource) Delete(ctx context.Context, req resource
 
 	err := r.client.RustClient.DetachUserPolicy(data.User.ValueString(), data.Policy.ValueString())
 	if err != nil {
+		// A user that no longer exists cannot still carry the policy, so the
+		// attachment is already gone. The builtin detach endpoint answers a
+		// missing user with 400 InvalidArgument "user not exist" (probed
+		// against RustFS latest); newer builds answer 404 NoSuchResource.
+		if isMissingUserError(err) {
+			return
+		}
 		resp.Diagnostics.AddError(
 			"Error detaching policy from user",
 			"Could not detach policy: "+err.Error(),
@@ -208,6 +206,36 @@ func (r *UserPolicyAttachmentRessource) Delete(ctx context.Context, req resource
 		return
 	}
 	tflog.Trace(ctx, "detached policy from user")
+}
+
+// isMissingUserError reports whether err is the admin API's answer for a user
+// the server does not have. The structured signal differs per endpoint: reads
+// answer 404 NoSuchResource, while the builtin policy attach/detach endpoints
+// answer 400 InvalidArgument with the message "user not exist". The code alone
+// is not enough there, because InvalidArgument also covers unrelated bad
+// requests, so the endpoint's own missing-user text is matched too.
+func isMissingUserError(err error) bool {
+	if rustfs.IsAPIErrorCode(err, "NoSuchResource") {
+		return true
+	}
+	var apiErr *rustfs.APIError
+	return errors.As(err, &apiErr) &&
+		apiErr.Code == "InvalidArgument" &&
+		strings.EqualFold(strings.TrimSpace(apiErr.Message), "user not exist")
+}
+
+// splitPolicyNames splits the admin API's comma-separated policy field into
+// names. The same field shape is used by GetGroup (GroupInfo.Policy) and
+// user-info (UserAccount.Policy), whose whole value the RustFS console splits
+// on "," to render a user's policy list.
+func splitPolicyNames(policies string) []string {
+	names := []string{}
+	for _, name := range strings.Split(policies, ",") {
+		if name = strings.TrimSpace(name); name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 // ImportState supports importing an attachment using the composite

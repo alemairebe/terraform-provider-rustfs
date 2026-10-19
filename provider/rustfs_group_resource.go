@@ -5,8 +5,10 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/caberdo/terraform-provider-rustfs/pkg/rustfs"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -279,46 +281,64 @@ func (r *GroupResource) Delete(ctx context.Context, req resource.DeleteRequest, 
 
 	name := data.Name.ValueString()
 
-	info, err := r.client.RustClient.GetGroup(name)
-	if err != nil {
-		if rustfs.IsAPIErrorCode(err, "NoSuchResource", "NoSuchGroup") {
+	if err := r.client.RustClient.DeleteGroup(name); err != nil {
+		switch {
+		case rustfs.IsAPIErrorCode(err, "NoSuchResource", "NoSuchGroup"):
 			// Already gone, so there is nothing left to destroy.
 			return
-		}
-		resp.Diagnostics.AddError(
-			"Error deleting group",
-			"Could not read group before deleting: "+err.Error(),
-		)
-		return
-	}
-
-	// The admin API refuses to delete a group that still has members, and
-	// Terraform destroys the group before the users it references, so every
-	// member is detached first.
-	if len(info.Members) > 0 {
-		if err := r.client.RustClient.UpdateGroupMembers(rustfs.GroupAddRemove{
-			Group:    name,
-			Members:  info.Members,
-			IsRemove: true,
-		}); err != nil {
+		case isGroupNotEmpty(err):
+			// The admin API refuses to delete a group that still has members,
+			// and Terraform destroys the group before the users it references,
+			// so every member is detached and the delete is retried once.
+			info, readErr := r.client.RustClient.GetGroup(name)
+			if readErr != nil {
+				resp.Diagnostics.AddError(
+					"Error deleting group",
+					"Could not read group before detaching its members: "+readErr.Error(),
+				)
+				return
+			}
+			if len(info.Members) > 0 {
+				if err := r.client.RustClient.UpdateGroupMembers(rustfs.GroupAddRemove{
+					Group:    name,
+					Members:  info.Members,
+					IsRemove: true,
+				}); err != nil {
+					resp.Diagnostics.AddError(
+						"Error deleting group",
+						"Could not remove group members: "+err.Error(),
+					)
+					return
+				}
+			}
+			if err := r.client.RustClient.DeleteGroup(name); err != nil &&
+				!rustfs.IsAPIErrorCode(err, "NoSuchResource", "NoSuchGroup") {
+				resp.Diagnostics.AddError(
+					"Error deleting group",
+					"Could not delete group: "+err.Error(),
+				)
+			}
+			return
+		default:
 			resp.Diagnostics.AddError(
 				"Error deleting group",
-				"Could not remove group members: "+err.Error(),
+				"Could not delete group: "+err.Error(),
 			)
 			return
 		}
 	}
+}
 
-	if err := r.client.RustClient.DeleteGroup(name); err != nil {
-		if rustfs.IsAPIErrorCode(err, "NoSuchResource", "NoSuchGroup") {
-			return
-		}
-		resp.Diagnostics.AddError(
-			"Error deleting group",
-			"Could not delete group: "+err.Error(),
-		)
-		return
-	}
+// isGroupNotEmpty reports whether err says the group still has members, which is
+// the only reason the admin API refuses to delete it. It answers 400
+// InvalidRequest with the message "group is not empty"; the code alone is not
+// enough because RustFS reuses InvalidRequest for unrelated request failures,
+// so the endpoint's own wording is required as well.
+func isGroupNotEmpty(err error) bool {
+	var apiErr *rustfs.APIError
+	return errors.As(err, &apiErr) &&
+		apiErr.Code == "InvalidRequest" &&
+		strings.Contains(apiErr.Message, "group is not empty")
 }
 
 func (r *GroupResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {

@@ -6,6 +6,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/plancheck"
@@ -164,4 +166,132 @@ func newTestS3Client(endpoint, accessKey, secretKey string) (*s3.Client, error) 
 		o.BaseEndpoint = aws.String(endpointURL)
 		o.UsePathStyle = true
 	}), nil
+}
+
+// TestBucketResourceLifecyclePaths covers the paths the acceptance suite cannot
+// reach with a live server: an object that disappeared behind Terraform's back,
+// a delete that arrives after the object is already gone, and every failing API
+// call in Create, Read and Delete.
+func TestBucketResourceLifecyclePaths(t *testing.T) {
+	t.Parallel()
+
+	readCases := []struct {
+		name        string
+		routes      []requestRoute
+		wantRemoved bool
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			name:        "not found status removes the resource from state",
+			routes:      []requestRoute{{status: http.StatusNotFound, body: s3ErrorXML("NoSuchBucket", "The specified bucket does not exist")}},
+			wantRemoved: true,
+		},
+		{
+			name:        "server error keeps state and names the failing call",
+			routes:      []requestRoute{{status: http.StatusForbidden, body: s3ErrorXML("AccessDenied", "nope")}},
+			wantSummary: "Error reading bucket",
+			wantDetail:  "HeadBucket",
+		},
+	}
+
+	for _, tc := range readCases {
+		t.Run("read: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewBucketResource(), client)
+
+			resp := h.read(&bucketResourceModel{Name: types.StringValue("tf-test")})
+
+			if tc.wantRemoved {
+				requireNoDiagnostics(t, resp.Diagnostics)
+				assertStateRemoved(t, resp.State)
+				return
+			}
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+			assertStatePresent(t, resp.State)
+		})
+	}
+
+	deleteCases := []struct {
+		name        string
+		routes      []requestRoute
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			name:   "already deleted bucket is not an error",
+			routes: []requestRoute{{status: http.StatusNotFound, body: s3ErrorXML("NoSuchBucket", "gone")}},
+		},
+		{
+			name:        "real server error is reported",
+			routes:      []requestRoute{{status: http.StatusForbidden, body: s3ErrorXML("AccessDenied", "nope")}},
+			wantSummary: "Error deleting bucket",
+			wantDetail:  "DeleteBucket",
+		},
+	}
+
+	for _, tc := range deleteCases {
+		t.Run("delete: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewBucketResource(), client)
+
+			resp := h.delete(&bucketResourceModel{Name: types.StringValue("tf-test")})
+
+			if tc.wantSummary == "" {
+				requireNoDiagnostics(t, resp.Diagnostics)
+				return
+			}
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+		})
+	}
+
+	createCases := []struct {
+		name        string
+		routes      []requestRoute
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			name: "rejected payload reports the server error and writes no state",
+			routes: []requestRoute{
+				{method: http.MethodHead, status: http.StatusNotFound, body: s3ErrorXML("NoSuchBucket", "gone")},
+				{method: http.MethodPut, status: http.StatusConflict, body: s3ErrorXML("BucketAlreadyExists", "create exploded")},
+			},
+			wantSummary: "Error creating bucket",
+			wantDetail:  "create exploded",
+		},
+		{
+			name:        "existing bucket is refused",
+			routes:      []requestRoute{{method: http.MethodHead, status: http.StatusOK}},
+			wantSummary: "Error creating bucket",
+			wantDetail:  "Already existing",
+		},
+		{
+			name:        "failed existence check is reported",
+			routes:      []requestRoute{{method: http.MethodHead, status: http.StatusForbidden, body: s3ErrorXML("AccessDenied", "nope")}},
+			wantSummary: "Error checking bucket",
+			wantDetail:  "HeadBucket",
+		},
+	}
+
+	for _, tc := range createCases {
+		t.Run("create: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewBucketResource(), client)
+			plan := &bucketResourceModel{Name: types.StringValue("tf-test")}
+
+			resp := h.create(plan)
+
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+			h.assertNoPartialState(resp, plan)
+		})
+	}
+
+	t.Run("configure: rejects foreign provider data", func(t *testing.T) {
+		h := newCRUDHarness(t, NewBucketResource(), cannedClient(t, http.StatusOK, ""))
+
+		resp := h.configure("not-a-client")
+
+		assertErrorDiagnostic(t, resp.Diagnostics, "Unexpected Resource Configure Type", "Expected *AllClient, got: string.")
+	})
 }

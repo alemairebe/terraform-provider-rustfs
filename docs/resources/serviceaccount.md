@@ -39,7 +39,7 @@ resource "rustfs_serviceaccount" "ci_token" {
 
 - `access_key` (String) Access Key
 - `name` (String) Visible name, only for viewing
-- `secret_key` (String) Secret Key
+- `secret_key` (String, Sensitive) Secret Key
 
 ### Optional
 

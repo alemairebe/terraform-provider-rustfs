@@ -6,6 +6,7 @@ package provider
 import (
 	"context"
 	"errors"
+	"net/http"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -219,5 +220,163 @@ func TestBucketEncryptionAbsentConfigurationDetection(t *testing.T) {
 	}
 	if isBucketSubresourceAbsent(errors.New("AccessDenied"), code) {
 		t.Error("unrelated errors must not be treated as absent")
+	}
+}
+
+// TestBucketEncryptionResourceLifecyclePaths covers the paths the acceptance
+// suite cannot reach with a live server: an encryption configuration that
+// disappeared behind Terraform's back, a delete that arrives after the
+// configuration (or the whole bucket) is already gone, and every failing API
+// call in Create, Read and Delete.
+func TestBucketEncryptionResourceLifecyclePaths(t *testing.T) {
+	t.Parallel()
+
+	// A live RustFS answers 404 NoSuchBucket for GetBucketEncryption on a
+	// missing bucket; AWS S3 and MinIO-derived servers answer
+	// ServerSideEncryptionConfigurationNotFoundError when only the
+	// configuration is absent.
+	readCases := []struct {
+		name        string
+		routes      []requestRoute
+		wantRemoved bool
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			name:        "missing configuration removes the resource from state",
+			routes:      []requestRoute{{status: http.StatusNotFound, body: s3ErrorXML("ServerSideEncryptionConfigurationNotFoundError", "The server side encryption configuration was not found")}},
+			wantRemoved: true,
+		},
+		{
+			name:        "missing encryption configuration code removes the resource from state",
+			routes:      []requestRoute{{status: http.StatusNotFound, body: s3ErrorXML("NoSuchEncryptionConfiguration", "The server side encryption configuration was not found")}},
+			wantRemoved: true,
+		},
+		{
+			name:        "missing bucket removes the resource from state",
+			routes:      []requestRoute{{status: http.StatusNotFound, body: s3ErrorXML("NoSuchBucket", "The specified bucket does not exist")}},
+			wantRemoved: true,
+		},
+		{
+			name:        "server error keeps state and names the failing call",
+			routes:      []requestRoute{{status: http.StatusForbidden, body: s3ErrorXML("AccessDenied", "nope")}},
+			wantSummary: "Error reading bucket encryption",
+			wantDetail:  "Could not read bucket encryption: ",
+		},
+	}
+
+	for _, tc := range readCases {
+		t.Run("read: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewBucketEncryptionResource(), client)
+
+			resp := h.read(&BucketEncryptionResourceModel{Bucket: types.StringValue("tf-test")})
+
+			if tc.wantRemoved {
+				requireNoDiagnostics(t, resp.Diagnostics)
+				assertStateRemoved(t, resp.State)
+				return
+			}
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+			assertStatePresent(t, resp.State)
+		})
+	}
+
+	deleteCases := []struct {
+		name        string
+		routes      []requestRoute
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			name:   "already deleted bucket is not an error",
+			routes: []requestRoute{{status: http.StatusNotFound, body: s3ErrorXML("NoSuchBucket", "The specified bucket does not exist")}},
+		},
+		{
+			name:   "bucket without encryption is not an error",
+			routes: []requestRoute{{status: http.StatusNotFound, body: s3ErrorXML("ServerSideEncryptionConfigurationNotFoundError", "The server side encryption configuration was not found")}},
+		},
+		{
+			name:        "real server error is reported",
+			routes:      []requestRoute{{status: http.StatusForbidden, body: s3ErrorXML("AccessDenied", "nope")}},
+			wantSummary: "Error removing bucket encryption",
+			wantDetail:  "Could not remove bucket encryption: ",
+		},
+	}
+
+	for _, tc := range deleteCases {
+		t.Run("delete: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewBucketEncryptionResource(), client)
+
+			resp := h.delete(&BucketEncryptionResourceModel{Bucket: types.StringValue("tf-test")})
+
+			if tc.wantSummary == "" {
+				requireNoDiagnostics(t, resp.Diagnostics)
+				return
+			}
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+		})
+	}
+
+	createCases := []struct {
+		name        string
+		routes      []requestRoute
+		plan        *BucketEncryptionResourceModel
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			name: "rejected payload reports the server error and writes no state",
+			routes: []requestRoute{
+				{method: http.MethodPut, status: http.StatusConflict, body: s3ErrorXML("ServerSideEncryptionConfigurationNotFoundError", "encryption rejected")},
+			},
+			plan:        encryptionPlan("tf-test"),
+			wantSummary: "Error setting bucket encryption",
+			wantDetail:  "encryption rejected",
+		},
+		{
+			name: "denied write reports the server error and writes no state",
+			routes: []requestRoute{
+				{method: http.MethodPut, status: http.StatusForbidden, body: s3ErrorXML("AccessDenied", "nope")},
+			},
+			plan:        encryptionPlan("tf-test"),
+			wantSummary: "Error setting bucket encryption",
+			wantDetail:  "Could not set bucket encryption: ",
+		},
+	}
+
+	for _, tc := range createCases {
+		t.Run("create: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewBucketEncryptionResource(), client)
+
+			resp := h.create(tc.plan)
+
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+			h.assertNoPartialState(resp, tc.plan)
+		})
+	}
+
+	t.Run("configure: rejects foreign provider data", func(t *testing.T) {
+		h := newCRUDHarness(t, NewBucketEncryptionResource(), cannedClient(t, http.StatusOK, ""))
+
+		resp := h.configure("not-a-client")
+
+		assertErrorDiagnostic(t, resp.Diagnostics, "Unexpected Resource Configure Type", "Expected *AllClient, got: string.")
+	})
+}
+
+// encryptionPlan is a minimal valid plan: PutBucketEncryption needs the bucket
+// and at least one rule, and the write-only request fields stay null.
+func encryptionPlan(bucket string) *BucketEncryptionResourceModel {
+	return &BucketEncryptionResourceModel{
+		Bucket: types.StringValue(bucket),
+		Rule: []BucketEncryptionRuleModel{{
+			ApplyServerSideEncryptionByDefault: &BucketEncryptionByDefaultModel{
+				SSEAlgorithm: types.StringValue("AES256"),
+			},
+			BucketKeyEnabled: types.BoolNull(),
+		}},
 	}
 }

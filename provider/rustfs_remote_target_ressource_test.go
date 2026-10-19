@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"regexp"
 	"sort"
@@ -17,8 +18,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/caberdo/terraform-provider-rustfs/pkg/rustfs"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	fwresource "github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/plancheck"
@@ -453,4 +456,212 @@ resource "rustfs_remote_target" "test" {
   target_bucket = "%s"
 %s}
 `, peer.endpoint, accessKey, secretKey, secure, region, srcBucket, dstBucket, pathAttribute)
+}
+
+var (
+	lifecycleRemoteTargetAccessKey = unitTestCredential("RUSTFS_TEST_REMOTE_ACCESS_KEY", 'n')
+	lifecycleRemoteTargetSecretKey = unitTestCredential("RUSTFS_TEST_REMOTE_SECRET_KEY", 'o')
+)
+
+// TestRemoteTargetRessourceLifecyclePaths covers the paths the acceptance suite
+// cannot reach with a live server: a target that disappeared behind
+// Terraform's back, a destroy that arrives after the target (or its whole
+// source bucket) is already gone, and every failing API call in Create, Read
+// and Delete.
+//
+// Live evidence (RustFS latest at 127.0.0.1:9301, probed 2026-10-19):
+// list-remote-targets and remove-remote-target for a bucket that does not
+// exist both answer 404 NoSuchBucket, so a missing source bucket is the
+// provider's missing-target signal for this resource.
+func TestRemoteTargetRessourceLifecyclePaths(t *testing.T) {
+	t.Parallel()
+
+	readCases := []struct {
+		name        string
+		routes      []requestRoute
+		wantRemoved bool
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			// The list endpoint answers 200 with an empty array for a bucket
+			// that holds no remote target.
+			name: "target absent from the list is removed from state",
+			routes: []requestRoute{{
+				method: http.MethodGet, pathContains: "list-remote-targets",
+				status: http.StatusOK, body: `[]`,
+			}},
+			wantRemoved: true,
+		},
+		{
+			// The source bucket is gone, so the target registered on it is
+			// gone too: plan a recreation instead of failing the refresh.
+			name: "missing bucket is removed from state",
+			routes: []requestRoute{{
+				method: http.MethodGet, pathContains: "list-remote-targets",
+				status: http.StatusNotFound, body: s3ErrorXML("NoSuchBucket", "The specified bucket does not exist"),
+			}},
+			wantRemoved: true,
+		},
+		{
+			name:        "server error keeps state and names the failing call",
+			routes:      []requestRoute{{status: http.StatusForbidden, body: s3ErrorXML("AccessDenied", "nope")}},
+			wantSummary: "Error listing remote targets",
+			wantDetail:  "AccessDenied",
+		},
+	}
+
+	for _, tc := range readCases {
+		t.Run("read: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewRemoteTargetRessource(), client)
+
+			resp := h.read(&RemoteTargetRessourceModel{
+				Bucket: types.StringValue("tf-test"),
+				Arn:    types.StringValue("arn:rustfs:replication::tf-test"),
+			})
+
+			if tc.wantRemoved {
+				requireNoDiagnostics(t, resp.Diagnostics)
+				assertStateRemoved(t, resp.State)
+				return
+			}
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+			assertStatePresent(t, resp.State)
+		})
+	}
+
+	t.Run("read: listed target mirrors the server record", func(t *testing.T) {
+		client, _ := routedClient(t, requestRoute{
+			method: http.MethodGet, pathContains: "list-remote-targets", status: http.StatusOK,
+			body: `[{"arn":"arn:rustfs:replication::tf-test","type":"replication","endpoint":"http://peer:9000","secure":false,"targetbucket":"dst-bucket","credentials":{"accessKey":"ak","secretKey":"sk"}}]`,
+		})
+		h := newCRUDHarness(t, NewRemoteTargetRessource(), client)
+
+		resp := h.read(&RemoteTargetRessourceModel{
+			Bucket: types.StringValue("tf-test"),
+			Arn:    types.StringValue("arn:rustfs:replication::tf-test"),
+		})
+
+		requireNoDiagnostics(t, resp.Diagnostics)
+		assertStatePresent(t, resp.State)
+		assertStateString(t, resp.State, path.Root("endpoint"), "http://peer:9000")
+		assertStateString(t, resp.State, path.Root("target_bucket"), "dst-bucket")
+	})
+
+	deleteCases := []struct {
+		name        string
+		routes      []requestRoute
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			// The server accepts the delete of a target that is not there.
+			name:   "already deleted target is not an error",
+			routes: []requestRoute{{method: http.MethodDelete, pathContains: "remove-remote-target", status: http.StatusOK}},
+		},
+		{
+			// The source bucket is gone (live evidence: 404 NoSuchBucket), so
+			// the target cannot survive on it and the delete is already
+			// satisfied.
+			name: "missing bucket is not an error",
+			routes: []requestRoute{{
+				method: http.MethodDelete, pathContains: "remove-remote-target",
+				status: http.StatusNotFound, body: s3ErrorXML("NoSuchBucket", "The specified bucket does not exist"),
+			}},
+		},
+		{
+			name: "real server error is reported",
+			routes: []requestRoute{{
+				method: http.MethodDelete, pathContains: "remove-remote-target",
+				status: http.StatusForbidden, body: s3ErrorXML("AccessDenied", "nope"),
+			}},
+			wantSummary: "Error deleting remote target",
+			wantDetail:  "AccessDenied",
+		},
+	}
+
+	for _, tc := range deleteCases {
+		t.Run("delete: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewRemoteTargetRessource(), client)
+
+			resp := h.delete(&RemoteTargetRessourceModel{
+				Bucket: types.StringValue("tf-test"),
+				Arn:    types.StringValue("arn:rustfs:replication::tf-test"),
+			})
+
+			if tc.wantSummary == "" {
+				requireNoDiagnostics(t, resp.Diagnostics)
+				return
+			}
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+		})
+	}
+
+	createCases := []struct {
+		name        string
+		routes      []requestRoute
+		plan        *RemoteTargetRessourceModel
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			// Live evidence: set-remote-target on a bucket that does not exist
+			// answers 404 NoSuchBucket.
+			name: "missing source bucket writes no state",
+			routes: []requestRoute{{
+				method: http.MethodPut, pathContains: "set-remote-target", status: http.StatusNotFound,
+				body: s3ErrorXML("NoSuchBucket", "The specified bucket does not exist"),
+			}},
+			plan:        remoteTargetPlan("tf-test", "replication"),
+			wantSummary: "Error creating remote target",
+			wantDetail:  "The specified bucket does not exist",
+		},
+		{
+			name: "unsupported target type writes no state",
+			routes: []requestRoute{{
+				method: http.MethodPut, pathContains: "set-remote-target", status: http.StatusBadRequest,
+				body: s3ErrorXML("InvalidArgument", "invalid remote target type: 'bogus'"),
+			}},
+			plan:        remoteTargetPlan("tf-test", "bogus"),
+			wantSummary: "Error creating remote target",
+			wantDetail:  "invalid remote target type: 'bogus'",
+		},
+	}
+
+	for _, tc := range createCases {
+		t.Run("create: "+tc.name, func(t *testing.T) {
+			client, rec := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewRemoteTargetRessource(), client)
+
+			resp := h.create(tc.plan)
+
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+			h.assertNoPartialState(resp, tc.plan)
+			rec.assertNoRequest(t, "list-remote-targets")
+		})
+	}
+
+	t.Run("configure: rejects foreign provider data", func(t *testing.T) {
+		h := newCRUDHarness(t, NewRemoteTargetRessource(), cannedClient(t, http.StatusOK, ""))
+
+		resp := h.configure("not-a-client")
+
+		assertErrorDiagnostic(t, resp.Diagnostics, "Unexpected Resource Configure Type", "Expected *AllClient, got: string.")
+	})
+}
+
+// remoteTargetPlan builds a complete remote-target plan: endpoint, access_key,
+// secret_key, bucket and target_bucket are required by the schema.
+func remoteTargetPlan(bucket, targetType string) *RemoteTargetRessourceModel {
+	return &RemoteTargetRessourceModel{
+		Type:         types.StringValue(targetType),
+		Endpoint:     types.StringValue("http://peer:9000"),
+		AccessKey:    types.StringValue(lifecycleRemoteTargetAccessKey),
+		SecretKey:    types.StringValue(lifecycleRemoteTargetSecretKey),
+		Secure:       types.BoolValue(false),
+		Bucket:       types.StringValue(bucket),
+		TargetBucket: types.StringValue("dst-bucket"),
+	}
 }

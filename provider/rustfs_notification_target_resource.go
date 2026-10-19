@@ -337,13 +337,17 @@ func (r *notificationTargetResource) Delete(ctx context.Context, req resource.De
 		return
 	}
 
+	// A reset of a target that is already gone is answered 200 OK: the RustFS
+	// handler removes the target's config entry when it is present and reports
+	// success either way (rustfs admin event handler, RemoveNotificationTarget
+	// -> remove_target_config, which only rewrites the config when the entry
+	// exists). Delete therefore stays idempotent without matching on the error
+	// text; 400 InvalidArgument for an unsupported target type and every other
+	// failure is a real error the user must see.
 	if err := r.client.RustClient.ResetNotificationTarget(
 		state.TargetType.ValueString(),
 		state.TargetName.ValueString(),
 	); err != nil {
-		if strings.Contains(err.Error(), "404") {
-			return
-		}
 		resp.Diagnostics.AddError(
 			"Error resetting notification target",
 			"Could not reset notification target, unexpected error: "+err.Error(),

@@ -6,11 +6,13 @@ package provider
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/caberdo/terraform-provider-rustfs/pkg/rustfs"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	frameworkresource "github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/defaults"
@@ -543,4 +545,203 @@ func testAccCheckAuditTargetDestroy(s *terraform.State) error {
 		}
 	}
 	return nil
+}
+
+// Migrated from main's read/delete/create error-path work.
+func TestAuditTargetRessourceLifecyclePaths(t *testing.T) {
+	t.Parallel()
+
+	readCases := []struct {
+		name        string
+		routes      []requestRoute
+		wantRemoved bool
+		wantState   bool
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			// The list endpoint answers 200 with an empty audit_endpoints
+			// array for a target that is gone, which is how the resource
+			// learns the target no longer exists.
+			name: "target absent from the list is removed from state",
+			routes: []requestRoute{{
+				method: http.MethodGet, pathContains: "audit/target/list",
+				status: http.StatusOK, body: `{"audit_endpoints":[]}`,
+			}},
+			wantRemoved: true,
+		},
+		{
+			name: "listed target keeps state and mirrors its health",
+			routes: []requestRoute{{
+				method: http.MethodGet, pathContains: "audit/target/list", status: http.StatusOK,
+				body: `{"audit_endpoints":[{"account_id":"tf-test","service":"webhook","status":"online","health_state":"online","health_reason":"reachable"}]}`,
+			}},
+			wantState: true,
+		},
+		{
+			name:        "server error keeps state and names the failing call",
+			routes:      []requestRoute{{status: http.StatusForbidden, body: s3ErrorXML("AccessDenied", "nope")}},
+			wantState:   true,
+			wantSummary: "Error listing audit targets",
+			wantDetail:  "Could not list audit targets, unexpected error: ",
+		},
+	}
+
+	for _, tc := range readCases {
+		t.Run("read: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewAuditTargetRessource(), client)
+
+			resp := h.read(&auditTargetRessourceModel{
+				TargetType: types.StringValue("audit_webhook"),
+				TargetName: types.StringValue("tf-test"),
+			})
+
+			if tc.wantRemoved {
+				requireNoDiagnostics(t, resp.Diagnostics)
+				assertStateRemoved(t, resp.State)
+				return
+			}
+			if tc.wantSummary != "" {
+				assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+				assertDiagnosticDetail(t, resp.Diagnostics, "AccessDenied")
+				assertStatePresent(t, resp.State)
+				return
+			}
+			requireNoDiagnostics(t, resp.Diagnostics)
+			assertStatePresent(t, resp.State)
+			assertStateString(t, resp.State, path.Root("health_state"), "online")
+			assertStateString(t, resp.State, path.Root("status"), "online")
+		})
+	}
+
+	deleteCases := []struct {
+		name        string
+		routes      []requestRoute
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			// A reset of a target that is already gone is 200 OK, so a
+			// repeated destroy stays a no-op instead of failing the apply.
+			name:   "already removed target is not an error",
+			routes: []requestRoute{{method: http.MethodDelete, pathContains: "/reset", status: http.StatusOK}},
+		},
+		{
+			// A disabled audit module is a real server error, not a missing
+			// target, and must reach the user.
+			name: "real server error is reported",
+			routes: []requestRoute{{
+				method: http.MethodDelete, pathContains: "/reset", status: http.StatusBadRequest,
+				body: s3ErrorXML("InvalidRequest", "audit module is disabled; enable the audit module first"),
+			}},
+			wantSummary: "Error resetting audit target",
+			wantDetail:  "Could not reset audit target, unexpected error: ",
+		},
+	}
+
+	for _, tc := range deleteCases {
+		t.Run("delete: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewAuditTargetRessource(), client)
+
+			resp := h.delete(&auditTargetRessourceModel{
+				TargetType: types.StringValue("audit_webhook"),
+				TargetName: types.StringValue("tf-test"),
+			})
+
+			if tc.wantSummary == "" {
+				requireNoDiagnostics(t, resp.Diagnostics)
+				return
+			}
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+			assertDiagnosticDetail(t, resp.Diagnostics, "audit module is disabled")
+		})
+	}
+
+	createCases := []struct {
+		name        string
+		routes      []requestRoute
+		plan        *auditTargetRessourceModel
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			// A block that does not match target_type is rejected before any
+			// API call, so the server never sees a half-built target.
+			name: "mismatched configuration block writes no state",
+			plan: &auditTargetRessourceModel{
+				TargetType: types.StringValue("audit_webhook"),
+				TargetName: types.StringValue("tf-test"),
+				Kafka: &targetKafkaConfigModel{
+					Brokers: types.StringValue("broker:9092"),
+					Topic:   types.StringValue("tf-audit"),
+				},
+			},
+			wantSummary: "Invalid audit target configuration",
+			wantDetail:  `target type "audit_webhook" requires the webhook_config block`,
+		},
+		{
+			name: "unsupported target type is rejected by the server",
+			routes: []requestRoute{{
+				method: http.MethodPut, pathContains: "audit/target/audit_bogus", status: http.StatusBadRequest,
+				body: s3ErrorXML("InvalidArgument", "unsupported audit target type: 'audit_bogus'"),
+			}},
+			plan: &auditTargetRessourceModel{
+				TargetType: types.StringValue("audit_bogus"),
+				TargetName: types.StringValue("tf-test"),
+			},
+			wantSummary: "Error creating audit target",
+			wantDetail:  "unsupported audit target type: 'audit_bogus'",
+		},
+		{
+			// The flat legacy path with no endpoint at all is a key/value set
+			// the server refuses.
+			name: "invalid key/value set is rejected by the server",
+			routes: []requestRoute{{
+				method: http.MethodPut, pathContains: "audit/target/audit_webhook", status: http.StatusBadRequest,
+				body: s3ErrorXML("InvalidArgument", "invalid key values: endpoint is required"),
+			}},
+			plan: &auditTargetRessourceModel{
+				TargetType: types.StringValue("audit_webhook"),
+				TargetName: types.StringValue("tf-test"),
+			},
+			wantSummary: "Error creating audit target",
+			wantDetail:  "invalid key values: endpoint is required",
+		},
+	}
+
+	for _, tc := range createCases {
+		t.Run("create: "+tc.name, func(t *testing.T) {
+			client, rec := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewAuditTargetRessource(), client)
+
+			resp := h.create(tc.plan)
+
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+			h.assertNoPartialState(resp, tc.plan)
+			// A failed create must not go on to list and refresh health.
+			rec.assertNoRequest(t, "audit/target/list")
+		})
+	}
+
+	t.Run("validate config: mismatched block is rejected before planning", func(t *testing.T) {
+		h := newCRUDHarness(t, NewAuditTargetRessource(), cannedClient(t, http.StatusOK, ""))
+
+		resp := h.validateConfig(&auditTargetRessourceModel{
+			TargetType: types.StringValue("audit_kafka"),
+			TargetName: types.StringValue("tf-test"),
+		})
+
+		assertErrorDiagnostic(t, resp.Diagnostics, "Invalid audit target configuration",
+			`target type "audit_kafka" requires the kafka_config block`)
+	})
+
+	t.Run("configure: rejects foreign provider data", func(t *testing.T) {
+		h := newCRUDHarness(t, NewAuditTargetRessource(), cannedClient(t, http.StatusOK, ""))
+
+		resp := h.configure("not-a-client")
+
+		assertErrorDiagnostic(t, resp.Diagnostics, "Unexpected Resource Configure Type", "Expected *AllClient, got: string.")
+	})
 }

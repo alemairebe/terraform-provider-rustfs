@@ -4,8 +4,10 @@
 package provider
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"reflect"
 	"regexp"
@@ -13,6 +15,8 @@ import (
 	"testing"
 
 	"github.com/caberdo/terraform-provider-rustfs/pkg/rustfs"
+	"github.com/hashicorp/terraform-plugin-framework/path"
+	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/plancheck"
@@ -563,4 +567,182 @@ resource "rustfs_serviceaccount" "test" {
   policy      = %q
 }
 `, accessKey, expiration, policy)
+}
+
+// Migrated from main's read/delete/create error-path work.
+var lifecycleSAAccessKey = unitTestCredential("RUSTFS_TEST_SA_ACCESS_KEY", 'k')
+var lifecycleSASecretKey = unitTestCredential("RUSTFS_TEST_SA_SECRET_KEY", 'm')
+
+func TestServiceAccountResourceLifecyclePaths(t *testing.T) {
+	t.Parallel()
+
+	// The base model every call starts from. Unset optional attributes use
+	// typed nulls so tfsdk conversion keeps the attribute types.
+	model := func() *serviceAccountResourceModel {
+		return &serviceAccountResourceModel{
+			AccessKey:     types.StringValue(lifecycleSAAccessKey),
+			SecretKey:     types.StringValue(lifecycleSASecretKey),
+			Name:          types.StringValue("tf-test sa"),
+			Description:   types.StringNull(),
+			TargetUser:    types.StringNull(),
+			Expiration:    types.StringValue("9999-01-01T00:00:00Z"),
+			Policy:        types.StringNull(),
+			ImpliedPolicy: types.BoolNull(),
+		}
+	}
+
+	readCases := []struct {
+		name        string
+		routes      []requestRoute
+		wantRemoved bool
+		wantName    string
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			// Probed against RustFS latest: ReadServiceAccount answers
+			// 404 NoSuchResource, message "service account '<ak>' does not exist".
+			name:        "missing account is removed from state",
+			routes:      []requestRoute{{status: http.StatusNotFound, body: s3ErrorXML("NoSuchResource", "service account 'tf-test-sa' does not exist")}},
+			wantRemoved: true,
+		},
+		{
+			name:     "present account refreshes state",
+			routes:   []requestRoute{{status: http.StatusOK, body: `{"accessKey":"tf-test-sa","name":"refreshed name","impliedPolicy":true}`}},
+			wantName: "refreshed name",
+		},
+		{
+			name:        "server error keeps state and names the failing call",
+			routes:      []requestRoute{{status: http.StatusForbidden, body: s3ErrorXML("AccessDenied", "nope")}},
+			wantSummary: "Error reading service account",
+			wantDetail:  "Could not read service account, unexpected error: ",
+		},
+	}
+
+	for _, tc := range readCases {
+		t.Run("read: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewServiceAccountResource(), client)
+
+			resp := h.read(model())
+
+			if tc.wantRemoved {
+				requireNoDiagnostics(t, resp.Diagnostics)
+				assertStateRemoved(t, resp.State)
+				return
+			}
+			if tc.wantSummary == "" {
+				requireNoDiagnostics(t, resp.Diagnostics)
+				assertStatePresent(t, resp.State)
+				assertStateString(t, resp.State, path.Root("name"), tc.wantName)
+				return
+			}
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+			assertStatePresent(t, resp.State)
+		})
+	}
+
+	deleteCases := []struct {
+		name        string
+		routes      []requestRoute
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			// Probed against RustFS latest: DeleteServiceAccount answers
+			// 400 InvalidRequest with message "service account not exist".
+			name:   "already deleted account is not an error",
+			routes: []requestRoute{{status: http.StatusBadRequest, body: s3ErrorXML("InvalidRequest", "service account not exist")}},
+		},
+		{
+			// The same status code with an unrelated message must still fail:
+			// RustFS reuses InvalidRequest for many request failures.
+			name:        "unrelated invalid request is still an error",
+			routes:      []requestRoute{{status: http.StatusBadRequest, body: s3ErrorXML("InvalidRequest", "access key is required")}},
+			wantSummary: "Error deleting service account",
+			wantDetail:  "Could not delete service account, unexpected error: ",
+		},
+		{
+			name:        "real server error is reported",
+			routes:      []requestRoute{{status: http.StatusForbidden, body: s3ErrorXML("AccessDenied", "nope")}},
+			wantSummary: "Error deleting service account",
+			wantDetail:  "Could not delete service account, unexpected error: ",
+		},
+	}
+
+	for _, tc := range deleteCases {
+		t.Run("delete: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewServiceAccountResource(), client)
+
+			resp := h.delete(model())
+
+			if tc.wantSummary == "" {
+				requireNoDiagnostics(t, resp.Diagnostics)
+				return
+			}
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+		})
+	}
+
+	createCases := []struct {
+		name        string
+		routes      []requestRoute
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			name:   "accepted account writes state",
+			routes: []requestRoute{{method: http.MethodPut, pathContains: "add-service-accounts", status: http.StatusOK, body: `{"credentials":{"accessKey":"tf-test-sa","secretKey":"superSecret123!","expiration":"9999-01-01T00:00:00Z"}}`}},
+		},
+		{
+			name:        "rejected account reports the server error and writes no state",
+			routes:      []requestRoute{{method: http.MethodPut, pathContains: "add-service-accounts", status: http.StatusConflict, body: s3ErrorXML("InvalidRequest", "access key already exists")}},
+			wantSummary: "Error creating service account",
+			wantDetail:  "Could not create service account, unexpected error: ",
+		},
+		{
+			name:        "forbidden create names the failing call",
+			routes:      []requestRoute{{status: http.StatusForbidden, body: s3ErrorXML("AccessDenied", "nope")}},
+			wantSummary: "Error creating service account",
+			wantDetail:  "Could not create service account, unexpected error: ",
+		},
+	}
+
+	for _, tc := range createCases {
+		t.Run("create: "+tc.name, func(t *testing.T) {
+			client, rec := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewServiceAccountResource(), client)
+			plan := model()
+
+			resp := h.create(plan)
+
+			if tc.wantSummary == "" {
+				requireNoDiagnostics(t, resp.Diagnostics)
+				assertStatePresent(t, resp.State)
+				assertStateString(t, resp.State, path.Root("access_key"), lifecycleSAAccessKey)
+				// implied_policy is a bool, so assert it through the model
+				// rather than the string helper.
+				var created serviceAccountResourceModel
+				if diags := resp.State.Get(context.Background(), &created); diags.HasError() {
+					t.Fatalf("state get: %v", diags)
+				}
+				if !created.ImpliedPolicy.ValueBool() {
+					t.Errorf("implied_policy = %v, want true for an account without a policy", created.ImpliedPolicy)
+				}
+				rec.assertRequest(t, "add-service-accounts")
+				return
+			}
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+			h.assertNoPartialState(resp, plan)
+		})
+	}
+
+	t.Run("configure: rejects foreign provider data", func(t *testing.T) {
+		h := newCRUDHarness(t, NewServiceAccountResource(), cannedClient(t, http.StatusOK, ""))
+
+		resp := h.configure("not-a-client")
+
+		assertErrorDiagnostic(t, resp.Diagnostics, "Unexpected Resource Configure Type", "Expected *AllClient, got: string.")
+	})
 }

@@ -170,6 +170,14 @@ func (r *RemoteTargetRessource) Read(ctx context.Context, req resource.ReadReque
 
 	targets, err := r.client.RustClient.ListRemoteTargets(state.Bucket.ValueString())
 	if err != nil {
+		// Live evidence (RustFS latest, 2026-10-19): list-remote-targets on a
+		// bucket that does not exist answers 404 NoSuchBucket. A source bucket
+		// that is gone cannot hold a remote target, so the target is gone too
+		// and the refresh must plan a recreation instead of failing.
+		if rustfs.IsAPIErrorCode(err, "NoSuchBucket") {
+			resp.State.RemoveResource(ctx)
+			return
+		}
 		resp.Diagnostics.AddError("Error listing remote targets", err.Error())
 		return
 	}
@@ -233,7 +241,12 @@ func (r *RemoteTargetRessource) Delete(ctx context.Context, req resource.DeleteR
 	// part of its own deletion, so the target may already be gone by the time
 	// Terraform destroys this resource; that is not an error.
 	if err := r.client.RustClient.DeleteRemoteTarget(data.Bucket.ValueString(), data.Arn.ValueString()); err != nil {
-		if isRemoteTargetNotFound(err) {
+		// Two ways the target is already gone: a removal that reports the
+		// target missing (a replication configuration deletes the targets it
+		// references), or a source bucket that no longer exists, which the
+		// admin API answers with 404 NoSuchBucket (probed against RustFS
+		// latest, 2026-10-19).
+		if isRemoteTargetNotFound(err) || rustfs.IsAPIErrorCode(err, "NoSuchBucket") {
 			return
 		}
 		resp.Diagnostics.AddError("Error deleting remote target", err.Error())

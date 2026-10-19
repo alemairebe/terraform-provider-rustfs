@@ -63,6 +63,7 @@ func (r *RustfsUserResource) Schema(ctx context.Context, req resource.SchemaRequ
 			"secret_key": schema.StringAttribute{
 				MarkdownDescription: "Secret Key. Changing this rotates the secret in place.",
 				Required:            true,
+				Sensitive:           true,
 			},
 			"status": schema.StringAttribute{
 				Optional:            true,
@@ -143,11 +144,8 @@ func (r *RustfsUserResource) Read(ctx context.Context, req resource.ReadRequest,
 	}
 	read, err := r.client.RustClient.ReadUserAccount(state.AccessKey.ValueString())
 	if err != nil {
+		// RustFS answers 404 NoSuchResource for a user it does not have.
 		if rustfs.IsAPIErrorCode(err, "NoSuchResource") {
-			// The user was removed outside Terraform, so it is dropped from
-			// state and planned for creation again instead of failing the
-			// whole refresh.
-			tflog.Trace(ctx, "user no longer exists")
 			resp.State.RemoveResource(ctx)
 			return
 		}
@@ -220,6 +218,10 @@ func (r *RustfsUserResource) Delete(ctx context.Context, req resource.DeleteRequ
 	}
 	err := r.client.RustClient.DeleteUserAccount(account)
 	if err != nil {
+		// RustFS answers 404 NoSuchResource when the user is already gone.
+		if rustfs.IsAPIErrorCode(err, "NoSuchResource") {
+			return
+		}
 		resp.Diagnostics.AddError(
 			"Error deleting user",
 			"Could not delete user, unexpected error: "+err.Error(),

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/caberdo/terraform-provider-rustfs/pkg/rustfs"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	frameworkresource "github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -241,4 +242,95 @@ func testAccRebalancePreCheck(t *testing.T) {
 	if len(pools) < 2 {
 		t.Skipf("deployment has %d pool(s): a single-pool deployment has nothing to rebalance and POST /rustfs/admin/v3/rebalance/start answers 501 NotImplemented", len(pools))
 	}
+}
+
+// TestRebalanceResourceLifecyclePaths covers the paths the acceptance suite
+// cannot reach with a live server: a rebalance trigger that no longer reports
+// anything, a delete that arrives after the trigger is gone, and a rejected
+// start.
+//
+// rustfs_rebalance is a one-shot trigger: the admin API exposes only
+// POST rebalance/start (pkg/rustfs/rebalance.go), so there is no endpoint a Read
+// could use to discover that the trigger disappeared. Read therefore keeps the
+// trigger it recorded, and Delete is a no-op -- both are asserted here so the
+// absence of a server call is explicit rather than accidental.
+func TestRebalanceResourceLifecyclePaths(t *testing.T) {
+	t.Parallel()
+
+	t.Run("read: trigger has no server-side existence check and keeps state", func(t *testing.T) {
+		// No route at all: any request would be unrouted and fail the test.
+		client, rec := routedClient(t)
+		h := newCRUDHarness(t, NewRebalanceResource(), client)
+
+		resp := h.read(&RebalanceResourceModel{ID: types.StringValue("rebalance-triggered")})
+
+		requireNoDiagnostics(t, resp.Diagnostics)
+		assertStatePresent(t, resp.State)
+		assertStateString(t, resp.State, path.Root("id"), "rebalance-triggered")
+		rec.assertNoRequest(t, "rebalance")
+	})
+
+	t.Run("delete: trigger is not removable server-side and reports nothing", func(t *testing.T) {
+		client, rec := routedClient(t)
+		h := newCRUDHarness(t, NewRebalanceResource(), client)
+
+		resp := h.delete(&RebalanceResourceModel{ID: types.StringValue("rebalance-triggered")})
+
+		requireNoDiagnostics(t, resp.Diagnostics)
+		rec.assertNoRequest(t, "rebalance")
+	})
+
+	createCases := []struct {
+		name        string
+		routes      []requestRoute
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			// Probed live on RustFS latest: POST rebalance/start answers 501
+			// NotImplemented.
+			name:        "server that cannot rebalance reports the rejection and writes no state",
+			routes:      []requestRoute{{status: http.StatusNotImplemented, body: s3ErrorXML("NotImplemented", "rebalance on a single-drive pool is not implemented")}},
+			wantSummary: "Error starting rebalance",
+			wantDetail:  "Could not start rebalance: ",
+		},
+		{
+			name:        "real server error is reported",
+			routes:      []requestRoute{{status: http.StatusForbidden, body: s3ErrorXML("AccessDenied", "nope")}},
+			wantSummary: "Error starting rebalance",
+			wantDetail:  "Could not start rebalance: ",
+		},
+	}
+
+	for _, tc := range createCases {
+		t.Run("create: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewRebalanceResource(), client)
+			plan := &RebalanceResourceModel{ID: types.StringNull()}
+
+			resp := h.create(plan)
+
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+			h.assertNoPartialState(resp, plan)
+		})
+	}
+
+	t.Run("create: accepted start records the trigger id", func(t *testing.T) {
+		client, rec := routedClient(t, requestRoute{method: http.MethodPost, pathContains: "rebalance/start", status: http.StatusOK})
+		h := newCRUDHarness(t, NewRebalanceResource(), client)
+
+		resp := h.create(&RebalanceResourceModel{ID: types.StringNull()})
+
+		requireNoDiagnostics(t, resp.Diagnostics)
+		assertStateString(t, resp.State, path.Root("id"), "rebalance-triggered")
+		rec.assertRequest(t, "rebalance/start")
+	})
+
+	t.Run("configure: rejects foreign provider data", func(t *testing.T) {
+		h := newCRUDHarness(t, NewRebalanceResource(), cannedClient(t, http.StatusOK, ""))
+
+		resp := h.configure("not-a-client")
+
+		assertErrorDiagnostic(t, resp.Diagnostics, "Unexpected Resource Configure Type", "Expected *AllClient, got: string.")
+	})
 }

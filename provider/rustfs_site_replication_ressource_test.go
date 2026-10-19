@@ -318,3 +318,187 @@ func TestSiteReplicationResourceImportState(t *testing.T) {
 		t.Errorf("imported name = %q, want tf-acc-peer", name.ValueString())
 	}
 }
+
+func siteReplicationLifecycleModel() *SiteReplicationRessourceModel {
+	return &SiteReplicationRessourceModel{
+		Name:          types.StringValue("peer"),
+		Endpoint:      types.StringValue("https://peer.invalid:9000/"),
+		AccessKey:     types.StringValue(siteReplicationAccessKey),
+		SecretKey:     types.StringValue(siteReplicationSecret),
+		SkipTLSVerify: types.BoolValue(false),
+		CACertPEM:     types.StringNull(),
+	}
+}
+
+// TestSiteReplicationRessourceLifecyclePaths covers the paths the acceptance
+// suite cannot reach with a live server: a peer that disappeared behind
+// Terraform's back, a delete that arrives after the peer is already removed,
+// and every failing API call in Create, Read and Delete.
+//
+// site-replication/info answers 200 on an empty cluster (probed live:
+// {"enabled":false,"name":"127.0.0.1","sites":[]}), so Read decides a peer is
+// gone from the site list it gets back, not from an error.
+func TestSiteReplicationRessourceLifecyclePaths(t *testing.T) {
+	t.Parallel()
+
+	readCases := []struct {
+		name        string
+		routes      []requestRoute
+		wantRemoved bool
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			// The live server answers the empty-cluster payload below with 200;
+			// a peer that is not in Sites has been removed server-side.
+			name:        "peer missing from the site list is removed from state",
+			routes:      []requestRoute{{status: http.StatusOK, body: `{"enabled":false,"name":"local","sites":[]}`}},
+			wantRemoved: true,
+		},
+		{
+			name:   "configured peer keeps state and is refreshed",
+			routes: []requestRoute{{status: http.StatusOK, body: `{"enabled":true,"name":"local","sites":[{"name":"peer","endpoint":"https://peer.invalid:9000","deploymentID":"d1","skipTlsVerify":true}]}`}},
+		},
+		{
+			name:        "server error keeps state and names the failing call",
+			routes:      []requestRoute{{status: http.StatusForbidden, body: s3ErrorXML("AccessDenied", "nope")}},
+			wantSummary: "Error reading site replication",
+			wantDetail:  "Could not read site replication: ",
+		},
+	}
+
+	for _, tc := range readCases {
+		t.Run("read: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewSiteReplicationRessource(), client)
+
+			resp := h.read(siteReplicationLifecycleModel())
+
+			if tc.wantRemoved {
+				requireNoDiagnostics(t, resp.Diagnostics)
+				assertStateRemoved(t, resp.State)
+				return
+			}
+			if tc.wantSummary == "" {
+				requireNoDiagnostics(t, resp.Diagnostics)
+				assertStatePresent(t, resp.State)
+				assertStateString(t, resp.State, path.Root("endpoint"), "https://peer.invalid:9000")
+				return
+			}
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+			assertDiagnosticDetail(t, resp.Diagnostics, "AccessDenied")
+			assertStatePresent(t, resp.State)
+		})
+	}
+
+	deleteCases := []struct {
+		name        string
+		routes      []requestRoute
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			// Probed live: site-replication/remove for an unknown site answers
+			// 400 InvalidRequest "none of the requested sites are configured",
+			// so destroying a peer that is already gone is a no-op.
+			name:   "already removed peer is not an error",
+			routes: []requestRoute{{status: http.StatusBadRequest, body: s3ErrorXML("InvalidRequest", "none of the requested sites are configured")}},
+		},
+		{
+			// Same code, different message: the matcher must not swallow an
+			// unrelated InvalidRequest.
+			name:        "unrelated InvalidRequest is still reported",
+			routes:      []requestRoute{{status: http.StatusBadRequest, body: s3ErrorXML("InvalidRequest", "failed to reach peer site")}},
+			wantSummary: "Error deleting site replication",
+			wantDetail:  "Could not delete site replication: ",
+		},
+		{
+			name:        "real server error is reported",
+			routes:      []requestRoute{{status: http.StatusInternalServerError, body: s3ErrorXML("InternalError", "remove exploded")}},
+			wantSummary: "Error deleting site replication",
+			wantDetail:  "Could not delete site replication: ",
+		},
+	}
+
+	for _, tc := range deleteCases {
+		t.Run("delete: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewSiteReplicationRessource(), client)
+
+			resp := h.delete(siteReplicationLifecycleModel())
+
+			if tc.wantSummary == "" {
+				requireNoDiagnostics(t, resp.Diagnostics)
+				return
+			}
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+		})
+	}
+
+	createCases := []struct {
+		name        string
+		routes      []requestRoute
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			name:        "rejected peer reports the server error and writes no state",
+			routes:      []requestRoute{{status: http.StatusBadRequest, body: s3ErrorXML("InvalidRequest", "site peer unreachable")}},
+			wantSummary: "Error creating site replication",
+			wantDetail:  "Could not create site replication: ",
+		},
+		{
+			name:        "peer already configured is refused",
+			routes:      []requestRoute{{status: http.StatusConflict, body: s3ErrorXML("InvalidRequest", "site replication already configured")}},
+			wantSummary: "Error creating site replication",
+			wantDetail:  "site replication already configured",
+		},
+	}
+
+	for _, tc := range createCases {
+		t.Run("create: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewSiteReplicationRessource(), client)
+			plan := siteReplicationLifecycleModel()
+
+			resp := h.create(plan)
+
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+			h.assertNoPartialState(resp, plan)
+		})
+	}
+
+	t.Run("create: accepted peer writes state", func(t *testing.T) {
+		client, _ := routedClient(t, requestRoute{status: http.StatusOK, body: `{"status":"success"}`})
+		h := newCRUDHarness(t, NewSiteReplicationRessource(), client)
+		plan := siteReplicationLifecycleModel()
+
+		resp := h.create(plan)
+
+		requireNoDiagnostics(t, resp.Diagnostics)
+		assertStateString(t, resp.State, path.Root("name"), "peer")
+	})
+
+	t.Run("update: rejected edit reports a diagnostic and keeps the prior state", func(t *testing.T) {
+		client, _ := routedClient(t, requestRoute{status: http.StatusBadRequest, body: s3ErrorXML("InvalidRequest", "edit exploded")})
+		h := newCRUDHarness(t, NewSiteReplicationRessource(), client)
+
+		plan := siteReplicationLifecycleModel()
+		plan.Endpoint = types.StringValue("https://new.invalid:9000/")
+		state := siteReplicationLifecycleModel()
+		state.Endpoint = types.StringValue("https://old.invalid:9000/")
+
+		resp := h.update(plan, state)
+
+		assertErrorDiagnostic(t, resp.Diagnostics, "Error updating site replication", "Could not update site replication: ")
+		assertStateString(t, resp.State, path.Root("endpoint"), "https://old.invalid:9000/")
+	})
+
+	t.Run("configure: rejects foreign provider data", func(t *testing.T) {
+		h := newCRUDHarness(t, NewSiteReplicationRessource(), cannedClient(t, http.StatusOK, ""))
+
+		resp := h.configure("not-a-client")
+
+		assertErrorDiagnostic(t, resp.Diagnostics, "Unexpected Resource Configure Type", "Expected *AllClient, got: string.")
+	})
+}

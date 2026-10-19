@@ -5,9 +5,7 @@ package provider
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"net/http"
 
 	"github.com/caberdo/terraform-provider-rustfs/pkg/rustfs"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -180,9 +178,8 @@ func (r *PolicyResource) Read(ctx context.Context, req resource.ReadRequest, res
 	// Make the read request
 	actual, err := r.client.RustClient.ReadPolicy(state.Name.ValueString())
 	if err != nil {
-		// A policy removed outside Terraform no longer exists; dropping it from
-		// state lets the next plan recreate it instead of failing the refresh.
-		if isPolicyAbsent(err) {
+		// RustFS answers 404 NoSuchResource for a policy it does not have.
+		if rustfs.IsAPIErrorCode(err, "NoSuchResource") {
 			resp.State.RemoveResource(ctx)
 			return
 		}
@@ -201,16 +198,6 @@ func (r *PolicyResource) Read(ctx context.Context, req resource.ReadRequest, res
 	if resp.Diagnostics.HasError() {
 		return
 	}
-}
-
-// isPolicyAbsent reports whether err means the policy does not exist on the
-// server. RustFS answers the admin read endpoint with 404/NoSuchResource
-// ("policy does not exist") once a policy has been removed; every other error
-// stays an error so a genuine outage is not mistaken for a deleted policy.
-func isPolicyAbsent(err error) bool {
-	var apiErr *rustfs.APIError
-	return errors.As(err, &apiErr) &&
-		(apiErr.StatusCode == http.StatusNotFound || apiErr.Code == "NoSuchResource")
 }
 
 // Update updates the resource and sets the updated Terraform state on success.
@@ -256,6 +243,11 @@ func (r *PolicyResource) Delete(ctx context.Context, req resource.DeleteRequest,
 
 	err := r.client.RustClient.DeletePolicy(data.Name.ValueString())
 	if err != nil {
+		// RustFS answers 200 for an already-deleted policy, but treat an
+		// explicit NoSuchResource the same way if a server ever returns it.
+		if rustfs.IsAPIErrorCode(err, "NoSuchResource") {
+			return
+		}
 		resp.Diagnostics.AddError(
 			"Error deleting policy",
 			"Could not delete policy, unexpected error: "+err.Error(),

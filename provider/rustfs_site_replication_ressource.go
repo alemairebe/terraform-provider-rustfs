@@ -107,7 +107,7 @@ func (r *SiteReplicationRessource) Create(ctx context.Context, req resource.Crea
 	}
 	site := modelToSite(plan)
 	if err := r.client.RustClient.SiteReplicationAdd(site); err != nil {
-		resp.Diagnostics.AddError("Error creating site replication", err.Error())
+		resp.Diagnostics.AddError("Error creating site replication", "Could not create site replication: "+err.Error())
 		return
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
@@ -121,7 +121,7 @@ func (r *SiteReplicationRessource) Read(ctx context.Context, req resource.ReadRe
 	}
 	info, err := r.client.RustClient.SiteReplicationInfo()
 	if err != nil {
-		resp.Diagnostics.AddError("Error reading site replication", err.Error())
+		resp.Diagnostics.AddError("Error reading site replication", "Could not read site replication: "+err.Error())
 		return
 	}
 	var found *rustfs.SiteReplicationPeer
@@ -148,7 +148,7 @@ func (r *SiteReplicationRessource) Update(ctx context.Context, req resource.Upda
 	}
 	site := modelToSite(plan)
 	if err := r.client.RustClient.SiteReplicationEdit(site); err != nil {
-		resp.Diagnostics.AddError("Error updating site replication", err.Error())
+		resp.Diagnostics.AddError("Error updating site replication", "Could not update site replication: "+err.Error())
 		return
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
@@ -161,7 +161,16 @@ func (r *SiteReplicationRessource) Delete(ctx context.Context, req resource.Dele
 		return
 	}
 	if err := r.client.RustClient.SiteReplicationRemove([]string{data.Name.ValueString()}); err != nil {
-		resp.Diagnostics.AddError("Error deleting site replication", err.Error())
+		// A site that is not (or no longer) configured is already gone: RustFS
+		// answers 400 InvalidRequest "none of the requested sites are
+		// configured" for site-replication/remove when none of the requested
+		// names is a configured peer. Both the structured code and the
+		// endpoint's own missing-site text are required, so an unrelated
+		// InvalidRequest is still reported.
+		if rustfs.IsAPIErrorCode(err, "InvalidRequest") && strings.Contains(err.Error(), "none of the requested sites are configured") {
+			return
+		}
+		resp.Diagnostics.AddError("Error deleting site replication", "Could not delete site replication: "+err.Error())
 	}
 }
 

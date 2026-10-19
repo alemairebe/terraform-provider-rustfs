@@ -5,6 +5,7 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -85,6 +86,24 @@ func quotaSetWithRetry(ctx context.Context, quota rustfs.Quota, set func(rustfs.
 		}
 	}
 	return rustfs.Quota{}, lastErr
+}
+
+// quotaBucketGone reports whether a quota call failed because the bucket does
+// not exist. Probed against RustFS latest: ReadQuota answers 404 NoSuchBucket
+// for a missing bucket, and DeletQuota answers 500 InternalError "failed to
+// capture bucket incarnation: Bucket not found" because its first step is to
+// capture the bucket incarnation. The structured code plus that endpoint's own
+// wording keeps an unrelated InternalError from being swallowed as an
+// idempotent delete.
+func quotaBucketGone(err error) bool {
+	var apiErr *rustfs.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	if apiErr.Code == "NoSuchBucket" {
+		return true
+	}
+	return apiErr.Code == "InternalError" && strings.Contains(apiErr.Message, "Bucket not found")
 }
 
 // Ensure the implementation satisfies the expected interfaces.
@@ -185,6 +204,10 @@ func (r *quotaResource) Read(ctx context.Context, req resource.ReadRequest, resp
 	// Read
 	read, err := quotaReadWithRetry(ctx, state.Bucket.ValueString(), r.client.RustClient.ReadQuota)
 	if err != nil {
+		if quotaBucketGone(err) {
+			resp.State.RemoveResource(ctx)
+			return
+		}
 		resp.Diagnostics.AddError(
 			"Error reading bucket quota",
 			"Could not read bucket quota, unexpected error: "+err.Error(),
@@ -238,6 +261,13 @@ func (r *quotaResource) Delete(ctx context.Context, req resource.DeleteRequest, 
 
 	err := r.client.RustClient.DeletQuota(data.Bucket.ValueString())
 	if err != nil {
+		if quotaBucketGone(err) {
+			// The bucket is already gone, so its quota is too: the desired end
+			// state. RustFS answers 500 InternalError "failed to capture
+			// bucket incarnation: Bucket not found" here (probed against
+			// latest).
+			return
+		}
 		resp.Diagnostics.AddError(
 			"Error deleting bucket quota",
 			"Could not delete bucket quota, unexpected error: "+err.Error(),
