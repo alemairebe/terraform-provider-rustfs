@@ -15,15 +15,15 @@
 # `latest` image, a skip that depends on the server) cannot fail a run on its own.
 
 # Last measurement.
-measured_total=89.8
-measured_provider=87.5
+measured_total=90.2
+measured_provider=88.0
 measured_pkg_rustfs=97.8
-measured_commit=bbc8b24
+measured_commit=f84538b
 measured_date=2026-10-19
 
 # Enforced floor.
-floor_total=89.0
-floor_provider=86.7
+floor_total=89.5
+floor_provider=87.5
 floor_pkg_rustfs=97.3
 
 # Milestones tracked in the issue tracker (see .github/OPENSSF-BEST-PRACTICES.md).

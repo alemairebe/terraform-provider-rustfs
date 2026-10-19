@@ -2,7 +2,7 @@
 
 [![CI](https://img.shields.io/github/actions/workflow/status/caberdo/terraform-provider-rustfs/test.yml?branch=main&label=CI)](https://github.com/caberdo/terraform-provider-rustfs/actions/workflows/test.yml)
 <!-- coverage-badge:start -->
-[![Coverage](https://img.shields.io/badge/coverage-89.8%25-green)](#testing-and-coverage)
+[![Coverage](https://img.shields.io/badge/coverage-90.2%25-brightgreen)](#testing-and-coverage)
 <!-- coverage-badge:end -->
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/caberdo/terraform-provider-rustfs/badge)](https://scorecard.dev/viewer/?uri=github.com/caberdo/terraform-provider-rustfs)
 [![Release](https://img.shields.io/github/v/release/caberdo/terraform-provider-rustfs?label=release)](https://github.com/caberdo/terraform-provider-rustfs/releases)
@@ -352,11 +352,11 @@ Statement coverage of this repository, merged from the unit and acceptance profi
 <!-- coverage:start -->
 ```
 pkg/rustfs  ████████████████████  97.8%   floor 97.3%
-provider    ██████████████████░░  87.5%   floor 86.7%
-total       ██████████████████░░  89.8%   floor 89.0%   -> 80%, then 90%
+provider    ██████████████████░░  88.0%   floor 87.5%
+total       ██████████████████░░  90.2%   floor 89.5%   -> 80%, then 90%
 ```
 
-Measured on `bbc8b24` (unit + acceptance) on 2026-10-19.
+Measured on `f84538b` (unit + acceptance) on 2026-10-19.
 <!-- coverage:end -->
 
 The floor is enforced: `scripts/coverage-gate.sh` fails the `Coverage` check on a pull request whose
