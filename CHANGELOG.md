@@ -13,13 +13,20 @@ IMPROVEMENTS:
   `.github/coverage-baseline.txt`, and the `latest` cell of the acceptance matrix repeats that gate
   on `main`, so the floor can only move up. The README carries a generated coverage badge and a
   per-package bar chart (`scripts/coverage-readme.sh`); CI fails when they drift from the baseline.
-  Merged coverage is 72.3% today, with 80% and then 90% tracked as milestones in the issue tracker
+  Merged coverage is 74.6% today, with 80% and then 90% tracked as milestones in the issue tracker
 - The acceptance fixture provisions the prerequisites the bucket replication, bucket notification
   and remote target resources need, so their `TestAcc` tests run in CI instead of skipping:
   `rustfs-peer` is a second RustFS instance registered as a replication target, and the bucket
   notification test registers the `notify_webhook` target its configuration references. Both tests
   now cover create, update, import and destroy, and the remote target test covers an in-place
   credential update as well as a region replacement
+- `pkg/rustfs` statement coverage rises from 88.5% to 97.8%: the live-only CRUD tests (user
+  accounts, quotas, service accounts, storage tiers, canned-policy deletion) are mirrored with
+  `httptest` mocks, so those paths run in CI instead of only where a developer has a server, and
+  every admin call now has a unit test for its error, decode and edge branches. `DeletQuota` also
+  drops a dead error branch that could never be taken. The 27 statements still uncovered are
+  defensive `json.Marshal`, SigV4 signer and already-validated-JSON error returns that no input
+  can reach
 
 ## 0.5.0 (2026-10-18)
 
