@@ -151,6 +151,23 @@ The acceptance container also writes `coverage-acceptance.out`; `make coverage` 
 `make coverage-merge` merges it with the unit profile (see the coverage table in
 [`README.md`](../README.md#testing-and-coverage)).
 
+### Coverage
+
+Merged (unit + acceptance) statement coverage is enforced. `scripts/coverage-gate.sh` compares a
+profile against [`.github/coverage-baseline.txt`](./coverage-baseline.txt), and the `Coverage` check
+fails a pull request that drops below the floor. The badge and the bar chart in `README.md` are
+generated from that same file, so the published number and the enforced floor cannot drift apart.
+
+```bash
+make coverage            # unit profile + per-package table
+make testacc-docker      # writes coverage-acceptance.out
+make coverage-merge      # merge both into coverage-union.out
+make coverage-gate       # fail when below the floor
+```
+
+To raise the floor: update the `measured_*` and `floor_*` values in `.github/coverage-baseline.txt`
+and run `make coverage-readme`. Do that in the same pull request that adds the tests.
+
 ## Submitting Changes
 
 ### Before submitting
@@ -158,7 +175,9 @@ The acceptance container also writes `coverage-acceptance.out`; `make coverage` 
 1. `make fmt vet lint` and `make test` pass.
 2. Acceptance tests pass for a new or changed resource (`make testacc-docker`).
 3. `make generate` produces no `docs/` diff.
-4. The change is described in `CHANGELOG.md` under `Unreleased`.
+4. `make coverage-merge && make coverage-gate` passes, and the coverage floor in
+   `.github/coverage-baseline.txt` is raised if the change improved it.
+5. The change is described in `CHANGELOG.md` under `Unreleased`.
 
 ### Pull request process
 

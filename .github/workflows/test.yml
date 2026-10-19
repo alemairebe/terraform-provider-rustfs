@@ -153,6 +153,52 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           ./scripts/coverage-summary.sh coverage.out
 
+  # A pull request cannot make the project less tested: merge the unit profile
+  # with an acceptance profile from the newest RustFS release and fail when the
+  # result is below .github/coverage-baseline.txt. `main` repeats this gate in
+  # the `latest` cell of the acceptance matrix (see the acceptance job below).
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: test
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: "go.mod"
+          cache: true
+
+      # README.md carries the coverage badge and block, both generated from the
+      # baseline by scripts/coverage-readme.sh.
+      - name: README in sync with the coverage baseline
+        run: ./scripts/coverage-readme.sh --check
+
+      - name: Unit-test coverage
+        run: go test -count=1 -skip '^TestAcc' -covermode=atomic -coverprofile=coverage-unit.out ./...
+
+      # The container writes coverage-acceptance.out into the mounted worktree.
+      - name: Run acceptance tests
+        run: docker compose -f acc_test/docker-compose.yml --profile test run --rm test
+
+      - name: Coverage gate (unit + acceptance)
+        run: |
+          ./scripts/merge-coverage.sh coverage-union.out coverage-unit.out coverage-acceptance.out
+          ./scripts/coverage-gate.sh coverage-union.out
+          ./scripts/coverage-summary.sh coverage-union.out
+          {
+            echo "## Coverage (unit + acceptance)"
+            echo ""
+            echo "\`coverage-unit.out\` and \`coverage-acceptance.out\` merged by \`scripts/merge-coverage.sh\`."
+            echo "The gate compares the total, \`provider\` and \`pkg/rustfs\` against \`.github/coverage-baseline.txt\`."
+            echo ""
+            ./scripts/coverage-summary.sh coverage-union.out
+          } >> "$GITHUB_STEP_SUMMARY"
+
   rustfs_versions:
     name: Supported RustFS Versions
     runs-on: ubuntu-latest
@@ -221,3 +267,10 @@ jobs:
             echo ""
             ./scripts/coverage-summary.sh coverage-union.out
           } >> "$GITHUB_STEP_SUMMARY"
+          ./scripts/coverage-summary.sh coverage-union.out
+
+      # The floor is calibrated against the newest release; the older cells of
+      # the matrix legitimately skip version-gated tests, so they do not gate.
+      - name: Coverage gate (unit + acceptance)
+        if: matrix.rustfs == 'latest'
+        run: ./scripts/coverage-gate.sh coverage-union.out
