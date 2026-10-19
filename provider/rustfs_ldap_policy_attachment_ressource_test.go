@@ -5,12 +5,16 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/caberdo/terraform-provider-rustfs/pkg/rustfs"
-	fwresource "github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/path"
+	frameworkresource "github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 )
 
@@ -53,9 +57,12 @@ func testAccLdapPolicyPreCheck(t *testing.T, target string, isGroup bool) {
 	if err := client.AttachLDAPPolicy(req); err != nil {
 		if strings.Contains(err.Error(), "not exist") || strings.Contains(err.Error(), "does not exist") {
 			t.Skipf("no LDAP identity provider configured (or target %q does not exist); "+
-				"skipping LDAP policy attachment acceptance test. See docs/resources/ldap_policy_attachment.md "+
-				"on configuring an LDAP IdP or pointing RUSTFS_LDAP_POLICY_USER_TARGET/"+
-				"RUSTFS_LDAP_POLICY_GROUP_TARGET at an existing user/group.", target)
+				"skipping LDAP policy attachment acceptance test. RustFS 1.0.x has no way to "+
+				"configure an LDAP IdP, so this is the answer on every supported version: the "+
+				"create/read/update/delete/import flows are covered by "+
+				"TestLDAPPolicyAttachmentResource* against a mocked admin API instead. Point "+
+				"RUSTFS_LDAP_POLICY_USER_TARGET/RUSTFS_LDAP_POLICY_GROUP_TARGET at an existing "+
+				"user/group on a cluster that does have an LDAP IdP to run this test.", target)
 		}
 		t.Fatalf("unexpected error probing LDAP policy attachment: %v", err)
 	}
@@ -127,92 +134,309 @@ resource "rustfs_ldap_policy_attachment" "` + resourceLabel + `" {
 `
 }
 
-// newLdapPolicyImportState builds a fresh, all-null import state from the
-// resource's own schema, mirroring the empty state the framework supplies to
-// ImportState. No server or LDAP identity provider is involved.
-func newLdapPolicyImportState(t *testing.T, r *LDAPPolicyAttachmentRessource) *fwresource.ImportStateResponse {
+// The acceptance tests above skip themselves: the attach endpoint answers "user
+// not exist" unless RustFS knows the LDAP identity, and RustFS 1.0.x cannot be
+// given an LDAP identity provider (see .github/CONTRIBUTING.md, "Acceptance
+// tests"). The flows below drive Create, Read, Update, Delete and ImportState
+// against the mocked admin API harness in provider_test.go, which also pins the
+// wire contract: the target travels as the `user` or `group` field next to the
+// `policies` list, and the identifier is `<user_or_group>/<policy>`.
+
+const (
+	ldapPolicyAttachPath = "/rustfs/admin/v3/idp/ldap/policy/attach"
+	ldapPolicyDetachPath = "/rustfs/admin/v3/idp/ldap/policy/detach"
+)
+
+// ldapPolicyBody is the attach/detach payload.
+type ldapPolicyBody struct {
+	Policies []string `json:"policies"`
+	User     string   `json:"user"`
+	Group    string   `json:"group"`
+}
+
+func ldapPolicyPlan(target, policy string, isGroup types.Bool) LDAPPolicyAttachmentRessourceModel {
+	return LDAPPolicyAttachmentRessourceModel{
+		UserOrGroup: types.StringValue(target),
+		Policy:      types.StringValue(policy),
+		IsGroup:     isGroup,
+		ID:          types.StringNull(),
+	}
+}
+
+// ldapPolicyAttachBody decodes the body the resource sent to attach or detach.
+func ldapPolicyAttachBody(t *testing.T, request adminRequest) ldapPolicyBody {
 	t.Helper()
-
-	return &fwresource.ImportStateResponse{
-		State: resourceState(t, resourceSchemaOf(t, r), LDAPPolicyAttachmentRessourceModel{}),
+	var body ldapPolicyBody
+	if err := json.Unmarshal(request.Body, &body); err != nil {
+		t.Fatalf("%s %s body is not JSON: %v", request.Method, request.Path, err)
 	}
+	return body
 }
 
-func importLdapPolicyState(t *testing.T, r *LDAPPolicyAttachmentRessource, id string) LDAPPolicyAttachmentRessourceModel {
-	t.Helper()
+func TestLDAPPolicyAttachmentResourceCreate(t *testing.T) {
 	ctx := context.Background()
+	r := &LDAPPolicyAttachmentRessource{}
+	sch := resourceSchemaOf(t, r)
+	srv, recorder := newRecorderServer(t, http.StatusOK, "")
+	r.client = newUnitAllClient(srv)
 
-	resp := newLdapPolicyImportState(t, r)
-	r.ImportState(ctx, fwresource.ImportStateRequest{ID: id}, resp)
-	if resp.Diagnostics.HasError() {
-		t.Fatalf("unexpected import diagnostics for %q: %s", id, resp.Diagnostics)
+	plan := ldapPolicyPlan(ldapSAUserDN, "readwrite", types.BoolValue(false))
+	resp := &frameworkresource.CreateResponse{State: resourceState(t, sch, LDAPPolicyAttachmentRessourceModel{})}
+	r.Create(ctx, frameworkresource.CreateRequest{Plan: resourcePlan(t, sch, plan)}, resp)
+	requireNoDiagnostics(t, resp.Diagnostics)
+
+	var created LDAPPolicyAttachmentRessourceModel
+	requireNoDiagnostics(t, resp.State.Get(ctx, &created))
+	if got, want := created.ID.ValueString(), ldapSAUserDN+"/readwrite"; got != want {
+		t.Errorf("create id = %q, want %q", got, want)
+	}
+	if created.UserOrGroup != plan.UserOrGroup || created.Policy != plan.Policy || !created.IsGroup.Equal(plan.IsGroup) {
+		t.Errorf("create state target/policy/is_group = %q/%q/%v, want %q/%q/%v",
+			created.UserOrGroup.ValueString(), created.Policy.ValueString(), created.IsGroup,
+			plan.UserOrGroup.ValueString(), plan.Policy.ValueString(), plan.IsGroup)
 	}
 
-	var state LDAPPolicyAttachmentRessourceModel
-	if diags := resp.State.Get(ctx, &state); diags.HasError() {
-		t.Fatalf("reading imported state for %q: %s", id, diags)
+	request := recorder.only(t)
+	if request.Method != http.MethodPost || request.Path != ldapPolicyAttachPath {
+		t.Fatalf("create sent %s %s, want POST %s", request.Method, request.Path, ldapPolicyAttachPath)
 	}
-	return state
+	attach := ldapPolicyAttachBody(t, request)
+	if len(attach.Policies) != 1 || attach.Policies[0] != "readwrite" {
+		t.Errorf("attach policies = %v, want [readwrite]", attach.Policies)
+	}
+	if attach.User != ldapSAUserDN || attach.Group != "" {
+		t.Errorf("attach user/group = %q/%q, want the DN in the user field", attach.User, attach.Group)
+	}
 }
 
-func TestLDAPPolicyAttachmentRessourceImportState(t *testing.T) {
-	r := NewLDAPPolicyAttachmentRessource().(*LDAPPolicyAttachmentRessource)
-
-	t.Run("user_and_policy", func(t *testing.T) {
-		state := importLdapPolicyState(t, r, "uid=alice,ou=people,dc=example,dc=com/readwrite")
-		if got := state.UserOrGroup.ValueString(); got != "uid=alice,ou=people,dc=example,dc=com" {
-			t.Errorf("user_or_group = %q", got)
-		}
-		if got := state.Policy.ValueString(); got != "readwrite" {
-			t.Errorf("policy = %q", got)
-		}
-		if !state.IsGroup.IsNull() {
-			t.Errorf("is_group should stay unset for a two-part ID, got %v", state.IsGroup)
-		}
-	})
-
-	t.Run("distinguished_name_containing_slash", func(t *testing.T) {
-		state := importLdapPolicyState(t, r, "cn=team/eng,ou=people,dc=example,dc=com/readonly")
-		if got := state.UserOrGroup.ValueString(); got != "cn=team/eng,ou=people,dc=example,dc=com" {
-			t.Errorf("user_or_group = %q", got)
-		}
-		if got := state.Policy.ValueString(); got != "readonly" {
-			t.Errorf("policy = %q", got)
-		}
-	})
-
-	t.Run("user_and_policy_and_is_group", func(t *testing.T) {
-		state := importLdapPolicyState(t, r, "cn=admins,ou=groups,dc=example,dc=com/readwrite/true")
-		if got := state.UserOrGroup.ValueString(); got != "cn=admins,ou=groups,dc=example,dc=com" {
-			t.Errorf("user_or_group = %q", got)
-		}
-		if got := state.Policy.ValueString(); got != "readwrite" {
-			t.Errorf("policy = %q", got)
-		}
-		if !state.IsGroup.ValueBool() {
-			t.Errorf("is_group = %v, want true", state.IsGroup)
-		}
-	})
-}
-
-func TestLDAPPolicyAttachmentRessourceImportStateRejectsMalformedID(t *testing.T) {
-	r := NewLDAPPolicyAttachmentRessource().(*LDAPPolicyAttachmentRessource)
+func TestLDAPPolicyAttachmentResourceCreateGroupTarget(t *testing.T) {
 	ctx := context.Background()
+	r := &LDAPPolicyAttachmentRessource{}
+	sch := resourceSchemaOf(t, r)
+	srv, recorder := newRecorderServer(t, http.StatusOK, "")
+	r.client = newUnitAllClient(srv)
 
-	resp := newLdapPolicyImportState(t, r)
-	r.ImportState(ctx, fwresource.ImportStateRequest{ID: "no-separator-here"}, resp)
-	if !resp.Diagnostics.HasError() {
-		t.Fatal("expected a diagnostic for an import ID without a separator")
-	}
+	const group = "cn=terraform-acc-test,ou=groups,dc=example,dc=com"
+	plan := ldapPolicyPlan(group, "readonly", types.BoolValue(true))
+	resp := &frameworkresource.CreateResponse{State: resourceState(t, sch, LDAPPolicyAttachmentRessourceModel{})}
+	r.Create(ctx, frameworkresource.CreateRequest{Plan: resourcePlan(t, sch, plan)}, resp)
+	requireNoDiagnostics(t, resp.Diagnostics)
 
-	const wantDetail = "Expected format: <user_or_group>/<policy> or <user_or_group>/<policy>/<is_group>"
-	found := false
-	for _, diag := range resp.Diagnostics {
-		if diag.Summary() == "Invalid import ID" && diag.Detail() == wantDetail {
-			found = true
-		}
+	attach := ldapPolicyAttachBody(t, recorder.only(t))
+	if attach.Group != group || attach.User != "" {
+		t.Errorf("attach user/group = %q/%q, want the DN in the group field", attach.User, attach.Group)
 	}
-	if !found {
-		t.Fatalf("expected the explicit %q diagnostic, got: %s", wantDetail, resp.Diagnostics)
+}
+
+// An is_group left unset in the plan is not filled in by Create: the schema's
+// default applies during plan, and the wire body must still be a user
+// attachment.
+func TestLDAPPolicyAttachmentResourceCreateDefaultsToUser(t *testing.T) {
+	ctx := context.Background()
+	r := &LDAPPolicyAttachmentRessource{}
+	sch := resourceSchemaOf(t, r)
+	srv, recorder := newRecorderServer(t, http.StatusOK, "")
+	r.client = newUnitAllClient(srv)
+
+	plan := ldapPolicyPlan(ldapSAUserDN, "readwrite", types.BoolNull())
+	resp := &frameworkresource.CreateResponse{State: resourceState(t, sch, LDAPPolicyAttachmentRessourceModel{})}
+	r.Create(ctx, frameworkresource.CreateRequest{Plan: resourcePlan(t, sch, plan)}, resp)
+	requireNoDiagnostics(t, resp.Diagnostics)
+
+	attach := ldapPolicyAttachBody(t, recorder.only(t))
+	if attach.User != ldapSAUserDN || attach.Group != "" {
+		t.Errorf("attach user/group = %q/%q, want the DN in the user field", attach.User, attach.Group)
+	}
+}
+
+func TestLDAPPolicyAttachmentResourceCreateError(t *testing.T) {
+	r := &LDAPPolicyAttachmentRessource{}
+	sch := resourceSchemaOf(t, r)
+	srv, _ := newRecorderServer(t, http.StatusBadRequest, `<Error><Code>InvalidArgument</Code><Message>user not exist</Message></Error>`)
+	r.client = newUnitAllClient(srv)
+
+	plan := ldapPolicyPlan(ldapSAUserDN, "readwrite", types.BoolValue(false))
+	resp := &frameworkresource.CreateResponse{State: resourceState(t, sch, LDAPPolicyAttachmentRessourceModel{})}
+	r.Create(context.Background(), frameworkresource.CreateRequest{Plan: resourcePlan(t, sch, plan)}, resp)
+	assertDiagnosticSummary(t, resp.Diagnostics, "Error attaching policy to LDAP entity")
+}
+
+// Read has no per-target endpoint: it preserves the attachment, applies the
+// documented is_group default and recomputes the identifier, without calling the
+// server.
+func TestLDAPPolicyAttachmentResourceRead(t *testing.T) {
+	ctx := context.Background()
+	r := &LDAPPolicyAttachmentRessource{}
+	sch := resourceSchemaOf(t, r)
+	srv, recorder := newRecorderServer(t, http.StatusOK, "")
+	r.client = newUnitAllClient(srv)
+
+	state := ldapPolicyPlan(ldapSAUserDN, "readwrite", types.BoolNull())
+	resp := &frameworkresource.ReadResponse{State: resourceState(t, sch, state)}
+	r.Read(ctx, frameworkresource.ReadRequest{State: resourceState(t, sch, state)}, resp)
+	requireNoDiagnostics(t, resp.Diagnostics)
+
+	var read LDAPPolicyAttachmentRessourceModel
+	requireNoDiagnostics(t, resp.State.Get(ctx, &read))
+	if read.IsGroup.IsNull() || read.IsGroup.ValueBool() {
+		t.Errorf("read is_group = %v, want false", read.IsGroup)
+	}
+	if got, want := read.ID.ValueString(), ldapSAUserDN+"/readwrite"; got != want {
+		t.Errorf("read id = %q, want %q", got, want)
+	}
+	if got := recorder.count(); got != 0 {
+		t.Errorf("read called the admin API %d times, want none", got)
+	}
+}
+
+// All attributes are RequiresReplace, but Update has to stay correct if
+// Terraform ever calls it: it re-attaches and recomputes the identifier.
+func TestLDAPPolicyAttachmentResourceUpdate(t *testing.T) {
+	ctx := context.Background()
+	r := &LDAPPolicyAttachmentRessource{}
+	sch := resourceSchemaOf(t, r)
+	srv, recorder := newRecorderServer(t, http.StatusOK, "")
+	r.client = newUnitAllClient(srv)
+
+	state := ldapPolicyPlan(ldapSAUserDN, "readwrite", types.BoolValue(false))
+	state.ID = types.StringValue(ldapSAUserDN + "/readwrite")
+	resp := &frameworkresource.UpdateResponse{State: resourceState(t, sch, state)}
+	r.Update(ctx, frameworkresource.UpdateRequest{
+		Plan:  resourcePlan(t, sch, state),
+		State: resourceState(t, sch, state),
+	}, resp)
+	requireNoDiagnostics(t, resp.Diagnostics)
+
+	var afterUpdate LDAPPolicyAttachmentRessourceModel
+	requireNoDiagnostics(t, resp.State.Get(ctx, &afterUpdate))
+	if got := afterUpdate.ID.ValueString(); got != ldapSAUserDN+"/readwrite" {
+		t.Errorf("update id = %q", got)
+	}
+	attach := ldapPolicyAttachBody(t, recorder.only(t))
+	if attach.User != ldapSAUserDN || len(attach.Policies) != 1 || attach.Policies[0] != "readwrite" {
+		t.Errorf("update body user/policies = %q/%v", attach.User, attach.Policies)
+	}
+}
+
+func TestLDAPPolicyAttachmentResourceUpdateError(t *testing.T) {
+	r := &LDAPPolicyAttachmentRessource{}
+	sch := resourceSchemaOf(t, r)
+	srv, _ := newRecorderServer(t, http.StatusBadRequest, `<Error><Code>InvalidArgument</Code><Message>user not exist</Message></Error>`)
+	r.client = newUnitAllClient(srv)
+
+	state := ldapPolicyPlan(ldapSAUserDN, "readwrite", types.BoolValue(false))
+	resp := &frameworkresource.UpdateResponse{State: resourceState(t, sch, state)}
+	r.Update(context.Background(), frameworkresource.UpdateRequest{
+		Plan:  resourcePlan(t, sch, state),
+		State: resourceState(t, sch, state),
+	}, resp)
+	assertDiagnosticSummary(t, resp.Diagnostics, "Error attaching policy to LDAP entity")
+}
+
+func TestLDAPPolicyAttachmentResourceDelete(t *testing.T) {
+	ctx := context.Background()
+	r := &LDAPPolicyAttachmentRessource{}
+	sch := resourceSchemaOf(t, r)
+	srv, recorder := newRecorderServer(t, http.StatusOK, "")
+	r.client = newUnitAllClient(srv)
+
+	state := ldapPolicyPlan(ldapSAUserDN, "readwrite", types.BoolValue(false))
+	resp := &frameworkresource.DeleteResponse{State: resourceState(t, sch, state)}
+	r.Delete(ctx, frameworkresource.DeleteRequest{State: resourceState(t, sch, state)}, resp)
+	requireNoDiagnostics(t, resp.Diagnostics)
+
+	request := recorder.only(t)
+	if request.Method != http.MethodPost || request.Path != ldapPolicyDetachPath {
+		t.Fatalf("delete sent %s %s, want POST %s", request.Method, request.Path, ldapPolicyDetachPath)
+	}
+	detach := ldapPolicyAttachBody(t, request)
+	if detach.User != ldapSAUserDN || len(detach.Policies) != 1 || detach.Policies[0] != "readwrite" {
+		t.Errorf("detach body user/policies = %q/%v", detach.User, detach.Policies)
+	}
+}
+
+func TestLDAPPolicyAttachmentResourceDeleteError(t *testing.T) {
+	r := &LDAPPolicyAttachmentRessource{}
+	sch := resourceSchemaOf(t, r)
+	srv, _ := newRecorderServer(t, http.StatusBadRequest, `<Error><Code>InvalidArgument</Code><Message>user not exist</Message></Error>`)
+	r.client = newUnitAllClient(srv)
+
+	state := ldapPolicyPlan(ldapSAUserDN, "readwrite", types.BoolValue(false))
+	resp := &frameworkresource.DeleteResponse{State: resourceState(t, sch, state)}
+	r.Delete(context.Background(), frameworkresource.DeleteRequest{State: resourceState(t, sch, state)}, resp)
+	assertDiagnosticSummary(t, resp.Diagnostics, "Error detaching policy from LDAP entity")
+}
+
+func TestLDAPPolicyAttachmentResourceImportState(t *testing.T) {
+	ctx := context.Background()
+	const dn = "uid=alice,ou=people,dc=example,dc=com"
+
+	for _, tc := range []struct {
+		name        string
+		id          string
+		wantTarget  string
+		wantPolicy  string
+		wantIsGroup types.Bool
+		wantErr     string
+	}{
+		{
+			name:        "user and policy",
+			id:          dn + "/readwrite",
+			wantTarget:  dn,
+			wantPolicy:  "readwrite",
+			wantIsGroup: types.BoolNull(),
+		},
+		{
+			name:        "group and policy",
+			id:          dn + "/readonly/true",
+			wantTarget:  dn,
+			wantPolicy:  "readonly",
+			wantIsGroup: types.BoolValue(true),
+		},
+		{
+			name:        "explicit user flag",
+			id:          dn + "/readwrite/false",
+			wantTarget:  dn,
+			wantPolicy:  "readwrite",
+			wantIsGroup: types.BoolValue(false),
+		},
+		{
+			name:       "distinguished name containing a slash",
+			id:         "cn=a/b,ou=people,dc=example,dc=com/readwrite",
+			wantTarget: "cn=a/b,ou=people,dc=example,dc=com",
+			wantPolicy: "readwrite",
+		},
+		{
+			name:    "malformed",
+			id:      "readwrite",
+			wantErr: "Invalid import ID",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &LDAPPolicyAttachmentRessource{}
+			sch := resourceSchemaOf(t, r)
+			resp := &frameworkresource.ImportStateResponse{State: resourceState(t, sch, LDAPPolicyAttachmentRessourceModel{})}
+			r.ImportState(ctx, frameworkresource.ImportStateRequest{ID: tc.id}, resp)
+			if tc.wantErr != "" {
+				assertDiagnosticSummary(t, resp.Diagnostics, tc.wantErr)
+				return
+			}
+			requireNoDiagnostics(t, resp.Diagnostics)
+
+			var target, policy types.String
+			requireNoDiagnostics(t, resp.State.GetAttribute(ctx, path.Root("user_or_group"), &target))
+			requireNoDiagnostics(t, resp.State.GetAttribute(ctx, path.Root("policy"), &policy))
+			if target.ValueString() != tc.wantTarget {
+				t.Errorf("imported user_or_group = %q, want %q", target.ValueString(), tc.wantTarget)
+			}
+			if policy.ValueString() != tc.wantPolicy {
+				t.Errorf("imported policy = %q, want %q", policy.ValueString(), tc.wantPolicy)
+			}
+			var isGroup types.Bool
+			requireNoDiagnostics(t, resp.State.GetAttribute(ctx, path.Root("is_group"), &isGroup))
+			if !isGroup.Equal(tc.wantIsGroup) {
+				t.Errorf("imported is_group = %v, want %v", isGroup, tc.wantIsGroup)
+			}
+		})
 	}
 }

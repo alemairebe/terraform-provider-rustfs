@@ -11,28 +11,21 @@
 # `Coverage` job fails if README.md is out of sync with this file.
 #
 # `measured_*` is what the project last observed; `floor_*` is the enforced
-# minimum. The floor is kept below the measurement so environment jitter (a new
-# `latest` image, a skip that depends on the server, the host-vs-container
-# difference when the fixture is not run through compose) cannot fail a run on
-# its own. The 2026-10-19 measurement below was taken on the pull-request branch
-# with `podman-compose` on the host; `floor_total` sits at 80% on purpose, so the
-# OpenSSF Silver criterion (test_statement_coverage80) cannot be lost by a pull
-# request that passes the gate.
+# minimum, kept half a point below the measurement so environment jitter (a new
+# `latest` image, a skip that depends on the server) cannot fail a run on its own.
 
 # Last measurement.
-measured_total=81.2
-measured_provider=76.1
+measured_total=83.4
+measured_provider=79.0
 measured_pkg_rustfs=97.8
-measured_commit=5064bb0
+measured_commit=MERGE_COMMIT
 measured_date=2026-10-19
 
 # Enforced floor.
-floor_total=80.0
-floor_provider=74.5
+floor_total=82.0
+floor_provider=77.5
 floor_pkg_rustfs=97.3
 
 # Milestones tracked in the issue tracker (see .github/OPENSSF-BEST-PRACTICES.md).
-# 80% (Silver) is met as of the measurement above; 85% is the next internal step
-# and 90% is Gold.
-target=85
+target=80
 gold=90

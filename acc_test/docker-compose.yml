@@ -66,6 +66,13 @@ services:
       RUSTFS_PEER_S3_ENDPOINT: "rustfs-peer:9000"
       RUSTFS_PEER_ACCESS_KEY: "rustfsadmin"
       RUSTFS_PEER_SECRET_KEY: "rustfsadmin"
+      # Second site for TestAccSiteReplicationResource: the peer above, as
+      # *RustFS* sees it. It needs a scheme because it is handed to the server
+      # as a site endpoint (RUSTFS_PEER_ENDPOINT is host:port for an S3 target),
+      # and it must not be a loopback address: site-replication/add refuses one
+      # and records the local site from the Host header of the admin request, so
+      # a host-side run against a published port cannot form the group.
+      RUSTFS_SITE_REPLICATION_PEER_ENDPOINT: "http://rustfs-peer:9000"
       TEST_FILTER: "${TEST_FILTER:-TestAcc}"
     depends_on:
       rustfs:

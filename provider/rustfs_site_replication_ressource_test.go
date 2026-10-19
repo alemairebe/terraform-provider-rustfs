@@ -6,24 +6,20 @@ package provider
 import (
 	"context"
 	"encoding/json"
-	"fmt"
-	"io"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/caberdo/terraform-provider-rustfs/pkg/rustfs"
-	"github.com/hashicorp/terraform-plugin-framework/resource"
-	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
+	"github.com/hashicorp/terraform-plugin-framework/path"
+	frameworkresource "github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
-	"github.com/hashicorp/terraform-plugin-go/tftypes"
 )
 
 func TestSiteReplicationRessourceSchema(t *testing.T) {
 	r := NewSiteReplicationRessource()
-	resp := &resource.SchemaResponse{}
-	r.Schema(context.Background(), resource.SchemaRequest{}, resp)
+	resp := &frameworkresource.SchemaResponse{}
+	r.Schema(context.Background(), frameworkresource.SchemaRequest{}, resp)
 	if resp.Diagnostics.HasError() {
 		t.Fatalf("schema diagnostics: %s", resp.Diagnostics)
 	}
@@ -34,203 +30,291 @@ func TestSiteReplicationRessourceSchema(t *testing.T) {
 	}
 }
 
-// TestSiteReplicationRessourceImportState covers ImportState, which is a plain
-// passthrough: the import ID is the peer name and is copied verbatim into
-// "name" by resource.ImportStatePassthroughID. The resource therefore has no
-// composite "<a>/<b>" import grammar and no malformed-ID diagnostic to assert -
-// an ID that would be malformed for the resources that split on "/" is accepted
-// here unchanged, and the acceptance test consequently has no import-error
-// step. What this test pins down is the passthrough itself: the ID lands in
-// "name" unchanged, no other attribute is invented (only Read fills them in,
-// and the write-only credentials never come back), and an empty ID - which the
-// framework helper skips - leaves the state untouched rather than half-built.
-func TestSiteReplicationRessourceImportState(t *testing.T) {
-	ctx := context.Background()
-	r, ok := NewSiteReplicationRessource().(resource.ResourceWithImportState)
-	if !ok {
-		t.Fatal("rustfs_site_replication must implement resource.ResourceWithImportState")
-	}
-	schemaResp := &resource.SchemaResponse{}
-	r.Schema(ctx, resource.SchemaRequest{}, schemaResp)
-	if schemaResp.Diagnostics.HasError() {
-		t.Fatalf("schema diagnostics: %s", schemaResp.Diagnostics)
-	}
+// The acceptance test skips itself when RUSTFS_SITE_REPLICATION_PEER_ENDPOINT is
+// unset, and the add route rejects a loopback endpoint, so a run from the host
+// against a published port can never form the group: the live path is covered by
+// the compose test profile. The flows below drive Create, Read (including
+// not-found and error), Update, Delete and ImportState against the mocked admin
+// API harness in provider_test.go, and pin the two endpoints' different wire
+// contracts: add takes an array of sites with a plural `endpoints` field, edit
+// takes a single PeerInfo with a singular `endpoint`.
 
-	for _, tc := range []struct {
-		name string
-		id   string
-		// The framework helper passes nothing through when the ID is empty,
-		// so no state is built at all.
-		emptyID bool
-	}{
-		{name: "peer name", id: "peer"},
-		{name: "composite-looking id", id: "group/policy"},
-		{name: "empty id", id: "", emptyID: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			resp := &resource.ImportStateResponse{State: tfsdk.State{
-				Schema: schemaResp.Schema,
-				Raw:    tftypes.NewValue(schemaResp.Schema.Type().TerraformType(ctx), nil),
-			}}
+const (
+	siteReplicationAddPath    = "/rustfs/admin/v3/site-replication/add"
+	siteReplicationEditPath   = "/rustfs/admin/v3/site-replication/edit"
+	siteReplicationRemovePath = "/rustfs/admin/v3/site-replication/remove"
+	siteReplicationInfoPath   = "/rustfs/admin/v3/site-replication/info"
 
-			r.ImportState(ctx, resource.ImportStateRequest{ID: tc.id}, resp)
+	mockSiteReplicationPeerEndpoint = "http://rustfs-peer:9000"
+)
 
-			if resp.Diagnostics.HasError() {
-				t.Fatalf("import diagnostics: %s", resp.Diagnostics)
-			}
-			if tc.emptyID {
-				// resource.ImportStatePassthroughID ignores an empty ID
-				// silently, so nothing - not even a null attribute - is
-				// written and the ID is neither rejected nor kept.
-				if !resp.State.Raw.IsNull() {
-					t.Errorf("empty import ID populated state: %s", resp.State.Raw)
-				}
-				return
-			}
-			var got SiteReplicationRessourceModel
-			if diags := resp.State.Get(ctx, &got); diags.HasError() {
-				t.Fatalf("state diagnostics: %s", diags)
-			}
-			if got.Name.ValueString() != tc.id {
-				t.Errorf("name = %q, want the import ID %q passed through verbatim", got.Name.ValueString(), tc.id)
-			}
-			if !got.Endpoint.IsNull() || !got.AccessKey.IsNull() || !got.SecretKey.IsNull() ||
-				!got.SkipTLSVerify.IsNull() || !got.CACertPEM.IsNull() {
-				t.Errorf("import must populate the name only, got %+v", got)
-			}
-		})
+var (
+	siteReplicationAccessKey     = unitTestCredential("RUSTFS_TEST_PEER_ACCESS_KEY", 'a')
+	siteReplicationSecret        = unitTestCredential("RUSTFS_TEST_PEER_SECRET_KEY", 's')
+	siteReplicationSecretRotated = unitTestCredential("RUSTFS_TEST_PEER_SECRET_KEY_ROTATED", 'r')
+)
+
+// siteReplicationInfoReply is the mocked site-replication/info payload: a peer
+// named like the plan's, plus the local site.
+const siteReplicationInfoReply = `{"enabled":true,"name":"local","sites":[` +
+	`{"name":"local","endpoint":"http://rustfs:9000","deploymentID":"dep-local"},` +
+	`{"name":"tf-acc-peer","endpoint":"http://rustfs-peer:9000","deploymentID":"dep-peer","skipTlsVerify":true}]}`
+
+// siteReplicationInfoNoPeerReply is the same payload without the peer.
+const siteReplicationInfoNoPeerReply = `{"enabled":true,"name":"local","sites":[` +
+	`{"name":"local","endpoint":"http://rustfs:9000","deploymentID":"dep-local"}]}`
+
+func siteReplicationPlan(endpoint, secretKey string, skipTLSVerify types.Bool) SiteReplicationRessourceModel {
+	return SiteReplicationRessourceModel{
+		Name:          types.StringValue("tf-acc-peer"),
+		Endpoint:      types.StringValue(endpoint),
+		AccessKey:     types.StringValue(siteReplicationAccessKey),
+		SecretKey:     types.StringValue(secretKey),
+		SkipTLSVerify: skipTLSVerify,
+		CACertPEM:     types.StringNull(),
 	}
 }
 
-// TestSiteReplicationRessourceUpdate covers Update against a stand-in admin API
-// without needing a cluster that can form a site-replication group (see
-// TestAccSiteReplicationResource, which skips on a single-node server). It
-// asserts the edit request the resource sends, that the plan is written back to
-// state, and that a rejected edit surfaces as a diagnostic instead of a
-// half-written state.
-func TestSiteReplicationRessourceUpdate(t *testing.T) {
+// assertSiteReplicationModelEqual reports the fields that differ, without
+// printing the peer credentials.
+func assertSiteReplicationModelEqual(t *testing.T, what string, got, want SiteReplicationRessourceModel) {
+	t.Helper()
+	if got.Name != want.Name {
+		t.Errorf("%s: name = %q, want %q", what, got.Name.ValueString(), want.Name.ValueString())
+	}
+	if got.Endpoint != want.Endpoint {
+		t.Errorf("%s: endpoint = %q, want %q", what, got.Endpoint.ValueString(), want.Endpoint.ValueString())
+	}
+	if got.SkipTLSVerify != want.SkipTLSVerify {
+		t.Errorf("%s: skip_tls_verify = %v, want %v", what, got.SkipTLSVerify, want.SkipTLSVerify)
+	}
+	if got.CACertPEM != want.CACertPEM {
+		t.Errorf("%s: ca_cert_pem differs (value redacted)", what)
+	}
+	if got.AccessKey.ValueString() != want.AccessKey.ValueString() || got.SecretKey.ValueString() != want.SecretKey.ValueString() {
+		t.Errorf("%s: peer credentials differ from the plan (values redacted)", what)
+	}
+}
+
+func TestSiteReplicationResourceCreate(t *testing.T) {
 	ctx := context.Background()
+	r := NewSiteReplicationRessource().(*SiteReplicationRessource)
+	sch := resourceSchemaOf(t, r)
+	srv, recorder := newRecorderServer(t, http.StatusOK, "")
+	r.client = newUnitAllClient(srv)
 
-	for _, tc := range []struct {
-		name       string
-		status     int
-		response   string
-		wantUpdate bool
-		wantErr    string
-	}{
-		{
-			name:       "edit is accepted",
-			status:     http.StatusOK,
-			response:   `{"status":"success"}`,
-			wantUpdate: true,
-		},
-		{
-			name:     "edit is rejected",
-			status:   http.StatusForbidden,
-			response: `<?xml version="1.0" encoding="UTF-8"?><Error><Code>InvalidRequest</Code><Message>invalid site endpoint</Message></Error>`,
-			wantErr:  "Error updating site replication",
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var gotMethod, gotPath, gotBody string
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				gotMethod, gotPath = r.Method, r.URL.Path
-				body, _ := io.ReadAll(r.Body)
-				gotBody = string(body)
-				w.WriteHeader(tc.status)
-				_, _ = w.Write([]byte(tc.response))
-			}))
-			t.Cleanup(server.Close)
+	// A trailing slash in the configuration must not reach the wire.
+	plan := siteReplicationPlan(mockSiteReplicationPeerEndpoint+"/", siteReplicationSecret, types.BoolValue(false))
+	resp := &frameworkresource.CreateResponse{State: resourceState(t, sch, SiteReplicationRessourceModel{})}
+	r.Create(ctx, frameworkresource.CreateRequest{Plan: resourcePlan(t, sch, plan)}, resp)
+	requireNoDiagnostics(t, resp.Diagnostics)
 
-			client := rustfs.New(&rustfs.RustfsAdminConfig{
-				AccessKey:    "admin",
-				AccessSecret: "secret",
-				Endpoint:     strings.TrimPrefix(server.URL, "http://"),
-			})
-			r := &SiteReplicationRessource{client: &AllClient{RustClient: client}}
+	var created SiteReplicationRessourceModel
+	requireNoDiagnostics(t, resp.State.Get(ctx, &created))
+	assertSiteReplicationModelEqual(t, "create state", created, plan)
 
-			schemaResp := &resource.SchemaResponse{}
-			r.Schema(ctx, resource.SchemaRequest{}, schemaResp)
-			if schemaResp.Diagnostics.HasError() {
-				t.Fatalf("schema diagnostics: %s", schemaResp.Diagnostics)
-			}
-			schemaType := schemaResp.Schema.Type().TerraformType(ctx)
+	request := recorder.only(t)
+	if request.Method != http.MethodPut || request.Path != siteReplicationAddPath {
+		t.Fatalf("create sent %s %s, want PUT %s", request.Method, request.Path, siteReplicationAddPath)
+	}
+	var addedSites []rustfs.SiteReplicationSite
+	if err := json.Unmarshal(request.Body, &addedSites); err != nil {
+		t.Fatalf("create body is not an array of sites: %v", err)
+	}
+	if len(addedSites) != 1 {
+		t.Fatalf("create body carries %d sites, want one", len(addedSites))
+	}
+	if addedSites[0].Endpoint != mockSiteReplicationPeerEndpoint || addedSites[0].Name != "tf-acc-peer" {
+		t.Errorf("create body endpoint/name = %q/%q, want %q/tf-acc-peer",
+			addedSites[0].Endpoint, addedSites[0].Name, mockSiteReplicationPeerEndpoint)
+	}
+	if addedSites[0].AccessKey != plan.AccessKey.ValueString() || addedSites[0].SecretKey != plan.SecretKey.ValueString() {
+		t.Error("create body lost the peer credentials (values redacted)")
+	}
+}
 
-			// The trailing slash is deliberate: modelToSite trims it before
-			// the endpoint reaches the wire.
-			plan := tfsdk.Plan{Schema: schemaResp.Schema, Raw: tftypes.NewValue(schemaType, nil)}
-			diags := plan.Set(ctx, SiteReplicationRessourceModel{
-				Name:          types.StringValue("peer"),
-				Endpoint:      types.StringValue("http://127.0.0.1:9002/"),
-				AccessKey:     types.StringValue("peeradmin"),
-				SecretKey:     types.StringValue("peersecret"),
-				SkipTLSVerify: types.BoolValue(true),
-				CACertPEM:     types.StringValue(""),
-			})
-			if diags.HasError() {
-				t.Fatalf("plan diagnostics: %s", diags)
-			}
+func TestSiteReplicationResourceCreateError(t *testing.T) {
+	r := NewSiteReplicationRessource().(*SiteReplicationRessource)
+	sch := resourceSchemaOf(t, r)
+	srv, _ := newRecorderServer(t, http.StatusInternalServerError, internalErrorBody)
+	r.client = newUnitAllClient(srv)
 
-			resp := &resource.UpdateResponse{State: tfsdk.State{
-				Schema: schemaResp.Schema,
-				Raw:    tftypes.NewValue(schemaType, nil),
-			}}
-			r.Update(ctx, resource.UpdateRequest{Plan: plan}, resp)
+	plan := siteReplicationPlan(mockSiteReplicationPeerEndpoint, siteReplicationSecret, types.BoolValue(false))
+	resp := &frameworkresource.CreateResponse{State: resourceState(t, sch, SiteReplicationRessourceModel{})}
+	r.Create(context.Background(), frameworkresource.CreateRequest{Plan: resourcePlan(t, sch, plan)}, resp)
+	assertDiagnosticSummary(t, resp.Diagnostics, "Error creating site replication")
+}
 
-			if gotMethod != http.MethodPut {
-				t.Errorf("edit request method = %q, want %q", gotMethod, http.MethodPut)
-			}
-			if !strings.HasSuffix(gotPath, "/site-replication/edit") {
-				t.Errorf("edit request path = %q, want it to end in /site-replication/edit", gotPath)
-			}
+func TestSiteReplicationResourceRead(t *testing.T) {
+	ctx := context.Background()
+	r := NewSiteReplicationRessource().(*SiteReplicationRessource)
+	sch := resourceSchemaOf(t, r)
+	srv, recorder := newRecorderServer(t, http.StatusOK, siteReplicationInfoReply)
+	r.client = newUnitAllClient(srv)
 
-			if tc.wantErr != "" {
-				if !resp.Diagnostics.HasError() {
-					t.Fatalf("expected a diagnostic for a rejected edit, got none")
-				}
-				var messages []string
-				for _, d := range resp.Diagnostics.Errors() {
-					messages = append(messages, fmt.Sprintf("%s: %s", d.Summary(), d.Detail()))
-				}
-				if joined := strings.Join(messages, "\n"); !strings.Contains(joined, tc.wantErr) {
-					t.Errorf("diagnostics = %q, want them to mention %q", joined, tc.wantErr)
-				}
-				return
-			}
+	state := siteReplicationPlan(mockSiteReplicationPeerEndpoint, siteReplicationSecret, types.BoolValue(false))
+	resp := &frameworkresource.ReadResponse{State: resourceState(t, sch, state)}
+	r.Read(ctx, frameworkresource.ReadRequest{State: resourceState(t, sch, state)}, resp)
+	requireNoDiagnostics(t, resp.Diagnostics)
 
-			if resp.Diagnostics.HasError() {
-				t.Fatalf("update diagnostics: %s", resp.Diagnostics)
-			}
+	var read SiteReplicationRessourceModel
+	requireNoDiagnostics(t, resp.State.Get(ctx, &read))
+	if read.Endpoint.ValueString() != mockSiteReplicationPeerEndpoint {
+		t.Errorf("read endpoint = %q, want %q", read.Endpoint.ValueString(), mockSiteReplicationPeerEndpoint)
+	}
+	// The server reports the peer's TLS setting, not the plan's.
+	if !read.SkipTLSVerify.ValueBool() {
+		t.Error("read skip_tls_verify = false, want the server's true")
+	}
+	if read.Name.ValueString() != "tf-acc-peer" {
+		t.Errorf("read name = %q, want tf-acc-peer", read.Name.ValueString())
+	}
+	if request := recorder.only(t); request.Path != siteReplicationInfoPath {
+		t.Errorf("read requested %s, want %s", request.Path, siteReplicationInfoPath)
+	}
+}
 
-			var payload []rustfs.SiteReplicationSite
-			if err := json.Unmarshal([]byte(gotBody), &payload); err != nil {
-				t.Fatalf("edit body must be a JSON array: %v (body: %s)", err, gotBody)
-			}
-			if len(payload) != 1 {
-				t.Fatalf("edit body must carry exactly one site, got %d (body: %s)", len(payload), gotBody)
-			}
-			site := payload[0]
-			if site.Name != "peer" {
-				t.Errorf("edit body name = %q, want %q", site.Name, "peer")
-			}
-			if site.Endpoint != "http://127.0.0.1:9002" {
-				t.Errorf("edit body endpoint = %q, want the trailing slash trimmed", site.Endpoint)
-			}
-			if site.AccessKey != "peeradmin" || site.SecretKey != "peersecret" {
-				// The values are credentials: report the mismatch, not them.
-				t.Error("edit body credentials do not match the configured ones")
-			}
-			if !site.SkipTLSVerify {
-				t.Error("edit body skipTlsVerify = false, want true")
-			}
+func TestSiteReplicationResourceReadDropsMissingPeer(t *testing.T) {
+	ctx := context.Background()
+	r := NewSiteReplicationRessource().(*SiteReplicationRessource)
+	sch := resourceSchemaOf(t, r)
+	srv, _ := newRecorderServer(t, http.StatusOK, siteReplicationInfoNoPeerReply)
+	r.client = newUnitAllClient(srv)
 
-			var got SiteReplicationRessourceModel
-			if diags := resp.State.Get(ctx, &got); diags.HasError() {
-				t.Fatalf("state diagnostics: %s", diags)
-			}
-			if got.Endpoint.ValueString() != "http://127.0.0.1:9002/" || !got.SkipTLSVerify.ValueBool() {
-				t.Errorf("state after update = %+v, want the plan written back unchanged", got)
-			}
-		})
+	state := siteReplicationPlan(mockSiteReplicationPeerEndpoint, siteReplicationSecret, types.BoolValue(false))
+	resp := &frameworkresource.ReadResponse{State: resourceState(t, sch, state)}
+	r.Read(ctx, frameworkresource.ReadRequest{State: resourceState(t, sch, state)}, resp)
+	requireNoDiagnostics(t, resp.Diagnostics)
+	// The state is not printed: it holds the peer credentials.
+	if !resp.State.Raw.IsNull() {
+		t.Fatal("read of a removed peer must drop the resource, but the state is not null")
+	}
+}
+
+func TestSiteReplicationResourceReadError(t *testing.T) {
+	r := NewSiteReplicationRessource().(*SiteReplicationRessource)
+	sch := resourceSchemaOf(t, r)
+	srv, _ := newRecorderServer(t, http.StatusInternalServerError, internalErrorBody)
+	r.client = newUnitAllClient(srv)
+
+	state := siteReplicationPlan(mockSiteReplicationPeerEndpoint, siteReplicationSecret, types.BoolValue(false))
+	resp := &frameworkresource.ReadResponse{State: resourceState(t, sch, state)}
+	r.Read(context.Background(), frameworkresource.ReadRequest{State: resourceState(t, sch, state)}, resp)
+	assertDiagnosticSummary(t, resp.Diagnostics, "Error reading site replication")
+}
+
+func TestSiteReplicationResourceUpdate(t *testing.T) {
+	ctx := context.Background()
+	r := NewSiteReplicationRessource().(*SiteReplicationRessource)
+	sch := resourceSchemaOf(t, r)
+	srv, recorder := newRecorderServer(t, http.StatusOK, "")
+	r.client = newUnitAllClient(srv)
+
+	state := siteReplicationPlan(mockSiteReplicationPeerEndpoint, siteReplicationSecret, types.BoolValue(false))
+	plan := state
+	plan.SecretKey = types.StringValue(siteReplicationSecretRotated)
+	resp := &frameworkresource.UpdateResponse{State: resourceState(t, sch, state)}
+	r.Update(ctx, frameworkresource.UpdateRequest{
+		Plan:  resourcePlan(t, sch, plan),
+		State: resourceState(t, sch, state),
+	}, resp)
+	requireNoDiagnostics(t, resp.Diagnostics)
+
+	var afterUpdate SiteReplicationRessourceModel
+	requireNoDiagnostics(t, resp.State.Get(ctx, &afterUpdate))
+	assertSiteReplicationModelEqual(t, "update state", afterUpdate, plan)
+
+	request := recorder.only(t)
+	if request.Method != http.MethodPut || request.Path != siteReplicationEditPath {
+		t.Fatalf("update sent %s %s, want PUT %s", request.Method, request.Path, siteReplicationEditPath)
+	}
+	// The body is not printed on failure: it carries the peer credentials.
+	body := string(request.Body)
+	if strings.Contains(body, `"endpoints"`) {
+		t.Error("edit body must use the singular endpoint field, not the add-only \"endpoints\"")
+	}
+	if !strings.HasPrefix(body, "{") {
+		t.Error("edit body must be a single PeerInfo object, not the add-only array")
+	}
+	var edited map[string]any
+	if err := json.Unmarshal(request.Body, &edited); err != nil {
+		t.Fatalf("edit body is not JSON: %v", err)
+	}
+	if edited["name"] != "tf-acc-peer" || edited["endpoint"] != mockSiteReplicationPeerEndpoint {
+		t.Errorf("edit body name/endpoint = %v/%v, want tf-acc-peer/%s",
+			edited["name"], edited["endpoint"], mockSiteReplicationPeerEndpoint)
+	}
+	if edited["secretKey"] != siteReplicationSecretRotated {
+		t.Error("edit body does not carry the rotated secret key (value redacted)")
+	}
+}
+
+func TestSiteReplicationResourceUpdateError(t *testing.T) {
+	r := NewSiteReplicationRessource().(*SiteReplicationRessource)
+	sch := resourceSchemaOf(t, r)
+	srv, _ := newRecorderServer(t, http.StatusInternalServerError, internalErrorBody)
+	r.client = newUnitAllClient(srv)
+
+	state := siteReplicationPlan(mockSiteReplicationPeerEndpoint, siteReplicationSecret, types.BoolValue(false))
+	resp := &frameworkresource.UpdateResponse{State: resourceState(t, sch, state)}
+	r.Update(context.Background(), frameworkresource.UpdateRequest{
+		Plan:  resourcePlan(t, sch, state),
+		State: resourceState(t, sch, state),
+	}, resp)
+	assertDiagnosticSummary(t, resp.Diagnostics, "Error updating site replication")
+}
+
+func TestSiteReplicationResourceDelete(t *testing.T) {
+	ctx := context.Background()
+	r := NewSiteReplicationRessource().(*SiteReplicationRessource)
+	sch := resourceSchemaOf(t, r)
+	srv, recorder := newRecorderServer(t, http.StatusOK, "")
+	r.client = newUnitAllClient(srv)
+
+	state := siteReplicationPlan(mockSiteReplicationPeerEndpoint, siteReplicationSecret, types.BoolValue(false))
+	resp := &frameworkresource.DeleteResponse{State: resourceState(t, sch, state)}
+	r.Delete(ctx, frameworkresource.DeleteRequest{State: resourceState(t, sch, state)}, resp)
+	requireNoDiagnostics(t, resp.Diagnostics)
+
+	request := recorder.only(t)
+	if request.Method != http.MethodPut || request.Path != siteReplicationRemovePath {
+		t.Fatalf("delete sent %s %s, want PUT %s", request.Method, request.Path, siteReplicationRemovePath)
+	}
+	var removed struct {
+		Sites []string `json:"sites"`
+	}
+	if err := json.Unmarshal(request.Body, &removed); err != nil {
+		t.Fatalf("delete body is not JSON: %v", err)
+	}
+	if len(removed.Sites) != 1 || removed.Sites[0] != "tf-acc-peer" {
+		t.Errorf("delete body sites = %v, want [tf-acc-peer]", removed.Sites)
+	}
+}
+
+func TestSiteReplicationResourceDeleteError(t *testing.T) {
+	r := NewSiteReplicationRessource().(*SiteReplicationRessource)
+	sch := resourceSchemaOf(t, r)
+	srv, _ := newRecorderServer(t, http.StatusInternalServerError, internalErrorBody)
+	r.client = newUnitAllClient(srv)
+
+	state := siteReplicationPlan(mockSiteReplicationPeerEndpoint, siteReplicationSecret, types.BoolValue(false))
+	resp := &frameworkresource.DeleteResponse{State: resourceState(t, sch, state)}
+	r.Delete(context.Background(), frameworkresource.DeleteRequest{State: resourceState(t, sch, state)}, resp)
+	assertDiagnosticSummary(t, resp.Diagnostics, "Error deleting site replication")
+}
+
+func TestSiteReplicationResourceImportState(t *testing.T) {
+	ctx := context.Background()
+	r := NewSiteReplicationRessource().(*SiteReplicationRessource)
+	sch := resourceSchemaOf(t, r)
+
+	resp := &frameworkresource.ImportStateResponse{State: resourceState(t, sch, SiteReplicationRessourceModel{})}
+	r.ImportState(ctx, frameworkresource.ImportStateRequest{ID: "tf-acc-peer"}, resp)
+	requireNoDiagnostics(t, resp.Diagnostics)
+
+	var name types.String
+	requireNoDiagnostics(t, resp.State.GetAttribute(ctx, path.Root("name"), &name))
+	if name.ValueString() != "tf-acc-peer" {
+		t.Errorf("imported name = %q, want tf-acc-peer", name.ValueString())
 	}
 }

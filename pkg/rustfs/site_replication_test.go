@@ -35,18 +35,22 @@ func TestSiteReplicationAdd(t *testing.T) {
 	if !strings.Contains(gotPath, "/site-replication/add") {
 		t.Errorf("wrong path: %s", gotPath)
 	}
+	// The body is never printed on failure: it carries the peer credentials.
 	if !strings.Contains(gotBody, `"endpoints":"http://localhost:9002"`) {
-		t.Errorf("expected endpoints field, got: %s", gotBody)
+		t.Error("add body must carry the endpoint in its \"endpoints\" field")
 	}
 	if !strings.Contains(gotBody, `"accessKey":"peeradmin"`) {
-		t.Errorf("expected accessKey field, got: %s", gotBody)
+		t.Error("add body must carry the peer access key (value redacted)")
 	}
 	var payload []SiteReplicationSite
 	if err := json.Unmarshal([]byte(gotBody), &payload); err != nil {
 		t.Fatalf("add body must be a JSON array: %v", err)
 	}
-	if len(payload) != 1 || payload[0].Name != "peer" {
-		t.Errorf("unexpected payload: %+v", payload)
+	if len(payload) != 1 {
+		t.Fatalf("add body carries %d sites, want one", len(payload))
+	}
+	if payload[0].Name != "peer" {
+		t.Errorf("add body name = %q, want peer", payload[0].Name)
 	}
 }
 
@@ -71,11 +75,25 @@ func TestSiteReplicationEdit(t *testing.T) {
 	if !strings.Contains(gotPath, "/site-replication/edit") {
 		t.Errorf("wrong path: %s", gotPath)
 	}
-	if !strings.Contains(gotBody, `"endpoints":"http://localhost:9003"`) {
-		t.Errorf("expected endpoints field, got: %s", gotBody)
+	// site-replication/edit parses a single PeerInfo whose endpoint field is
+	// "endpoint" (singular); the add-only "endpoints" field and the array body
+	// are rejected by RustFS 1.0.3.
+	// The body is never printed on failure: it carries the peer credentials.
+	if strings.Contains(gotBody, `"endpoints"`) {
+		t.Error("edit body must not use the add-only \"endpoints\" field")
 	}
-	if !strings.Contains(gotBody, `"skipTlsVerify":true`) {
-		t.Errorf("expected skipTlsVerify field, got: %s", gotBody)
+	if !strings.HasPrefix(gotBody, "{") {
+		t.Error("edit body must be a single object, not the add-only array")
+	}
+	var payload siteReplicationPeerEdit
+	if err := json.Unmarshal([]byte(gotBody), &payload); err != nil {
+		t.Fatalf("edit body must be a PeerInfo object: %v", err)
+	}
+	if payload.Name != "peer" || payload.Endpoint != "http://localhost:9003" {
+		t.Errorf("edit body name/endpoint = %q/%q, want peer/http://localhost:9003", payload.Name, payload.Endpoint)
+	}
+	if !payload.SkipTLSVerify {
+		t.Error("edit body must set skipTlsVerify")
 	}
 }
 
@@ -102,7 +120,7 @@ func TestSiteReplicationRemove(t *testing.T) {
 		t.Fatalf("invalid JSON body: %v", err)
 	}
 	if len(body.Sites) != 1 || body.Sites[0] != "peer" {
-		t.Errorf("wrong body: %s", gotBody)
+		t.Errorf("remove body carries %d sites, want one", len(body.Sites))
 	}
 }
 

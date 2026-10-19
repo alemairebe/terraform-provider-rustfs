@@ -184,8 +184,9 @@ func (r *LDAPPolicyAttachmentRessource) Delete(ctx context.Context, req resource
 
 func (r *LDAPPolicyAttachmentRessource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	// Accepts "<user_or_group>/<policy>" and optionally
-	// "<user_or_group>/<policy>/<is_group>". The policy is identified from the
-	// right so distinguished names containing "/" are still supported.
+	// "<user_or_group>/<policy>/<is_group>". The optional is_group flag is the
+	// last element and the policy sits directly before it, so distinguished
+	// names containing "/" are still supported.
 	parts := strings.Split(req.ID, "/")
 	if len(parts) < 2 {
 		resp.Diagnostics.AddError(
@@ -196,7 +197,7 @@ func (r *LDAPPolicyAttachmentRessource) ImportState(ctx context.Context, req res
 	}
 	isGroupIdx := -1
 	policyIdx := len(parts) - 1
-	if len(parts) >= 3 && (parts[len(parts)-1] == "true" || parts[len(parts)-1] == "false") {
+	if last := parts[len(parts)-1]; len(parts) >= 3 && (last == "true" || last == "false") {
 		isGroupIdx = len(parts) - 1
 		policyIdx = len(parts) - 2
 	}

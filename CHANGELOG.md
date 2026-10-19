@@ -27,9 +27,6 @@ BUG FIXES:
   the next plan recreates it. `rustfs_serviceaccount` deletion is idempotent (RustFS answers
   `service account not exist`), and `rustfs_user_policy_attachment` reads the attachment back from
   `user-info`, so a policy detached outside Terraform is detected instead of staying in state
-- `rustfs_ldap_policy_attachment` parses the optional `<user_or_group>/<policy>/<is_group>` import
-  ID correctly again: the flag was read from the wrong position, which folded the policy into
-  `user_or_group` and wrote a string into the boolean `is_group`
 - `rustfs_tier` retries an add, edit or remove while RustFS reports that the previous tier mutation
   has not finished reconciling (`TierEditFailed`, `XMinioAdminTierBackendInUse`) instead of failing
   the apply
@@ -38,6 +35,16 @@ BUG FIXES:
   send, so both were silently ignored and the plan never converged. Deleting the resource is also
   idempotent now: deleting a replication configuration removes the remote targets it references, so
   the target deletion that follows reports "not found" and that is treated as success
+- `rustfs_site_replication` sent in-place updates with the payload shape of the add route, so
+  changing `endpoint`, `access_key`, `secret_key`, `skip_tls_verify` or `ca_cert_pem` failed with
+  `invalid JSON: invalid type: map, expected a string`. `site-replication/edit` parses a single
+  `PeerInfo` object whose endpoint field is `endpoint` (singular), unlike `site-replication/add`,
+  which takes an array of sites with `endpoints`; `Update` now sends that shape (verified against
+  RustFS 1.0.1 and 1.0.3)
+- `rustfs_ldap_policy_attachment` read the optional `is_group` flag of an import ID from the wrong
+  position: importing `'<user_or_group>/<policy>/true'` stored `<user_or_group>/<policy>` as the
+  target and `true` as the policy name. The flag is now read from the last segment, which is the
+  form the resource documentation and the acceptance test have always used
 
 IMPROVEMENTS:
 - The acceptance suite changes resources now instead of only creating and destroying them. Every
@@ -66,9 +73,9 @@ IMPROVEMENTS:
   `.github/coverage-baseline.txt`, and the `latest` cell of the acceptance matrix repeats that gate
   on `main`, so the floor can only move up. The README carries a generated coverage badge and a
   per-package bar chart (`scripts/coverage-readme.sh`); CI fails when they drift from the baseline.
-  Merged coverage moved from 72.3% at 0.5.0 to 78.6% with the per-handler unit tests and to 81.2%
-  with the update/import work below, which crosses the OpenSSF Silver threshold of 80%; 90% (Gold)
-  is tracked in the issue tracker
+  Merged coverage moved from 72.3% at 0.5.0 to 78.6% with the per-handler unit tests, to 81.4% with
+  the LDAP and site-replication tests, and further with the update/import work below, which crosses
+  the OpenSSF Silver threshold of 80%; 90% (Gold) is tracked in the issue tracker
 - The acceptance fixture provisions the prerequisites the bucket replication, bucket notification
   and remote target resources need, so their `TestAcc` tests run in CI instead of skipping:
   `rustfs-peer` is a second RustFS instance registered as a replication target, and the bucket
@@ -82,6 +89,17 @@ IMPROVEMENTS:
   drops a dead error branch that could never be taken. The 27 statements still uncovered are
   defensive `json.Marshal`, SigV4 signer and already-validated-JSON error returns that no input
   can reach
+- `TestAccSiteReplicationResource` runs in the acceptance fixture instead of skipping:
+  `RUSTFS_SITE_REPLICATION_PEER_ENDPOINT` gives the second site as RustFS sees it, the test waits
+  for the peer to report ready, exercises an in-place update and keeps a verified import and
+  destroy. A host-side run against a published port cannot form the group (RustFS refuses a
+  loopback site endpoint) and skips with the server's own explanation
+- The LDAP resources are covered against a mocked admin API. RustFS 1.0.x cannot be given an LDAP
+  identity provider (`help-config-kv` has no `identity_ldap` sub-system, there is no `RUSTFS_*LDAP*`
+  environment variable and `add-user` rejects the distinguished names the LDAP routes expect), so
+  `TestAccLdapServiceAccount` and `TestAccLdapPolicyAttachment_*` skip on every supported version;
+  their create/read/update/delete/import flows, including every documented import ID form, are
+  asserted in `provider/` instead, which also pins the wire bodies those resources send
 
 ## 0.5.0 (2026-10-18)
 

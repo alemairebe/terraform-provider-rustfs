@@ -2,7 +2,7 @@
 
 [![CI](https://img.shields.io/github/actions/workflow/status/caberdo/terraform-provider-rustfs/test.yml?branch=main&label=CI)](https://github.com/caberdo/terraform-provider-rustfs/actions/workflows/test.yml)
 <!-- coverage-badge:start -->
-[![Coverage](https://img.shields.io/badge/coverage-81.2%25-green)](#testing-and-coverage)
+[![Coverage](https://img.shields.io/badge/coverage-81.4%25-green)](#testing-and-coverage)
 <!-- coverage-badge:end -->
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/caberdo/terraform-provider-rustfs/badge)](https://scorecard.dev/viewer/?uri=github.com/caberdo/terraform-provider-rustfs)
 [![Release](https://img.shields.io/github/v/release/caberdo/terraform-provider-rustfs?label=release)](https://github.com/caberdo/terraform-provider-rustfs/releases)
@@ -22,7 +22,7 @@ cluster health all live in the same Terraform state as the rest of your infrastr
 | | |
 |---|---|
 | 🎯 **Broadest RustFS coverage** | Buckets, IAM (users, groups, policies, service accounts, LDAP), KMS keys, quotas, bucket + site replication, storage tiers and ILM, audit and notification targets, durability, module switches, cluster health, metrics and diagnostics |
-| 🧪 **Tested against real servers** | 249 unit tests (four of them fuzz targets replaying a seed corpus) plus 52 acceptance tests that run against RustFS in Docker, on a version matrix (RustFS `1.0.1`, `1.0.2`, `1.0.3` and `latest`) |
+| 🧪 **Tested against real servers** | 356 unit tests (four of them fuzz targets replaying a seed corpus) plus 62 acceptance tests that run against RustFS in Docker, on a version matrix (RustFS `1.0.1`, `1.0.2`, `1.0.3` and `latest`) |
 | 🔐 **Verifiable supply chain** | GPG-signed release tags, signed `SHA256SUMS`, SLSA build provenance for every artifact, SPDX SBOM and the Terraform registry manifest in every release |
 | 🚚 **Drop-in successor** | 12 of the 16 resources of `weinmann-emt/rustfs` migrate with **zero** config changes, 1 has a rename, 3 need a small edit — see [Migrating](#migrating-from-weinmann-emtrustfs) |
 | ⚡ **Modern internals** | terraform-plugin-framework (plugin protocol 6.0), AWS SDK for Go v2, Go 1.27, Docker/Podman acceptance harness |
@@ -337,9 +337,11 @@ registered to the releasing account.
 | `make testacc-live` | Starts RustFS with `podman-compose` and runs the acceptance suite against it |
 | `make coverage-merge` | Merges the unit profile with the acceptance profile (`coverage-acceptance.out`, written by the acceptance container) into one statement-coverage table |
 
-The suite is 249 unit tests (10 of them skip themselves without a live server, and the four fuzz
-targets replay their committed seed corpus) and 52 acceptance tests (44 run against RustFS
-`latest`, 8 skip when the server lacks the sub-system they need). CI runs the unit tests with
+The suite is 356 unit tests (10 of them skip themselves without a live server, and the four fuzz
+targets replay their committed seed corpus) and 62 acceptance tests, 57 of which run against RustFS
+`latest` — the other 5 skip when the server cannot provide what they need (no LDAP identity provider
+is configurable on RustFS `1.0.x`, a single-pool deployment has nothing to rebalance, and the
+metrics stream is not implemented). CI runs the unit tests with
 `-race`, then the acceptance matrix (`.github/rustfs-versions.txt`) against real RustFS servers; the
 acceptance job merges both coverage profiles and publishes a per-package table in the job summary of
 every run. A weekly `Fuzz` workflow runs each fuzz target for a minute — deeper campaigns are
@@ -350,11 +352,11 @@ Statement coverage of this repository, merged from the unit and acceptance profi
 <!-- coverage:start -->
 ```
 pkg/rustfs  ████████████████████  97.8%   floor 97.3%
-provider    ███████████████░░░░░  76.1%   floor 74.5%
-total       ████████████████░░░░  81.2%   floor 80.0%   -> 85%, then 90%
+provider    ███████████████░░░░░  76.3%   floor 75.8%
+total       ████████████████░░░░  81.4%   floor 80.9%   -> 80%, then 90%
 ```
 
-Measured on `5064bb0` (unit + acceptance) on 2026-10-19.
+Measured on `b1a6c08` (unit + acceptance) on 2026-10-19.
 <!-- coverage:end -->
 
 The floor is enforced: `scripts/coverage-gate.sh` fails the `Coverage` check on a pull request whose
