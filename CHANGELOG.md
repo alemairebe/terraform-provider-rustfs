@@ -46,9 +46,9 @@ IMPROVEMENTS:
   class of bug), a replacement plan for each `RequiresReplace()` attribute that is then applied for
   real, `ImportState` with `ImportStateVerify` — plus the malformed-ID diagnostic where the import
   ID is composite — and out-of-band drift followed by the converging step. Merged unit + acceptance
-  statement coverage rose from 72.3% to 78.6% on `main` and further with this work, and the floor in
-  `.github/coverage-baseline.txt` moved with it, so the 17 `Update` and 11 `ImportState` functions
-  that read 0% in issue #75 are covered
+  statement coverage rose from 72.3% to 81.2%, and the floor in `.github/coverage-baseline.txt` moved
+  with it (`floor_total` 71.8 → 80.0), so the 17 `Update` and 11 `ImportState` functions that read
+  0% in issue #75 are covered
 - The eight types that had no test — `rustfs_tier`, `rustfs_rebalance`, `rustfs_iam_backup_import`,
   `rustfs_bucket_metadata_backup_import`, `rustfs_pools`, `rustfs_users`, `rustfs_iam_backup` and
   `rustfs_bucket_metadata_backup` — now have schema, metadata, configure and CRUD units driven
@@ -66,8 +66,9 @@ IMPROVEMENTS:
   `.github/coverage-baseline.txt`, and the `latest` cell of the acceptance matrix repeats that gate
   on `main`, so the floor can only move up. The README carries a generated coverage badge and a
   per-package bar chart (`scripts/coverage-readme.sh`); CI fails when they drift from the baseline.
-  Merged coverage moved again with the update/import work below, with 90% tracked as the next
-  milestone in the issue tracker
+  Merged coverage moved from 72.3% at 0.5.0 to 78.6% with the per-handler unit tests and to 81.2%
+  with the update/import work below, which crosses the OpenSSF Silver threshold of 80%; 90% (Gold)
+  is tracked in the issue tracker
 - The acceptance fixture provisions the prerequisites the bucket replication, bucket notification
   and remote target resources need, so their `TestAcc` tests run in CI instead of skipping:
   `rustfs-peer` is a second RustFS instance registered as a replication target, and the bucket
