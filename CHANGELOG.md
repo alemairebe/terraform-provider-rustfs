@@ -1,4 +1,4 @@
-## Unreleased
+## 0.5.1 (2026-10-19)
 
 BUG FIXES:
 - `rustfs_pools` reads `GET /rustfs/admin/v3/pools/list`, the route RustFS 1.0.x serves, instead of the
@@ -121,8 +121,8 @@ IMPROVEMENTS:
   on `main`, so the floor can only move up. The README carries a generated coverage badge and a
   per-package bar chart (`scripts/coverage-readme.sh`); CI fails when they drift from the baseline.
   Merged coverage moved from 72.3% at 0.5.0 to 81.4% with the LDAP and site-replication tests, to
-  88.3% with the read/delete/create error-path units and further with the update/import contracts
-  below; 80% (Silver) is met and 90% (Gold) is tracked in the issue tracker
+  88.3% with the read/delete/create error-path units, and to 90.2% with the update/import contracts
+  and the remaining lifecycle units; both the 80% (Silver) and 90% (Gold) milestones are met
 - The acceptance fixture provisions the prerequisites the bucket replication, bucket notification
   and remote target resources need, so their `TestAcc` tests run in CI instead of skipping:
   `rustfs-peer` is a second RustFS instance registered as a replication target, and the bucket
@@ -158,14 +158,6 @@ CHORES:
   `TestAccLdapServiceAccount` and `TestAccLdapPolicyAttachment_*` skip on every supported version;
   their create/read/update/delete/import flows, including every documented import ID form, are
   asserted in `provider/` instead, which also pins the wire bodies those resources send
-
-CHORES:
-- Every resource's `Read`, `Create`, `Delete` and `Configure` error and idempotency paths are covered
-  by unit tests that need no server: `provider/lifecycle_test_harness_test.go` points both API clients
-  (S3 and admin) at one `httptest` server, and each resource's `_test.go` drives the resource through a
-  table of canned responses (`read:` / `delete:` / `create:` / `configure:` subtests), asserting the
-  diagnostic summary *and* detail, the removal from state, and that a failed create wrote no partial
-  state. Provider unit coverage rose from 25.3% to 66.3%
 
 ## 0.5.0 (2026-10-18)
 
