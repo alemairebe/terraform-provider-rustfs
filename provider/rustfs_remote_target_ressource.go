@@ -96,10 +96,21 @@ func (r *RemoteTargetRessource) Schema(_ context.Context, _ resource.SchemaReque
 			"region": schema.StringAttribute{
 				Optional:    true,
 				Description: "Region of the remote target.",
+				// The server embeds the region in the target ARN and ignores it on
+				// update, so a region change has to create a new target.
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
 			},
 			"path": schema.StringAttribute{
 				Optional:    true,
 				Description: "Path prefix on the remote target.",
+				// Path is only applied through the server's `path` update group,
+				// which this client does not send, so a path change has to create
+				// a new target.
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
 			},
 			"bucket": schema.StringAttribute{
 				Required:    true,
@@ -174,6 +185,7 @@ func (r *RemoteTargetRessource) Read(ctx context.Context, req resource.ReadReque
 		return
 	}
 	state.Arn = types.StringValue(found.Arn)
+	state.Type = types.StringValue(found.Type)
 	state.Endpoint = types.StringValue(found.Endpoint)
 	state.Secure = types.BoolValue(found.Secure)
 	if found.Region != "" {
@@ -217,9 +229,22 @@ func (r *RemoteTargetRessource) Delete(ctx context.Context, req resource.DeleteR
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	// A replication configuration that references the target removes it as
+	// part of its own deletion, so the target may already be gone by the time
+	// Terraform destroys this resource; that is not an error.
 	if err := r.client.RustClient.DeleteRemoteTarget(data.Bucket.ValueString(), data.Arn.ValueString()); err != nil {
+		if isRemoteTargetNotFound(err) {
+			return
+		}
 		resp.Diagnostics.AddError("Error deleting remote target", err.Error())
 	}
+}
+
+// isRemoteTargetNotFound reports whether the admin API refused the removal
+// because the target no longer exists.
+func isRemoteTargetNotFound(err error) bool {
+	return strings.Contains(err.Error(), "Remote target not found") ||
+		strings.Contains(err.Error(), "BucketRemoteTargetNotFound")
 }
 
 func (r *RemoteTargetRessource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {

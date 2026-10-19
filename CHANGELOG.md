@@ -1,12 +1,25 @@
 ## Unreleased
 
+BUG FIXES:
+- `rustfs_remote_target` now replaces the target when `region` or `path` changes. RustFS embeds the
+  region in the target ARN and only applies `path` through an update group this client does not
+  send, so both were silently ignored and the plan never converged. Deleting the resource is also
+  idempotent now: deleting a replication configuration removes the remote targets it references, so
+  the target deletion that follows reports "not found" and that is treated as success
+
 IMPROVEMENTS:
 - Statement coverage is enforced and published. `scripts/coverage-gate.sh` fails the new `Coverage`
   check when the merged unit + acceptance coverage drops below
   `.github/coverage-baseline.txt`, and the `latest` cell of the acceptance matrix repeats that gate
   on `main`, so the floor can only move up. The README carries a generated coverage badge and a
   per-package bar chart (`scripts/coverage-readme.sh`); CI fails when they drift from the baseline.
-  Merged coverage is 69.1% today, with 80% and then 90% tracked as milestones in the issue tracker
+  Merged coverage is 72.3% today, with 80% and then 90% tracked as milestones in the issue tracker
+- The acceptance fixture provisions the prerequisites the bucket replication, bucket notification
+  and remote target resources need, so their `TestAcc` tests run in CI instead of skipping:
+  `rustfs-peer` is a second RustFS instance registered as a replication target, and the bucket
+  notification test registers the `notify_webhook` target its configuration references. Both tests
+  now cover create, update, import and destroy, and the remote target test covers an in-place
+  credential update as well as a region replacement
 
 ## 0.5.0 (2026-10-18)
 

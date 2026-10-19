@@ -52,9 +52,21 @@ services:
       RUSTFS_USER: "rustfsadmin"
       RUSTFS_SECRET: "rustfsadmin"
       RUSTFS_NOTIFY_TEST_ENDPOINT: "http://127.0.0.1:9001/health/ready"
+      # Second RustFS instance used as the replication peer for
+      # TestAccRemoteTargetResource and TestAccBucketReplicationResource.
+      # RUSTFS_PEER_ENDPOINT is the peer's S3 data API as the primary server
+      # reaches it (a remote target replicates over S3); the admin and S3
+      # endpoints the test container uses follow.
+      RUSTFS_PEER_ENDPOINT: "rustfs-peer:9000"
+      RUSTFS_PEER_ADMIN_ENDPOINT: "rustfs-peer:9001"
+      RUSTFS_PEER_S3_ENDPOINT: "rustfs-peer:9000"
+      RUSTFS_PEER_ACCESS_KEY: "rustfsadmin"
+      RUSTFS_PEER_SECRET_KEY: "rustfsadmin"
       TEST_FILTER: "${TEST_FILTER:-TestAcc}"
     depends_on:
       rustfs:
+        condition: service_started
+      rustfs-peer:
         condition: service_started
     profiles:
       - test
@@ -80,6 +92,19 @@ services:
       RUSTFS_KMS_LOCAL_MASTER_KEY: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
       RUSTFS_KMS_DEFAULT_KEY_ID: "rustfs-default-key"
       RUSTFS_KMS_ALLOW_INSECURE_DEV_DEFAULTS: "true"
+
+  # Destination peer for remote-target and bucket-replication tests. Inside the
+  # compose network the primary server and the test container address it by the
+  # service name; the published ports are for `make testacc-live`, which runs
+  # the suite on the host. Its storage is ephemeral like the primary instance's.
+  rustfs-peer:
+    image: rustfs/rustfs:${RUSTFS_VERSION:-latest}
+    ports:
+      - "9002:9000"
+      - "9003:9001"
+    environment:
+      RUSTFS_ACCESS_KEY: rustfsadmin
+      RUSTFS_SECRET_KEY: rustfsadmin
 
 volumes:
   go-modules:
