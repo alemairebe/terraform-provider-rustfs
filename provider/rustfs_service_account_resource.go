@@ -168,6 +168,16 @@ func (r *ServiceAccountResource) Read(ctx context.Context, req resource.ReadRequ
 	// Make the read request
 	actual, err := r.client.RustClient.ReadServiceAccount(state.AccessKey.ValueString())
 	if err != nil {
+		if rustfs.IsAPIErrorCode(err, "NoSuchResource") {
+			// The account was removed outside Terraform, so it is dropped from
+			// state and planned for creation again instead of failing the
+			// whole refresh.
+			tflog.Trace(ctx, "service account no longer exists", map[string]any{
+				"access_key": state.AccessKey.ValueString(),
+			})
+			resp.State.RemoveResource(ctx)
+			return
+		}
 		resp.Diagnostics.AddError(
 			"Error reading service account",
 			"Could not read service account, unexpected error: "+err.Error(),
@@ -250,8 +260,23 @@ func (r *ServiceAccountResource) Delete(ctx context.Context, req resource.Delete
 		SecretKey:   data.SecretKey.ValueString(),
 		Description: data.Description.ValueString(),
 	}
+	if _, err := r.client.RustClient.ReadServiceAccount(account.AccessKey); err != nil {
+		if rustfs.IsAPIErrorCode(err, "NoSuchResource") {
+			// Already gone, so there is nothing left to destroy.
+			return
+		}
+		resp.Diagnostics.AddError(
+			"Error deleting service account",
+			"Could not read service account before deleting: "+err.Error(),
+		)
+		return
+	}
+
 	err := r.client.RustClient.DeleteServiceAccount(account)
 	if err != nil {
+		if rustfs.IsAPIErrorCode(err, "NoSuchResource") {
+			return
+		}
 		resp.Diagnostics.AddError(
 			"Error deleting service account",
 			"Could not delete service account, unexpected error: "+err.Error(),

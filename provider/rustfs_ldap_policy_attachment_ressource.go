@@ -196,13 +196,13 @@ func (r *LDAPPolicyAttachmentRessource) ImportState(ctx context.Context, req res
 	}
 	isGroupIdx := -1
 	policyIdx := len(parts) - 1
-	if len(parts) >= 3 && (parts[len(parts)-2] == "true" || parts[len(parts)-2] == "false") {
-		isGroupIdx = len(parts) - 2
+	if len(parts) >= 3 && (parts[len(parts)-1] == "true" || parts[len(parts)-1] == "false") {
+		isGroupIdx = len(parts) - 1
 		policyIdx = len(parts) - 2
 	}
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("user_or_group"), strings.Join(parts[:policyIdx], "/"))...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("policy"), parts[policyIdx])...)
 	if isGroupIdx != -1 {
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("is_group"), parts[isGroupIdx])...)
+		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("is_group"), parts[isGroupIdx] == "true")...)
 	}
 }

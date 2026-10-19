@@ -4,11 +4,13 @@
 package provider
 
 import (
+	"context"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/caberdo/terraform-provider-rustfs/pkg/rustfs"
+	fwresource "github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 )
 
@@ -123,4 +125,92 @@ resource "rustfs_ldap_policy_attachment" "` + resourceLabel + `" {
   is_group      = ` + isGroup + `
 }
 `
+}
+
+// newLdapPolicyImportState builds a fresh, all-null import state from the
+// resource's own schema, mirroring the empty state the framework supplies to
+// ImportState. No server or LDAP identity provider is involved.
+func newLdapPolicyImportState(t *testing.T, r *LDAPPolicyAttachmentRessource) *fwresource.ImportStateResponse {
+	t.Helper()
+
+	return &fwresource.ImportStateResponse{State: newNullImportState(t, r)}
+}
+
+func importLdapPolicyState(t *testing.T, r *LDAPPolicyAttachmentRessource, id string) LDAPPolicyAttachmentRessourceModel {
+	t.Helper()
+	ctx := context.Background()
+
+	resp := newLdapPolicyImportState(t, r)
+	r.ImportState(ctx, fwresource.ImportStateRequest{ID: id}, resp)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected import diagnostics for %q: %s", id, resp.Diagnostics)
+	}
+
+	var state LDAPPolicyAttachmentRessourceModel
+	if diags := resp.State.Get(ctx, &state); diags.HasError() {
+		t.Fatalf("reading imported state for %q: %s", id, diags)
+	}
+	return state
+}
+
+func TestLDAPPolicyAttachmentRessourceImportState(t *testing.T) {
+	r := NewLDAPPolicyAttachmentRessource().(*LDAPPolicyAttachmentRessource)
+
+	t.Run("user_and_policy", func(t *testing.T) {
+		state := importLdapPolicyState(t, r, "uid=alice,ou=people,dc=example,dc=com/readwrite")
+		if got := state.UserOrGroup.ValueString(); got != "uid=alice,ou=people,dc=example,dc=com" {
+			t.Errorf("user_or_group = %q", got)
+		}
+		if got := state.Policy.ValueString(); got != "readwrite" {
+			t.Errorf("policy = %q", got)
+		}
+		if !state.IsGroup.IsNull() {
+			t.Errorf("is_group should stay unset for a two-part ID, got %v", state.IsGroup)
+		}
+	})
+
+	t.Run("distinguished_name_containing_slash", func(t *testing.T) {
+		state := importLdapPolicyState(t, r, "cn=team/eng,ou=people,dc=example,dc=com/readonly")
+		if got := state.UserOrGroup.ValueString(); got != "cn=team/eng,ou=people,dc=example,dc=com" {
+			t.Errorf("user_or_group = %q", got)
+		}
+		if got := state.Policy.ValueString(); got != "readonly" {
+			t.Errorf("policy = %q", got)
+		}
+	})
+
+	t.Run("user_and_policy_and_is_group", func(t *testing.T) {
+		state := importLdapPolicyState(t, r, "cn=admins,ou=groups,dc=example,dc=com/readwrite/true")
+		if got := state.UserOrGroup.ValueString(); got != "cn=admins,ou=groups,dc=example,dc=com" {
+			t.Errorf("user_or_group = %q", got)
+		}
+		if got := state.Policy.ValueString(); got != "readwrite" {
+			t.Errorf("policy = %q", got)
+		}
+		if !state.IsGroup.ValueBool() {
+			t.Errorf("is_group = %v, want true", state.IsGroup)
+		}
+	})
+}
+
+func TestLDAPPolicyAttachmentRessourceImportStateRejectsMalformedID(t *testing.T) {
+	r := NewLDAPPolicyAttachmentRessource().(*LDAPPolicyAttachmentRessource)
+	ctx := context.Background()
+
+	resp := newLdapPolicyImportState(t, r)
+	r.ImportState(ctx, fwresource.ImportStateRequest{ID: "no-separator-here"}, resp)
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected a diagnostic for an import ID without a separator")
+	}
+
+	const wantDetail = "Expected format: <user_or_group>/<policy> or <user_or_group>/<policy>/<is_group>"
+	found := false
+	for _, diag := range resp.Diagnostics {
+		if diag.Summary() == "Invalid import ID" && diag.Detail() == wantDetail {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected the explicit %q diagnostic, got: %s", wantDetail, resp.Diagnostics)
+	}
 }

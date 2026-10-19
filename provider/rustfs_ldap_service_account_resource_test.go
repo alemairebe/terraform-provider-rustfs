@@ -4,11 +4,13 @@
 package provider
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"testing"
 
 	"github.com/caberdo/terraform-provider-rustfs/pkg/rustfs"
+	fwresource "github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
@@ -112,4 +114,26 @@ func testAccCheckLdapServiceAccountDestroy(s *terraform.State) error {
 		}
 	}
 	return nil
+}
+
+// TestLDAPServiceAccountResourceImportState exercises ImportState without a
+// server: the LDAP service account import simply passes the access key
+// through, so the state must carry it back verbatim.
+func TestLDAPServiceAccountResourceImportState(t *testing.T) {
+	ctx := context.Background()
+	r := NewLDAPServiceAccountResource().(*LDAPServiceAccountResource)
+
+	resp := &fwresource.ImportStateResponse{State: newNullImportState(t, r)}
+	r.ImportState(ctx, fwresource.ImportStateRequest{ID: "tf-ldap-sa-1234"}, resp)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected import diagnostics: %s", resp.Diagnostics)
+	}
+
+	var state LDAPServiceAccountResourceModel
+	if diags := resp.State.Get(ctx, &state); diags.HasError() {
+		t.Fatalf("reading imported state: %s", diags)
+	}
+	if got := state.AccessKey.ValueString(); got != "tf-ldap-sa-1234" {
+		t.Errorf("access_key = %q, want %q", got, "tf-ldap-sa-1234")
+	}
 }

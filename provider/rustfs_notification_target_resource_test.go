@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/plancheck"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
 )
 
@@ -191,7 +193,9 @@ func requireReplacement(t *testing.T, modifier planmodifier.String, name string)
 
 func TestAccNotificationTargetResource(t *testing.T) {
 	name := fmt.Sprintf("tf-notify-%d", acctest.RandInt())
+	replacementName := fmt.Sprintf("tf-notify-%d", acctest.RandInt())
 	endpoint := os.Getenv("RUSTFS_NOTIFY_TEST_ENDPOINT")
+	updatedEndpoint := endpoint + "-updated"
 
 	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccNotificationTargetPreCheck(t) },
@@ -199,7 +203,7 @@ func TestAccNotificationTargetResource(t *testing.T) {
 		CheckDestroy:             testAccCheckNotificationTargetDestroy,
 		Steps: []resource.TestStep{
 			{
-				Config: testAccNotificationTargetConfig(name, "managed by terraform"),
+				Config: testAccNotificationTargetConfig(name, endpoint, "managed by terraform"),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					testAccCheckNotificationTargetExists(name),
 					resource.TestCheckResourceAttr(notificationTargetResourceName, "target_type", "notify_webhook"),
@@ -209,22 +213,135 @@ func TestAccNotificationTargetResource(t *testing.T) {
 					resource.TestCheckResourceAttr(notificationTargetResourceName, "enable", "true"),
 					resource.TestCheckResourceAttrSet(notificationTargetResourceName, "health_state"),
 					resource.TestCheckResourceAttrSet(notificationTargetResourceName, "status"),
+					// The list endpoint does not echo the target configuration,
+					// so the create is confirmed against get-config-kv, which
+					// renders what the server actually stored.
+					testAccCheckNotificationTargetConfigValue(name, "endpoint", endpoint),
 				),
 			},
 			{
-				Config: testAccNotificationTargetConfig(name, "updated by terraform"),
+				// In-place change: the webhook endpoint and the comment are
+				// mutable, so the plan is an update (never a replacement) and
+				// the server has to hand the new endpoint back.
+				Config: testAccNotificationTargetConfig(name, updatedEndpoint, "updated by terraform"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction(notificationTargetResourceName, plancheck.ResourceActionUpdate),
+					},
+				},
 				Check: resource.ComposeAggregateTestCheckFunc(
 					testAccCheckNotificationTargetExists(name),
-					resource.TestCheckResourceAttr(notificationTargetResourceName, "webhook_config.endpoint", endpoint),
+					resource.TestCheckResourceAttr(notificationTargetResourceName, "webhook_config.endpoint", updatedEndpoint),
 					resource.TestCheckResourceAttr(notificationTargetResourceName, "comment", "updated by terraform"),
 					resource.TestCheckResourceAttrSet(notificationTargetResourceName, "health_state"),
 					resource.TestCheckResourceAttrSet(notificationTargetResourceName, "status"),
+					testAccCheckNotificationTargetConfigValue(name, "endpoint", updatedEndpoint),
+				),
+			},
+			{
+				// Revert the update; the server has to end up on the original
+				// endpoint again, which the config read-back proves.
+				Config: testAccNotificationTargetConfig(name, endpoint, "managed by terraform"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction(notificationTargetResourceName, plancheck.ResourceActionUpdate),
+					},
+				},
+				Check: resource.ComposeAggregateTestCheckFunc(
+					testAccCheckNotificationTargetExists(name),
+					resource.TestCheckResourceAttr(notificationTargetResourceName, "webhook_config.endpoint", endpoint),
+					resource.TestCheckResourceAttr(notificationTargetResourceName, "comment", "managed by terraform"),
+					testAccCheckNotificationTargetConfigValue(name, "endpoint", endpoint),
+				),
+			},
+			{
+				// Explicit empty second plan: the state the revert wrote is the
+				// configuration, so the plan made from that state proposes no
+				// change. This is what catches a computed attribute (health
+				// state, status) that the read path drops.
+				Config:             testAccNotificationTargetConfig(name, endpoint, "managed by terraform"),
+				PlanOnly:           true,
+				ExpectNonEmptyPlan: false,
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PostApplyPreRefresh: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
+				},
+			},
+			{
+				// target_name carries RequiresReplace, so renaming the target
+				// has to be planned as a replacement. The step only plans: the
+				// replacement is asserted here and applied further down.
+				Config:             testAccNotificationTargetConfig(replacementName, endpoint, "managed by terraform"),
+				PlanOnly:           true,
+				ExpectNonEmptyPlan: true,
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PostApplyPreRefresh: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction(notificationTargetResourceName, plancheck.ResourceActionReplace),
+					},
+				},
+			},
+			{
+				// target_type carries RequiresReplace as well, so switching the
+				// subsystem (with its matching configuration block) replaces the
+				// target too.
+				Config:             testAccNotificationTargetRedisConfig(name, "managed by terraform"),
+				PlanOnly:           true,
+				ExpectNonEmptyPlan: true,
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PostApplyPreRefresh: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction(notificationTargetResourceName, plancheck.ResourceActionReplace),
+					},
+				},
+			},
+			{
+				// Apply the target_name replacement so the destroy-and-recreate
+				// path really runs, and check the old target is gone while the
+				// new one is on the server with the configuration intact.
+				Config: testAccNotificationTargetConfig(replacementName, endpoint, "managed by terraform"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction(notificationTargetResourceName, plancheck.ResourceActionReplace),
+					},
+				},
+				Check: resource.ComposeAggregateTestCheckFunc(
+					testAccCheckNotificationTargetExists(replacementName),
+					testAccCheckNotificationTargetGone(name),
+					resource.TestCheckResourceAttr(notificationTargetResourceName, "target_name", replacementName),
+					resource.TestCheckResourceAttr(notificationTargetResourceName, "webhook_config.endpoint", endpoint),
+					testAccCheckNotificationTargetConfigValue(replacementName, "endpoint", endpoint),
+				),
+			},
+			{
+				// Out-of-band drift: the Check function resets the target
+				// straight through the admin API after the (no-op) apply, so the
+				// plan made before the refresh is still empty while the plan
+				// Terraform proposes after the refresh has to re-create it.
+				Config:             testAccNotificationTargetConfig(replacementName, endpoint, "managed by terraform"),
+				ExpectNonEmptyPlan: true,
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PostApplyPreRefresh: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
+					PostApplyPostRefresh: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction(notificationTargetResourceName, plancheck.ResourceActionCreate),
+					},
+				},
+				Check: resource.ComposeAggregateTestCheckFunc(
+					testAccCheckNotificationTargetExists(replacementName),
+					testAccNotificationTargetResetOutOfBand(replacementName),
+				),
+			},
+			{
+				// Apply the drift the previous step discovered and assert the
+				// re-created target is on the server again with its config.
+				Config: testAccNotificationTargetConfig(replacementName, endpoint, "managed by terraform"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					testAccCheckNotificationTargetExists(replacementName),
+					resource.TestCheckResourceAttr(notificationTargetResourceName, "target_name", replacementName),
+					testAccCheckNotificationTargetConfigValue(replacementName, "endpoint", endpoint),
 				),
 			},
 			{
 				ResourceName:      notificationTargetResourceName,
 				ImportState:       true,
-				ImportStateId:     "notify_webhook/" + name,
+				ImportStateId:     "notify_webhook/" + replacementName,
 				ImportStateVerify: true,
 				// The admin list endpoint does not echo config values, so these
 				// attributes cannot be verified after import.
@@ -235,6 +352,15 @@ func TestAccNotificationTargetResource(t *testing.T) {
 					"postgres_config", "mysql_config", "redis_config", "pulsar_config",
 					"health_state", "health_reason", "status",
 				},
+			},
+			{
+				// Import accepts the composite <target_type>/<target_name> ID
+				// only. An ID without the separator has to produce the explicit
+				// diagnostic rather than a panic or a half-filled state.
+				ResourceName:  notificationTargetResourceName,
+				ImportState:   true,
+				ImportStateId: "no-separator-here",
+				ExpectError:   regexp.MustCompile(`(?s)Invalid import ID.*Expected the import ID to be <target_type>/<target_name>`),
 			},
 		},
 	})
@@ -275,8 +401,7 @@ func testAccNotificationTargetPreCheck(t *testing.T) {
 	}
 }
 
-func testAccNotificationTargetConfig(name, comment string) string {
-	endpoint := os.Getenv("RUSTFS_NOTIFY_TEST_ENDPOINT")
+func testAccNotificationTargetConfig(name, endpoint, comment string) string {
 	return testAccProviderConfig() + fmt.Sprintf(`
 resource "rustfs_notification_target" "test" {
   target_type = "notify_webhook"
@@ -289,6 +414,25 @@ resource "rustfs_notification_target" "test" {
   comment = "%s"
 }
 `, name, endpoint, comment)
+}
+
+// testAccNotificationTargetRedisConfig is the same notification target under a
+// different target_type with the matching configuration block. Only the
+// plan-only replacement check uses it, so no redis target is ever applied.
+func testAccNotificationTargetRedisConfig(name, comment string) string {
+	return testAccProviderConfig() + fmt.Sprintf(`
+resource "rustfs_notification_target" "test" {
+  target_type = "notify_redis"
+  target_name = "%s"
+
+  redis_config = {
+    url     = "redis://127.0.0.1:6379/0"
+    channel = "tf-notify"
+  }
+
+  comment = "%s"
+}
+`, name, comment)
 }
 
 func testAccCheckNotificationTargetExists(name string) resource.TestCheckFunc {
@@ -313,6 +457,60 @@ func testAccCheckNotificationTargetExists(name string) resource.TestCheckFunc {
 			}
 		}
 		return fmt.Errorf("notification target %s not found in list", name)
+	}
+}
+
+// testAccCheckNotificationTargetConfigValue asserts a configuration key of the
+// target as the server renders it back through get-config-kv
+// ("notify_webhook:<name>"). The admin list endpoint only reports identity and
+// health, so this is the only server-side read-back of what an update wrote.
+func testAccCheckNotificationTargetConfigValue(name, key, want string) resource.TestCheckFunc {
+	return func(*terraform.State) error {
+		client := testAccRustClient()
+		kvs, err := client.GetConfig("notify_webhook:" + name)
+		if err != nil {
+			return fmt.Errorf("failed to read notification target %s config from the server: %w", name, err)
+		}
+		for _, kv := range kvs {
+			if kv.Key == key {
+				if kv.Value != want {
+					return fmt.Errorf("server reports notification target %s %s = %q, want %q", name, key, kv.Value, want)
+				}
+				return nil
+			}
+		}
+		return fmt.Errorf("server does not report key %q for notification target %s: %+v", key, name, kvs)
+	}
+}
+
+// testAccCheckNotificationTargetGone asserts the named notification target is
+// not configured on the server any more, which is how a replacement proves the
+// old instance was destroyed.
+func testAccCheckNotificationTargetGone(name string) resource.TestCheckFunc {
+	return func(*terraform.State) error {
+		client := testAccRustClient()
+		targets, err := client.ListNotificationTargets()
+		if err != nil {
+			return err
+		}
+		for _, target := range targets {
+			if strings.EqualFold(target.AccountID, name) {
+				return fmt.Errorf("notification target %s still exists after the replacement", name)
+			}
+		}
+		return nil
+	}
+}
+
+// testAccNotificationTargetResetOutOfBand removes the target through the admin
+// API behind Terraform's back, so the following refresh notices the drift.
+func testAccNotificationTargetResetOutOfBand(name string) resource.TestCheckFunc {
+	return func(*terraform.State) error {
+		client := testAccRustClient()
+		if err := client.ResetNotificationTarget("notify_webhook", name); err != nil {
+			return fmt.Errorf("failed to reset notification target %s out of band: %w", name, err)
+		}
+		return nil
 	}
 }
 

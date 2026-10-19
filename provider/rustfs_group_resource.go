@@ -6,12 +6,14 @@ package provider
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/caberdo/terraform-provider-rustfs/pkg/rustfs"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/setplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -64,6 +66,9 @@ func (r *GroupResource) Schema(_ context.Context, _ resource.SchemaRequest, resp
 				Optional:    true,
 				Computed:    true,
 				Description: "Set of user access keys that are members of this group.",
+				PlanModifiers: []planmodifier.Set{
+					setplanmodifier.UseStateForUnknown(),
+				},
 			},
 		},
 	}
@@ -150,6 +155,12 @@ func (r *GroupResource) Read(ctx context.Context, req resource.ReadRequest, resp
 
 	info, err := r.client.RustClient.GetGroup(state.Name.ValueString())
 	if err != nil {
+		if rustfs.IsAPIErrorCode(err, "NoSuchResource", "NoSuchGroup") {
+			// The group was removed outside Terraform, so the next plan has to
+			// recreate it instead of failing the refresh.
+			resp.State.RemoveResource(ctx)
+			return
+		}
 		resp.Diagnostics.AddError(
 			"Error reading group",
 			"Could not read group: "+err.Error(),
@@ -166,34 +177,72 @@ func (r *GroupResource) Read(ctx context.Context, req resource.ReadRequest, resp
 }
 
 func (r *GroupResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var plan GroupResourceModel
+	var plan, state GroupResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
 	var planMembers []string
-	resp.Diagnostics.Append(plan.Members.ElementsAs(ctx, &planMembers, false)...)
+	if !plan.Members.IsUnknown() && !plan.Members.IsNull() {
+		resp.Diagnostics.Append(plan.Members.ElementsAs(ctx, &planMembers, false)...)
+	}
+	var stateMembers []string
+	if !state.Members.IsUnknown() && !state.Members.IsNull() {
+		resp.Diagnostics.Append(state.Members.ElementsAs(ctx, &stateMembers, false)...)
+	}
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	if err := r.client.RustClient.DeleteGroup(plan.Name.ValueString()); err != nil {
-		resp.Diagnostics.AddError(
-			"Error updating group",
-			"Could not reset group members: "+err.Error(),
-		)
-		return
+	if plan.Members.IsUnknown() {
+		// The configuration leaves members to the provider, so the membership
+		// already on the server is kept: a nil delta would otherwise read as
+		// "remove every member" and the apply could not return a known value.
+		plan.Members = state.Members
+		planMembers = stateMembers
 	}
 
-	if len(planMembers) > 0 {
+	name := plan.Name.ValueString()
+
+	// Membership is applied as a delta: the admin API adds and removes members
+	// over the same route with opposite isRemove flags, and it refuses to
+	// delete a group that still has members, so the group itself is kept.
+	var remove, add []string
+	for _, member := range stateMembers {
+		if !slices.Contains(planMembers, member) {
+			remove = append(remove, member)
+		}
+	}
+	for _, member := range planMembers {
+		if !slices.Contains(stateMembers, member) {
+			add = append(add, member)
+		}
+	}
+
+	if len(remove) > 0 {
+		if err := r.client.RustClient.UpdateGroupMembers(rustfs.GroupAddRemove{
+			Group:    name,
+			Members:  remove,
+			IsRemove: true,
+		}); err != nil {
+			resp.Diagnostics.AddError(
+				"Error updating group",
+				"Could not remove group members: "+err.Error(),
+			)
+			return
+		}
+	}
+
+	if len(add) > 0 {
 		status := plan.Status.ValueString()
 		if status == "" {
 			status = "enabled"
 		}
 		if err := r.client.RustClient.UpdateGroupMembers(rustfs.GroupAddRemove{
-			Group:    plan.Name.ValueString(),
-			Members:  planMembers,
+			Group:    name,
+			Members:  add,
 			IsRemove: false,
 			Status:   status,
 		}); err != nil {
@@ -206,7 +255,7 @@ func (r *GroupResource) Update(ctx context.Context, req resource.UpdateRequest, 
 	}
 
 	if plan.Status.ValueString() != "" {
-		if err := r.client.RustClient.SetGroupStatus(plan.Name.ValueString(), plan.Status.ValueString()); err != nil {
+		if err := r.client.RustClient.SetGroupStatus(name, plan.Status.ValueString()); err != nil {
 			resp.Diagnostics.AddError(
 				"Error updating group status",
 				"Could not set group status: "+err.Error(),
@@ -225,7 +274,42 @@ func (r *GroupResource) Delete(ctx context.Context, req resource.DeleteRequest, 
 		return
 	}
 
-	if err := r.client.RustClient.DeleteGroup(data.Name.ValueString()); err != nil {
+	name := data.Name.ValueString()
+
+	info, err := r.client.RustClient.GetGroup(name)
+	if err != nil {
+		if rustfs.IsAPIErrorCode(err, "NoSuchResource", "NoSuchGroup") {
+			// Already gone, so there is nothing left to destroy.
+			return
+		}
+		resp.Diagnostics.AddError(
+			"Error deleting group",
+			"Could not read group before deleting: "+err.Error(),
+		)
+		return
+	}
+
+	// The admin API refuses to delete a group that still has members, and
+	// Terraform destroys the group before the users it references, so every
+	// member is detached first.
+	if len(info.Members) > 0 {
+		if err := r.client.RustClient.UpdateGroupMembers(rustfs.GroupAddRemove{
+			Group:    name,
+			Members:  info.Members,
+			IsRemove: true,
+		}); err != nil {
+			resp.Diagnostics.AddError(
+				"Error deleting group",
+				"Could not remove group members: "+err.Error(),
+			)
+			return
+		}
+	}
+
+	if err := r.client.RustClient.DeleteGroup(name); err != nil {
+		if rustfs.IsAPIErrorCode(err, "NoSuchResource", "NoSuchGroup") {
+			return
+		}
 		resp.Diagnostics.AddError(
 			"Error deleting group",
 			"Could not delete group: "+err.Error(),

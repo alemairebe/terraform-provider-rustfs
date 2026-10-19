@@ -143,6 +143,16 @@ func (r *RustfsUserResource) Read(ctx context.Context, req resource.ReadRequest,
 	}
 	read, err := r.client.RustClient.ReadUserAccount(state.AccessKey.ValueString())
 	if err != nil {
+		if rustfs.IsAPIErrorCode(err, "NoSuchResource") {
+			// The user was removed outside Terraform, so it is dropped from
+			// state and planned for creation again instead of failing the
+			// whole refresh.
+			tflog.Trace(ctx, "user no longer exists", map[string]any{
+				"access_key": state.AccessKey.ValueString(),
+			})
+			resp.State.RemoveResource(ctx)
+			return
+		}
 		resp.Diagnostics.AddError(
 			"Error reading user",
 			"Could not read user: "+err.Error(),

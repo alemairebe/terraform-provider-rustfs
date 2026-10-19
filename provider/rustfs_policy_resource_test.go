@@ -21,12 +21,20 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/plancheck"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
 )
 
 func TestAccPolicyResource_basic(t *testing.T) {
 	name := fmt.Sprintf("tf-test-policy-%d", acctest.RandInt())
 	resourceName := "rustfs_policy.test"
+
+	const (
+		originalAction   = "s3:GetObject"
+		originalResource = "arn:aws:s3:::app-data"
+		updatedAction    = "s3:PutObject"
+		updatedResource  = "arn:aws:s3:::app-archive"
+	)
 
 	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
@@ -47,6 +55,76 @@ func TestAccPolicyResource_basic(t *testing.T) {
 				ImportStateVerify:                    true,
 				ImportStateVerifyIdentifierAttribute: "name",
 			},
+			{
+				// The importer reads the object back and, having found nothing,
+				// reports the missing object; the exact wording is Terraform
+				// core's.
+				ResourceName:  resourceName,
+				ImportState:   true,
+				ImportStateId: name + "-does-not-exist",
+				ExpectError:   regexp.MustCompile(`(?i)(Cannot import non-existent remote object|no object exists with the given id)`),
+			},
+			{
+				// In-place update: statement fields change without any
+				// replacement, and the changed document is read back from the
+				// server rather than only from the local state.
+				Config: testAccPolicyConfigActionResource(name, updatedAction, updatedResource),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckPolicyExists(resourceName),
+					resource.TestCheckResourceAttr(resourceName, "statement.0.action.#", "1"),
+					resource.TestCheckResourceAttr(resourceName, "statement.0.action.0", updatedAction),
+					resource.TestCheckResourceAttr(resourceName, "statement.0.resource.#", "1"),
+					resource.TestCheckResourceAttr(resourceName, "statement.0.resource.0", updatedResource),
+					testAccCheckPolicyDocument(resourceName, "Allow", updatedAction, updatedResource),
+				),
+			},
+			{
+				// Revert the update; the server must carry the original values
+				// again.
+				Config: testAccPolicyConfigActionResource(name, originalAction, originalResource),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr(resourceName, "statement.0.action.#", "1"),
+					resource.TestCheckResourceAttr(resourceName, "statement.0.action.0", originalAction),
+					resource.TestCheckResourceAttr(resourceName, "statement.0.resource.0", originalResource),
+					testAccCheckPolicyDocument(resourceName, "Allow", originalAction, originalResource),
+				),
+			},
+			{
+				// Computed consistency: with the state matching this config the
+				// post-apply plan must be explicitly empty.
+				Config:   testAccPolicyConfigActionResource(name, originalAction, originalResource),
+				PlanOnly: true,
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PostApplyPreRefresh: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
+				},
+			},
+			{
+				// Drift: the policy is removed through the admin API while
+				// Terraform still holds it in state, so the refresh must drop
+				// it and the next plan must recreate it. Plan #1 does not
+				// refresh and therefore cannot see the deletion; plan #2 is the
+				// refreshed one, and it is the plan whose action is asserted.
+				Config:             testAccPolicyConfigActionResource(name, originalAction, originalResource),
+				ExpectNonEmptyPlan: true,
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckPolicyExists(resourceName),
+					testAccDeletePolicyOutOfBand(t, name),
+				),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PostApplyPostRefresh: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction(resourceName, plancheck.ResourceActionCreate),
+					},
+				},
+			},
+			{
+				// Converge: the drifted resource is created again and the
+				// document on the server matches the configuration.
+				Config: testAccPolicyConfigActionResource(name, originalAction, originalResource),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckPolicyExists(resourceName),
+					testAccCheckPolicyDocument(resourceName, "Allow", originalAction, originalResource),
+				),
+			},
 		},
 	})
 }
@@ -62,6 +140,100 @@ resource "rustfs_policy" "test" {
   }]
 }
 `, name)
+}
+
+// testAccPolicyConfigActionResource builds a single-statement policy with one
+// action and one resource, so both can be changed in place without depending on
+// set ordering.
+func testAccPolicyConfigActionResource(name, action, resourceARN string) string {
+	return testAccProviderConfig() + fmt.Sprintf(`
+resource "rustfs_policy" "test" {
+  name = "%s"
+  statement = [{
+    effect   = "Allow"
+    action   = ["%s"]
+    resource = ["%s"]
+  }]
+}
+`, name, action, resourceARN)
+}
+
+// testAccCheckPolicyDocument reads the policy from the server and asserts the
+// single statement it carries, which is what proves an update reached RustFS
+// instead of only the Terraform state.
+func testAccCheckPolicyDocument(n, effect, action, resourceARN string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		rs, ok := s.RootModule().Resources[n]
+		if !ok {
+			return fmt.Errorf("not found: %s", n)
+		}
+		policyName := rs.Primary.Attributes["name"]
+		if policyName == "" {
+			return fmt.Errorf("no policy name set")
+		}
+		client := testAccPolicyClient()
+		policy, err := client.ReadPolicy(policyName)
+		if err != nil {
+			return fmt.Errorf("policy not found: %s", err)
+		}
+		if len(policy.Statement) != 1 {
+			return fmt.Errorf("policy %s has %d statements, want 1", policyName, len(policy.Statement))
+		}
+		statement := policy.Statement[0]
+		if statement.Effect != effect {
+			return fmt.Errorf("policy %s effect is %q, want %q", policyName, statement.Effect, effect)
+		}
+		if len(statement.Action) != 1 || statement.Action[0] != action {
+			return fmt.Errorf("policy %s action is %v, want [%s]", policyName, statement.Action, action)
+		}
+		if len(statement.Resource) != 1 || statement.Resource[0] != resourceARN {
+			return fmt.Errorf("policy %s resource is %v, want [%s]", policyName, statement.Resource, resourceARN)
+		}
+		return nil
+	}
+}
+
+// testAccCheckPolicyCondition reads the policy from the server and asserts the
+// condition values of the first statement.
+func testAccCheckPolicyCondition(n, operator, key, value string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		rs, ok := s.RootModule().Resources[n]
+		if !ok {
+			return fmt.Errorf("not found: %s", n)
+		}
+		policyName := rs.Primary.Attributes["name"]
+		if policyName == "" {
+			return fmt.Errorf("no policy name set")
+		}
+		client := testAccPolicyClient()
+		policy, err := client.ReadPolicy(policyName)
+		if err != nil {
+			return fmt.Errorf("policy not found: %s", err)
+		}
+		if len(policy.Statement) == 0 {
+			return fmt.Errorf("policy %s has no statements", policyName)
+		}
+		values := policy.Statement[0].Condition[operator][key]
+		if len(values) != 1 || values[0] != value {
+			return fmt.Errorf("policy %s condition %s.%s is %v, want [%s]", policyName, operator, key, values, value)
+		}
+		return nil
+	}
+}
+
+// testAccDeletePolicyOutOfBand removes the policy through the admin API, behind
+// Terraform's back, so the following refresh finds a policy that no longer
+// exists.
+func testAccDeletePolicyOutOfBand(t *testing.T, name string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		t.Helper()
+		client := testAccPolicyClient()
+		if err := client.DeletePolicy(name); err != nil {
+			return fmt.Errorf("could not delete policy %s out of band: %s", name, err)
+		}
+		t.Logf("deleted policy %s out of band", name)
+		return nil
+	}
 }
 
 func testAccCheckPolicyExists(n string) resource.TestCheckFunc {
@@ -241,6 +413,18 @@ func TestPolicyStatementValidator(t *testing.T) {
 	}
 }
 
+func TestPolicyStatementValidatorDescription(t *testing.T) {
+	validator := policyStatementValidator{}
+
+	description := validator.Description(context.TODO())
+	if description == "" {
+		t.Fatal("Description is empty")
+	}
+	if got := validator.MarkdownDescription(context.TODO()); got != description {
+		t.Errorf("MarkdownDescription = %q, want the Description %q", got, description)
+	}
+}
+
 func TestPolicyStatementsRoundTrip(t *testing.T) {
 	models := []policyStatementModel{
 		{
@@ -285,6 +469,12 @@ func TestPolicyStatementsRoundTrip(t *testing.T) {
 }
 
 func testAccPolicyConditionConfig(name string) string {
+	return testAccPolicyConditionConfigPrefix(name, "tenant-42/*")
+}
+
+// testAccPolicyConditionConfigPrefix is the condition policy with a settable
+// s3:prefix condition value so the condition block can be changed in place.
+func testAccPolicyConditionConfigPrefix(name, prefix string) string {
 	return testAccProviderConfig() + fmt.Sprintf(`
 resource "rustfs_policy" "test" {
   name = "%s"
@@ -297,7 +487,7 @@ resource "rustfs_policy" "test" {
 
       condition = {
         StringLike = {
-          "s3:prefix" = ["tenant-42/*"]
+          "s3:prefix" = ["%s"]
         }
       }
     },
@@ -308,7 +498,7 @@ resource "rustfs_policy" "test" {
     },
   ]
 }
-`, name)
+`, name, prefix)
 }
 
 func testAccPolicyMissingActionConfig(name string) string {
@@ -363,6 +553,35 @@ func TestAccPolicyResource_condition(t *testing.T) {
 				ImportStateId:                        name,
 				ImportStateVerify:                    true,
 				ImportStateVerifyIdentifierAttribute: "name",
+			},
+			{
+				// In-place update of the condition block: only the
+				// StringLike/s3:prefix value changes, and the server must hold
+				// the new value.
+				Config: testAccPolicyConditionConfigPrefix(name, "tenant-99/*"),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckPolicyExists(resourceName),
+					resource.TestCheckResourceAttr(resourceName, "statement.0.condition.StringLike.s3:prefix.#", "1"),
+					resource.TestCheckResourceAttr(resourceName, "statement.0.condition.StringLike.s3:prefix.0", "tenant-99/*"),
+					testAccCheckPolicyCondition(resourceName, "StringLike", "s3:prefix", "tenant-99/*"),
+				),
+			},
+			{
+				// Revert the condition and read the original value back from the
+				// server.
+				Config: testAccPolicyConditionConfigPrefix(name, "tenant-42/*"),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr(resourceName, "statement.0.condition.StringLike.s3:prefix.0", "tenant-42/*"),
+					testAccCheckPolicyCondition(resourceName, "StringLike", "s3:prefix", "tenant-42/*"),
+				),
+			},
+			{
+				// Computed consistency: no plan once state matches the config.
+				Config:   testAccPolicyConditionConfigPrefix(name, "tenant-42/*"),
+				PlanOnly: true,
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PostApplyPreRefresh: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
+				},
 			},
 		},
 	})

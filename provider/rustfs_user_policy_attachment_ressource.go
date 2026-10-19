@@ -6,8 +6,10 @@ package provider
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
+	"github.com/caberdo/terraform-provider-rustfs/pkg/rustfs"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -113,18 +115,57 @@ func (r *UserPolicyAttachmentRessource) Create(ctx context.Context, req resource
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
-// Read preserves the last known state. The RustFS admin API exposes no
-// read-back enumerating a user's extra policy attachments; the attach
-// operation is idempotent and the user/policy pair is immutable, so the
-// last known state is kept (same pattern as rustfs_bucket).
+// Read keeps the state honest. The admin API reports a user's whole policy
+// list, so a policy that is missing from that list was detached outside
+// Terraform and the attachment is dropped from state (and planned again); a
+// user that no longer exists drops its attachments with it.
 func (r *UserPolicyAttachmentRessource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
 	var state UserPolicyAttachmentRessourceModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	state.ID = types.StringValue(state.User.ValueString() + "/" + state.Policy.ValueString())
+
+	user := state.User.ValueString()
+	policy := state.Policy.ValueString()
+
+	info, err := r.client.RustClient.ReadUserAccount(user)
+	if err != nil {
+		if rustfs.IsAPIErrorCode(err, "NoSuchResource") {
+			// The user is gone, so the attachment is gone with it.
+			resp.State.RemoveResource(ctx)
+			return
+		}
+		resp.Diagnostics.AddError(
+			"Error reading user policy attachment",
+			"Could not read user "+user+": "+err.Error(),
+		)
+		return
+	}
+
+	if !slices.Contains(userAttachedPolicies(info.Policy), policy) {
+		tflog.Trace(ctx, "user no longer carries the attached policy", map[string]any{
+			"user":   user,
+			"policy": policy,
+		})
+		resp.State.RemoveResource(ctx)
+		return
+	}
+
+	state.ID = types.StringValue(user + "/" + policy)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
+}
+
+// userAttachedPolicies splits the comma-separated policy list user-info
+// reports for a user, dropping empty entries.
+func userAttachedPolicies(list string) []string {
+	policies := []string{}
+	for _, name := range strings.Split(list, ",") {
+		if name = strings.TrimSpace(name); name != "" {
+			policies = append(policies, name)
+		}
+	}
+	return policies
 }
 
 // Update re-attaches the policy. All attributes are RequiresReplace, so

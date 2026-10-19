@@ -9,6 +9,7 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/plancheck"
 )
 
 func TestAccUserResource_nameDefault(t *testing.T) {
@@ -25,7 +26,36 @@ func TestAccUserResource_nameDefault(t *testing.T) {
 				Check: resource.ComposeTestCheckFunc(
 					resource.TestCheckResourceAttr(resourceName, "access_key", accessKey),
 					resource.TestCheckResourceAttr(resourceName, "name", accessKey),
+					testAccCheckUserExists(resourceName, "enabled"),
 				),
+			},
+			// The computed name defaults to the access key and stays stable:
+			// the post-apply plan is explicitly empty.
+			{
+				Config:             testAccUserNameConfigExplicit(accessKey, ""),
+				PlanOnly:           true,
+				ExpectNonEmptyPlan: false,
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PostApplyPreRefresh: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
+				},
+			},
+			// Importing the user rebuilds the computed name from the access
+			// key, so the configuration still plans empty afterwards.
+			{
+				ResourceName:                         resourceName,
+				ImportState:                          true,
+				ImportStateId:                        accessKey,
+				ImportStateVerify:                    true,
+				ImportStateVerifyIdentifierAttribute: "access_key",
+				ImportStateVerifyIgnore:              []string{"secret_key"},
+			},
+			{
+				Config:             testAccUserNameConfigExplicit(accessKey, ""),
+				PlanOnly:           true,
+				ExpectNonEmptyPlan: false,
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PostApplyPreRefresh: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
+				},
 			},
 		},
 	})
@@ -45,7 +75,39 @@ func TestAccUserResource_nameExplicit(t *testing.T) {
 				Check: resource.ComposeTestCheckFunc(
 					resource.TestCheckResourceAttr(resourceName, "access_key", accessKey),
 					resource.TestCheckResourceAttr(resourceName, "name", "My Beautiful User"),
+					testAccCheckUserExists(resourceName, "enabled"),
 				),
+			},
+			// The display name is updated in place, without replacing the user.
+			{
+				Config: testAccUserNameConfigExplicit(accessKey, "Renamed User"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction(resourceName, plancheck.ResourceActionUpdate),
+					},
+				},
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr(resourceName, "name", "Renamed User"),
+					resource.TestCheckResourceAttr(resourceName, "access_key", accessKey),
+					testAccCheckUserExists(resourceName, "enabled"),
+				),
+			},
+			// Revert the display name.
+			{
+				Config: testAccUserNameConfigExplicit(accessKey, "My Beautiful User"),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr(resourceName, "name", "My Beautiful User"),
+					testAccCheckUserExists(resourceName, "enabled"),
+				),
+			},
+			// The post-apply plan is explicitly empty.
+			{
+				Config:             testAccUserNameConfigExplicit(accessKey, "My Beautiful User"),
+				PlanOnly:           true,
+				ExpectNonEmptyPlan: false,
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PostApplyPreRefresh: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
+				},
 			},
 		},
 	})
@@ -74,6 +136,16 @@ func TestAccUserResource_nameImport(t *testing.T) {
 				Check: resource.ComposeTestCheckFunc(
 					resource.TestCheckResourceAttr(resourceName, "name", accessKey),
 				),
+			},
+			// The imported state matches the configuration: the plan after the
+			// import is explicitly empty.
+			{
+				Config:             testAccUserNameConfigExplicit(accessKey, ""),
+				PlanOnly:           true,
+				ExpectNonEmptyPlan: false,
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PostApplyPreRefresh: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
+				},
 			},
 		},
 	})

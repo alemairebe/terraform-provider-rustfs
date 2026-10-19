@@ -6,6 +6,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/plancheck"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
 )
 
@@ -251,7 +253,9 @@ func TestAuditTargetValidate(t *testing.T) {
 
 func TestAccAuditTargetResource(t *testing.T) {
 	name := fmt.Sprintf("tf-audit-%d", acctest.RandInt())
+	replacementName := fmt.Sprintf("tf-audit-%d", acctest.RandInt())
 	endpoint := fmt.Sprintf("https://hooks.example.com/webhook/%s", name)
+	updatedEndpoint := endpoint + "-updated"
 
 	resource.Test(t, resource.TestCase{
 		PreCheck:                 func() { testAccAuditTargetPreCheck(t) },
@@ -259,7 +263,7 @@ func TestAccAuditTargetResource(t *testing.T) {
 		CheckDestroy:             testAccCheckAuditTargetDestroy,
 		Steps: []resource.TestStep{
 			{
-				Config: testAccAuditTargetConfig(name, endpoint),
+				Config: testAccAuditTargetConfig(name, endpoint, "managed by terraform"),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					testAccCheckAuditTargetExists(name),
 					resource.TestCheckResourceAttr(auditTargetResourceName, "target_type", "audit_webhook"),
@@ -268,25 +272,135 @@ func TestAccAuditTargetResource(t *testing.T) {
 					resource.TestCheckResourceAttr(auditTargetResourceName, "auth_token", "superSecret"),
 					resource.TestCheckResourceAttr(auditTargetResourceName, "comment", "managed by terraform"),
 					resource.TestCheckResourceAttrSet(auditTargetResourceName, "health_state"),
+					// The list endpoint does not echo the target configuration,
+					// so the create is confirmed against get-config-kv, which
+					// renders what the server actually stored.
+					testAccCheckAuditTargetConfigValue(name, "endpoint", endpoint),
 				),
 			},
 			{
-				Config: testAccAuditTargetConfigUpdated(name, endpoint),
+				// In-place change: endpoint and comment are mutable, so the plan
+				// is an update (never a replacement) and the server has to hand
+				// the new endpoint back.
+				Config: testAccAuditTargetConfig(name, updatedEndpoint, "updated by terraform"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction(auditTargetResourceName, plancheck.ResourceActionUpdate),
+					},
+				},
 				Check: resource.ComposeAggregateTestCheckFunc(
 					testAccCheckAuditTargetExists(name),
 					resource.TestCheckResourceAttr(auditTargetResourceName, "comment", "updated by terraform"),
+					resource.TestCheckResourceAttr(auditTargetResourceName, "endpoint", updatedEndpoint),
 					resource.TestCheckResourceAttrSet(auditTargetResourceName, "health_state"),
+					testAccCheckAuditTargetConfigValue(name, "endpoint", updatedEndpoint),
+				),
+			},
+			{
+				// Revert the update; the server has to end up on the original
+				// endpoint again, which the config read-back proves.
+				Config: testAccAuditTargetConfig(name, endpoint, "managed by terraform"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction(auditTargetResourceName, plancheck.ResourceActionUpdate),
+					},
+				},
+				Check: resource.ComposeAggregateTestCheckFunc(
+					testAccCheckAuditTargetExists(name),
+					resource.TestCheckResourceAttr(auditTargetResourceName, "comment", "managed by terraform"),
+					resource.TestCheckResourceAttr(auditTargetResourceName, "endpoint", endpoint),
+					testAccCheckAuditTargetConfigValue(name, "endpoint", endpoint),
+				),
+			},
+			{
+				// Explicit empty second plan: the state the revert wrote is the
+				// configuration, so the plan made from that state proposes no
+				// change. This is what catches a computed attribute (health
+				// state, status) that the read path drops.
+				Config:             testAccAuditTargetConfig(name, endpoint, "managed by terraform"),
+				PlanOnly:           true,
+				ExpectNonEmptyPlan: false,
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PostApplyPreRefresh: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
+				},
+			},
+			{
+				// target_name carries RequiresReplace, so renaming the target
+				// has to be planned as a replacement. The step only plans: the
+				// replacement is asserted here and applied in the next step.
+				Config:             testAccAuditTargetConfig(replacementName, endpoint, "managed by terraform"),
+				PlanOnly:           true,
+				ExpectNonEmptyPlan: true,
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PostApplyPreRefresh: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction(auditTargetResourceName, plancheck.ResourceActionReplace),
+					},
+				},
+			},
+			{
+				// Apply the replacement so the destroy-and-recreate path really
+				// runs, and check the old target is gone while the new one is on
+				// the server with the configuration intact.
+				Config: testAccAuditTargetConfig(replacementName, endpoint, "managed by terraform"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction(auditTargetResourceName, plancheck.ResourceActionReplace),
+					},
+				},
+				Check: resource.ComposeAggregateTestCheckFunc(
+					testAccCheckAuditTargetExists(replacementName),
+					testAccCheckAuditTargetGone(name),
+					resource.TestCheckResourceAttr(auditTargetResourceName, "target_name", replacementName),
+					resource.TestCheckResourceAttr(auditTargetResourceName, "endpoint", endpoint),
+					testAccCheckAuditTargetConfigValue(replacementName, "endpoint", endpoint),
+				),
+			},
+			{
+				// Out-of-band drift: the Check function resets the target
+				// straight through the admin API after the (no-op) apply, so the
+				// plan made before the refresh is still empty while the plan
+				// Terraform proposes after the refresh has to re-create it.
+				Config:             testAccAuditTargetConfig(replacementName, endpoint, "managed by terraform"),
+				ExpectNonEmptyPlan: true,
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PostApplyPreRefresh: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
+					PostApplyPostRefresh: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction(auditTargetResourceName, plancheck.ResourceActionCreate),
+					},
+				},
+				Check: resource.ComposeAggregateTestCheckFunc(
+					testAccCheckAuditTargetExists(replacementName),
+					testAccAuditTargetResetOutOfBand(replacementName),
+				),
+			},
+			{
+				// Apply the drift the previous step discovered and assert the
+				// re-created target is on the server again with its config.
+				Config: testAccAuditTargetConfig(replacementName, endpoint, "managed by terraform"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					testAccCheckAuditTargetExists(replacementName),
+					resource.TestCheckResourceAttr(auditTargetResourceName, "target_name", replacementName),
+					testAccCheckAuditTargetConfigValue(replacementName, "endpoint", endpoint),
 				),
 			},
 			{
 				ResourceName:      auditTargetResourceName,
 				ImportState:       true,
-				ImportStateId:     "audit_webhook/" + name,
+				ImportStateId:     "audit_webhook/" + replacementName,
 				ImportStateVerify: true,
 				// The admin list endpoint does not echo config values, so these
 				// attributes cannot be verified after import.
 				ImportStateVerifyIdentifierAttribute: "target_name",
 				ImportStateVerifyIgnore:              []string{"enable", "endpoint", "auth_token", "comment", "queue_limit", "queue_dir", "client_cert", "client_key", "client_ca", "skip_tls_verify", "health_state", "health_reason", "status"},
+			},
+			{
+				// Import accepts the composite <target_type>/<target_name> ID
+				// only. An ID without the separator has to produce the explicit
+				// diagnostic rather than a panic or a half-filled state.
+				ResourceName:  auditTargetResourceName,
+				ImportState:   true,
+				ImportStateId: "no-separator-here",
+				ExpectError:   regexp.MustCompile(`(?s)Invalid import ID.*Expected the import ID to be <target_type>/<target_name>`),
 			},
 		},
 	})
@@ -320,28 +434,16 @@ func testAccAuditTargetPreCheck(t *testing.T) {
 	}
 }
 
-func testAccAuditTargetConfig(name, endpoint string) string {
+func testAccAuditTargetConfig(name, endpoint, comment string) string {
 	return testAccProviderConfig() + fmt.Sprintf(`
 resource "rustfs_audit_target" "test" {
   target_type = "audit_webhook"
   target_name = "%s"
   endpoint    = "%s"
   auth_token  = "superSecret"
-  comment     = "managed by terraform"
+  comment     = "%s"
 }
-`, name, endpoint)
-}
-
-func testAccAuditTargetConfigUpdated(name, endpoint string) string {
-	return testAccProviderConfig() + fmt.Sprintf(`
-resource "rustfs_audit_target" "test" {
-  target_type = "audit_webhook"
-  target_name = "%s"
-  endpoint    = "%s"
-  auth_token  = "superSecret"
-  comment     = "updated by terraform"
-}
-`, name, endpoint)
+`, name, endpoint, comment)
 }
 
 func testAccCheckAuditTargetExists(name string) resource.TestCheckFunc {
@@ -366,6 +468,60 @@ func testAccCheckAuditTargetExists(name string) resource.TestCheckFunc {
 			}
 		}
 		return fmt.Errorf("audit target %s not found in list", name)
+	}
+}
+
+// testAccCheckAuditTargetConfigValue asserts a configuration key of the target
+// as the server renders it back through get-config-kv
+// ("audit_webhook:<name>"). The admin list endpoint only reports identity and
+// health, so this is the only server-side read-back of what an update wrote.
+func testAccCheckAuditTargetConfigValue(name, key, want string) resource.TestCheckFunc {
+	return func(*terraform.State) error {
+		client := testAccRustClient()
+		kvs, err := client.GetConfig("audit_webhook:" + name)
+		if err != nil {
+			return fmt.Errorf("failed to read audit target %s config from the server: %w", name, err)
+		}
+		for _, kv := range kvs {
+			if kv.Key == key {
+				if kv.Value != want {
+					return fmt.Errorf("server reports audit target %s %s = %q, want %q", name, key, kv.Value, want)
+				}
+				return nil
+			}
+		}
+		return fmt.Errorf("server does not report key %q for audit target %s: %+v", key, name, kvs)
+	}
+}
+
+// testAccCheckAuditTargetGone asserts the named audit target is not configured
+// on the server any more, which is how a replacement proves the old instance
+// was destroyed.
+func testAccCheckAuditTargetGone(name string) resource.TestCheckFunc {
+	return func(*terraform.State) error {
+		client := testAccRustClient()
+		targets, err := client.ListAuditTargets()
+		if err != nil {
+			return err
+		}
+		for _, target := range targets {
+			if strings.EqualFold(target.AccountID, name) {
+				return fmt.Errorf("audit target %s still exists after the replacement", name)
+			}
+		}
+		return nil
+	}
+}
+
+// testAccAuditTargetResetOutOfBand removes the target through the admin API
+// behind Terraform's back, so the following refresh notices the drift.
+func testAccAuditTargetResetOutOfBand(name string) resource.TestCheckFunc {
+	return func(*terraform.State) error {
+		client := testAccRustClient()
+		if err := client.ResetAuditTarget("audit_webhook", name); err != nil {
+			return fmt.Errorf("failed to reset audit target %s out of band: %w", name, err)
+		}
+		return nil
 	}
 }
 

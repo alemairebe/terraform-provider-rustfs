@@ -10,6 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	frameworkresource "github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -17,6 +20,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/plancheck"
+	"github.com/hashicorp/terraform-plugin-testing/terraform"
 )
 
 func TestBucketLifecycleConfigurationSchema(t *testing.T) {
@@ -377,6 +382,20 @@ func TestBucketLifecycleConfigurationConfigValidators(t *testing.T) {
 	}
 }
 
+// TestLifecycleFilterConfigValidatorMarkdownDescription pins the validator's
+// markdown text to its plain description: lifecycleFilterConfigValidator
+// implements MarkdownDescription by returning Description verbatim.
+func TestLifecycleFilterConfigValidatorMarkdownDescription(t *testing.T) {
+	v := lifecycleFilterConfigValidator{}
+	want := v.Description(context.Background())
+	if want == "" {
+		t.Fatal("Description must not be empty")
+	}
+	if got := v.MarkdownDescription(context.Background()); got != want {
+		t.Errorf("MarkdownDescription = %q, want %q", got, want)
+	}
+}
+
 func TestAccBucketLifecycleConfigurationResource_basic(t *testing.T) {
 	name := fmt.Sprintf("tf-test-lc-%d", acctest.RandInt())
 	resourceName := "rustfs_bucket_lifecycle_configuration.test"
@@ -541,4 +560,239 @@ resource "rustfs_bucket_lifecycle_configuration" "test" {
   ]
 }
 `, bucket)
+}
+
+// TestAccBucketLifecycleConfigurationResource_updateImportReplaceDrift covers
+// the lifecycle paths the create/destroy oriented tests do not: an in-place
+// rule update with the value read back from the server, its revert, import with
+// verification, an explicit empty second plan, the RequiresReplace plan for
+// bucket (the only attribute carrying RequiresReplace) applied for real, and
+// out-of-band drift repaired by the next apply.
+func TestAccBucketLifecycleConfigurationResource_updateImportReplaceDrift(t *testing.T) {
+	name := fmt.Sprintf("tf-test-lc-upd-%d", acctest.RandInt())
+	altName := fmt.Sprintf("tf-test-lc-alt-%d", acctest.RandInt())
+	resourceName := "rustfs_bucket_lifecycle_configuration.test"
+
+	resource.ParallelTest(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckBucketDestroy,
+		Steps: []resource.TestStep{
+			// Create.
+			{
+				Config: testAccLifecycleUpdateConfig(name, altName, false, "logs/", 30),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr(resourceName, "bucket", name),
+					resource.TestCheckResourceAttr(resourceName, "rule.0.id", "rule1"),
+					resource.TestCheckResourceAttr(resourceName, "rule.0.expiration.days", "30"),
+					testAccCheckBucketLifecycleRuleOnServer(resourceName, "rule1", "logs/", 30),
+				),
+			},
+			// In-place update: prefix and expiration days both change, and the
+			// server must report the new values.
+			{
+				Config: testAccLifecycleUpdateConfig(name, altName, false, "archive/", 90),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr(resourceName, "bucket", name),
+					resource.TestCheckResourceAttr(resourceName, "rule.0.filter.prefix", "archive/"),
+					resource.TestCheckResourceAttr(resourceName, "rule.0.expiration.days", "90"),
+					testAccCheckBucketLifecycleRuleOnServer(resourceName, "rule1", "archive/", 90),
+				),
+			},
+			// Revert to the original values.
+			{
+				Config: testAccLifecycleUpdateConfig(name, altName, false, "logs/", 30),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr(resourceName, "rule.0.filter.prefix", "logs/"),
+					resource.TestCheckResourceAttr(resourceName, "rule.0.expiration.days", "30"),
+					testAccCheckBucketLifecycleRuleOnServer(resourceName, "rule1", "logs/", 30),
+				),
+			},
+			// ImportStatePassthroughID on the bucket name, verified against the
+			// state written by the steps above.
+			{
+				ResourceName:                         resourceName,
+				ImportState:                          true,
+				ImportStateId:                        name,
+				ImportStateVerify:                    true,
+				ImportStateVerifyIdentifierAttribute: "bucket",
+			},
+			// Computed consistency: the recorded state produces an empty plan.
+			{
+				Config:             testAccLifecycleUpdateConfig(name, altName, false, "logs/", 30),
+				PlanOnly:           true,
+				ExpectNonEmptyPlan: false,
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PostApplyPreRefresh: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
+				},
+			},
+			// bucket carries RequiresReplace, so pointing the configuration at
+			// another bucket must be planned as a replacement, not an update.
+			{
+				Config:             testAccLifecycleUpdateConfig(name, altName, true, "logs/", 30),
+				PlanOnly:           true,
+				ExpectNonEmptyPlan: true,
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PostApplyPreRefresh: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction(resourceName, plancheck.ResourceActionReplace),
+					},
+				},
+			},
+			// Apply the replacement so the replacement path really runs.
+			{
+				Config: testAccLifecycleUpdateConfig(name, altName, true, "logs/", 30),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr(resourceName, "bucket", altName),
+					resource.TestCheckResourceAttr(resourceName, "rule.0.expiration.days", "30"),
+					testAccCheckBucketLifecycleRuleOnServer(resourceName, "rule1", "logs/", 30),
+				),
+			},
+			// Out-of-band drift: rewrite the rules behind Terraform's back. The
+			// mutation runs inside Check, before the post-apply plans, so the
+			// non-refresh plan is empty while the refreshed plan must not be.
+			{
+				Config:             testAccLifecycleUpdateConfig(name, altName, true, "logs/", 30),
+				ExpectNonEmptyPlan: true,
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckBucketLifecycleRuleOnServer(resourceName, "rule1", "logs/", 30),
+					testAccMutateBucketLifecycleOutOfBand(t, resourceName, "drift/", 4321),
+				),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PostApplyPostRefresh: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction(resourceName, plancheck.ResourceActionUpdate),
+					},
+				},
+			},
+			// The next apply converges back to the configured rules.
+			{
+				Config: testAccLifecycleUpdateConfig(name, altName, true, "logs/", 30),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr(resourceName, "rule.0.id", "rule1"),
+					resource.TestCheckResourceAttr(resourceName, "rule.0.filter.prefix", "logs/"),
+					resource.TestCheckResourceAttr(resourceName, "rule.0.expiration.days", "30"),
+					testAccCheckBucketLifecycleRuleOnServer(resourceName, "rule1", "logs/", 30),
+				),
+			},
+		},
+	})
+}
+
+// testAccLifecycleUpdateConfig declares both buckets so the lifecycle resource
+// can be moved between them; useAlt selects which bucket carries the rules.
+func testAccLifecycleUpdateConfig(bucket, altBucket string, useAlt bool, prefix string, days int) string {
+	target := "rustfs_bucket.test.name"
+	if useAlt {
+		target = "rustfs_bucket.alt.name"
+	}
+	return fmt.Sprintf(testAccProviderConfig()+`
+resource "rustfs_bucket" "test" {
+  name = "%s"
+}
+
+resource "rustfs_bucket" "alt" {
+  name = "%s"
+}
+
+resource "rustfs_bucket_lifecycle_configuration" "test" {
+  bucket = %s
+
+  rule = [
+    {
+      id     = "rule1"
+      status = "Enabled"
+
+      filter = {
+        prefix = "%s"
+      }
+
+      expiration = {
+        days = %d
+      }
+    }
+  ]
+}
+`, bucket, altBucket, target, prefix, days)
+}
+
+// testAccCheckBucketLifecycleRuleOnServer reads the lifecycle configuration
+// straight from the server and asserts the single expected rule is present with
+// the given prefix and expiration days.
+func testAccCheckBucketLifecycleRuleOnServer(resourceName, wantID, wantPrefix string, wantDays int32) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		rs, ok := s.RootModule().Resources[resourceName]
+		if !ok {
+			return fmt.Errorf("resource %s not found in state", resourceName)
+		}
+		bucket := rs.Primary.Attributes["bucket"]
+		if bucket == "" {
+			return fmt.Errorf("resource %s has no bucket in state", resourceName)
+		}
+
+		client, err := testAccS3Client()
+		if err != nil {
+			return err
+		}
+
+		out, err := client.GetBucketLifecycleConfiguration(context.Background(), &s3.GetBucketLifecycleConfigurationInput{
+			Bucket: aws.String(bucket),
+		})
+		if err != nil {
+			return fmt.Errorf("reading lifecycle configuration of bucket %s: %w", bucket, err)
+		}
+		if len(out.Rules) != 1 {
+			return fmt.Errorf("bucket %s has %d lifecycle rules on the server, want 1", bucket, len(out.Rules))
+		}
+
+		rule := out.Rules[0]
+		if got := aws.ToString(rule.ID); got != wantID {
+			return fmt.Errorf("bucket %s rule ID = %q on the server, want %q", bucket, got, wantID)
+		}
+		if got := aws.ToString(rule.Filter.Prefix); got != wantPrefix {
+			return fmt.Errorf("bucket %s rule prefix = %q on the server, want %q", bucket, got, wantPrefix)
+		}
+		if rule.Expiration == nil {
+			return fmt.Errorf("bucket %s rule %q has no expiration on the server", bucket, wantID)
+		}
+		if got := aws.ToInt32(rule.Expiration.Days); got != wantDays {
+			return fmt.Errorf("bucket %s rule expiration days = %d on the server, want %d", bucket, got, wantDays)
+		}
+		return nil
+	}
+}
+
+// testAccMutateBucketLifecycleOutOfBand replaces the bucket's lifecycle rules
+// through the S3 client, leaving the Terraform state describing the old rules.
+func testAccMutateBucketLifecycleOutOfBand(t *testing.T, resourceName, prefix string, days int32) resource.TestCheckFunc {
+	t.Helper()
+	return func(s *terraform.State) error {
+		rs, ok := s.RootModule().Resources[resourceName]
+		if !ok {
+			return fmt.Errorf("resource %s not found in state", resourceName)
+		}
+		bucket := rs.Primary.Attributes["bucket"]
+		if bucket == "" {
+			return fmt.Errorf("resource %s has no bucket in state", resourceName)
+		}
+
+		client, err := testAccS3Client()
+		if err != nil {
+			return err
+		}
+
+		_, err = client.PutBucketLifecycleConfiguration(context.Background(), &s3.PutBucketLifecycleConfigurationInput{
+			Bucket: aws.String(bucket),
+			LifecycleConfiguration: &s3types.BucketLifecycleConfiguration{
+				Rules: []s3types.LifecycleRule{{
+					ID:         aws.String("drifted"),
+					Status:     s3types.ExpirationStatusEnabled,
+					Filter:     &s3types.LifecycleRuleFilter{Prefix: aws.String(prefix)},
+					Expiration: &s3types.LifecycleExpiration{Days: aws.Int32(days)},
+				}},
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("mutating lifecycle configuration of bucket %s out of band: %w", bucket, err)
+		}
+		return nil
+	}
 }

@@ -6,12 +6,18 @@ package provider
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	tfresource "github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/plancheck"
+	"github.com/hashicorp/terraform-plugin-testing/terraform"
 )
 
 func TestBuildPublicAccessBlock(t *testing.T) {
@@ -67,6 +73,7 @@ func TestBucketPublicAccessBlockRessourceMetadata(t *testing.T) {
 
 func TestAccBucketPublicAccessBlock_basic(t *testing.T) {
 	name := fmt.Sprintf("tf-test-pab-%d", acctest.RandInt())
+	replacementName := fmt.Sprintf("tf-test-pab-%d", acctest.RandInt())
 	resourceName := "rustfs_bucket_public_access_block.test"
 
 	tfresource.ParallelTest(t, tfresource.TestCase{
@@ -74,6 +81,7 @@ func TestAccBucketPublicAccessBlock_basic(t *testing.T) {
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		CheckDestroy:             testAccCheckBucketDestroy,
 		Steps: []tfresource.TestStep{
+			// Create with a mixed flag set and assert what the server reports back.
 			{
 				Config: testAccBucketPublicAccessBlockConfig(name, true, false, true, false),
 				Check: tfresource.ComposeTestCheckFunc(
@@ -83,8 +91,23 @@ func TestAccBucketPublicAccessBlock_basic(t *testing.T) {
 					tfresource.TestCheckResourceAttr(resourceName, "ignore_public_acls", "false"),
 					tfresource.TestCheckResourceAttr(resourceName, "block_public_policy", "true"),
 					tfresource.TestCheckResourceAttr(resourceName, "restrict_public_buckets", "false"),
+					testAccCheckPublicAccessBlockExists(resourceName),
 				),
 			},
+			// In-place update: flip a single flag, leave the other three alone and
+			// assert the value the server returned for every one of them.
+			{
+				Config: testAccBucketPublicAccessBlockConfig(name, false, false, true, false),
+				Check: tfresource.ComposeTestCheckFunc(
+					tfresource.TestCheckResourceAttr(resourceName, "block_public_acls", "false"),
+					tfresource.TestCheckResourceAttr(resourceName, "ignore_public_acls", "false"),
+					tfresource.TestCheckResourceAttr(resourceName, "block_public_policy", "true"),
+					tfresource.TestCheckResourceAttr(resourceName, "restrict_public_buckets", "false"),
+					testAccCheckPublicAccessBlockExists(resourceName),
+				),
+			},
+			// Flip the remaining flags in place (pre-existing coverage) so that
+			// every flag is observed as true on the server at least once.
 			{
 				Config: testAccBucketPublicAccessBlockConfig(name, false, true, true, true),
 				Check: tfresource.ComposeTestCheckFunc(
@@ -92,16 +115,203 @@ func TestAccBucketPublicAccessBlock_basic(t *testing.T) {
 					tfresource.TestCheckResourceAttr(resourceName, "ignore_public_acls", "true"),
 					tfresource.TestCheckResourceAttr(resourceName, "block_public_policy", "true"),
 					tfresource.TestCheckResourceAttr(resourceName, "restrict_public_buckets", "true"),
+					testAccCheckPublicAccessBlockExists(resourceName),
 				),
 			},
+			// Revert the in-place updates.
+			{
+				Config: testAccBucketPublicAccessBlockConfig(name, true, false, true, false),
+				Check: tfresource.ComposeTestCheckFunc(
+					tfresource.TestCheckResourceAttr(resourceName, "block_public_acls", "true"),
+					tfresource.TestCheckResourceAttr(resourceName, "ignore_public_acls", "false"),
+					tfresource.TestCheckResourceAttr(resourceName, "block_public_policy", "true"),
+					tfresource.TestCheckResourceAttr(resourceName, "restrict_public_buckets", "false"),
+					testAccCheckPublicAccessBlockExists(resourceName),
+				),
+			},
+			// Explicit empty second plan: every flag is Optional+Computed, so the
+			// reverted state must reproduce the configuration exactly.
+			{
+				Config:             testAccBucketPublicAccessBlockConfig(name, true, false, true, false),
+				PlanOnly:           true,
+				ExpectNonEmptyPlan: false,
+				ConfigPlanChecks: tfresource.ConfigPlanChecks{
+					PostApplyPreRefresh: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
+				},
+			},
+			// Import by bucket name.
 			{
 				ResourceName:      resourceName,
 				ImportState:       true,
 				ImportStateVerify: true,
 				ImportStateId:     name,
 			},
+			// Out-of-band drift: drop the whole configuration behind Terraform's back.
+			{
+				Config:             testAccBucketPublicAccessBlockConfig(name, true, false, true, false),
+				ExpectNonEmptyPlan: true,
+				Check: tfresource.ComposeTestCheckFunc(
+					testAccCheckPublicAccessBlockExists(resourceName),
+					testAccMutatePublicAccessBlockDeleteOutOfBand(name),
+				),
+			},
+			// ... and converge back to the configured values.
+			{
+				Config: testAccBucketPublicAccessBlockConfig(name, true, false, true, false),
+				Check: tfresource.ComposeTestCheckFunc(
+					tfresource.TestCheckResourceAttr(resourceName, "block_public_acls", "true"),
+					tfresource.TestCheckResourceAttr(resourceName, "ignore_public_acls", "false"),
+					tfresource.TestCheckResourceAttr(resourceName, "block_public_policy", "true"),
+					tfresource.TestCheckResourceAttr(resourceName, "restrict_public_buckets", "false"),
+					testAccCheckPublicAccessBlockExists(resourceName),
+				),
+			},
+			// Out-of-band drift: flip every flag on the server instead of deleting
+			// it; the refreshed plan must propose an in-place update.
+			{
+				Config:             testAccBucketPublicAccessBlockConfig(name, true, false, true, false),
+				ExpectNonEmptyPlan: true,
+				Check: tfresource.ComposeTestCheckFunc(
+					testAccCheckPublicAccessBlockExists(resourceName),
+					testAccMutatePublicAccessBlockFlagsOutOfBand(name, false, true, false, true),
+				),
+				ConfigPlanChecks: tfresource.ConfigPlanChecks{
+					PostApplyPostRefresh: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction(resourceName, plancheck.ResourceActionUpdate),
+					},
+				},
+			},
+			// ... and converge back to the configured values again.
+			{
+				Config: testAccBucketPublicAccessBlockConfig(name, true, false, true, false),
+				Check: tfresource.ComposeTestCheckFunc(
+					tfresource.TestCheckResourceAttr(resourceName, "block_public_acls", "true"),
+					tfresource.TestCheckResourceAttr(resourceName, "ignore_public_acls", "false"),
+					tfresource.TestCheckResourceAttr(resourceName, "block_public_policy", "true"),
+					tfresource.TestCheckResourceAttr(resourceName, "restrict_public_buckets", "false"),
+					testAccCheckPublicAccessBlockExists(resourceName),
+				),
+			},
+			// Replacement plan for `bucket`, the attribute carrying RequiresReplace.
+			{
+				Config:             testAccBucketPublicAccessBlockReplacementConfig(name, replacementName, true, false, true, false),
+				PlanOnly:           true,
+				ExpectNonEmptyPlan: true,
+				ConfigPlanChecks: tfresource.ConfigPlanChecks{
+					PostApplyPreRefresh: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction(resourceName, plancheck.ResourceActionReplace),
+					},
+				},
+			},
+			// Apply the replacement so the replacement path really runs, then
+			// assert the new instance against the server.
+			{
+				Config: testAccBucketPublicAccessBlockReplacementConfig(name, replacementName, true, false, true, false),
+				Check: tfresource.ComposeTestCheckFunc(
+					tfresource.TestCheckResourceAttr(resourceName, "bucket", replacementName),
+					tfresource.TestCheckResourceAttr(resourceName, "id", replacementName),
+					tfresource.TestCheckResourceAttr(resourceName, "block_public_acls", "true"),
+					tfresource.TestCheckResourceAttr(resourceName, "ignore_public_acls", "false"),
+					tfresource.TestCheckResourceAttr(resourceName, "block_public_policy", "true"),
+					tfresource.TestCheckResourceAttr(resourceName, "restrict_public_buckets", "false"),
+					testAccCheckPublicAccessBlockExists(resourceName),
+				),
+			},
 		},
 	})
+}
+
+// testAccCheckPublicAccessBlockExists fails unless the bucket still has a public
+// access block configuration and every flag the server reports matches the
+// Terraform state, which is what makes the update/import read-back meaningful.
+func testAccCheckPublicAccessBlockExists(resourceName string) tfresource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		rs, ok := s.RootModule().Resources[resourceName]
+		if !ok {
+			return fmt.Errorf("not found: %s", resourceName)
+		}
+
+		bucket := rs.Primary.Attributes["bucket"]
+		if bucket == "" {
+			return fmt.Errorf("no bucket set on %s", resourceName)
+		}
+
+		client, err := testAccS3Client()
+		if err != nil {
+			return err
+		}
+
+		out, err := client.GetPublicAccessBlock(context.Background(), &s3.GetPublicAccessBlockInput{
+			Bucket: aws.String(bucket),
+		})
+		if err != nil {
+			return fmt.Errorf("error reading public access block of %s: %s", bucket, err)
+		}
+		if out.PublicAccessBlockConfiguration == nil {
+			return fmt.Errorf("bucket %s has no public access block configuration", bucket)
+		}
+
+		server := map[string]bool{
+			"block_public_acls":       aws.ToBool(out.PublicAccessBlockConfiguration.BlockPublicAcls),
+			"ignore_public_acls":      aws.ToBool(out.PublicAccessBlockConfiguration.IgnorePublicAcls),
+			"block_public_policy":     aws.ToBool(out.PublicAccessBlockConfiguration.BlockPublicPolicy),
+			"restrict_public_buckets": aws.ToBool(out.PublicAccessBlockConfiguration.RestrictPublicBuckets),
+		}
+		for attr, serverValue := range server {
+			stateValue, err := strconv.ParseBool(rs.Primary.Attributes[attr])
+			if err != nil {
+				return fmt.Errorf("attribute %s of %s is not a boolean: %q", attr, resourceName, rs.Primary.Attributes[attr])
+			}
+			if serverValue != stateValue {
+				return fmt.Errorf("bucket %s: server reports %s=%t but Terraform state has %t", bucket, attr, serverValue, stateValue)
+			}
+		}
+		return nil
+	}
+}
+
+// testAccMutatePublicAccessBlockDeleteOutOfBand removes the public access block
+// configuration directly through the S3 API, without Terraform's knowledge.
+func testAccMutatePublicAccessBlockDeleteOutOfBand(bucket string) tfresource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		client, err := testAccS3Client()
+		if err != nil {
+			return err
+		}
+
+		_, err = client.DeletePublicAccessBlock(context.Background(), &s3.DeletePublicAccessBlockInput{
+			Bucket: aws.String(bucket),
+		})
+		if err != nil {
+			return fmt.Errorf("out-of-band DeletePublicAccessBlock on %s: %s", bucket, err)
+		}
+		return nil
+	}
+}
+
+// testAccMutatePublicAccessBlockFlagsOutOfBand rewrites the flag set directly
+// through the S3 API, without Terraform's knowledge.
+func testAccMutatePublicAccessBlockFlagsOutOfBand(bucket string, blockPublicAcls, ignorePublicAcls, blockPublicPolicy, restrictPublicBuckets bool) tfresource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		client, err := testAccS3Client()
+		if err != nil {
+			return err
+		}
+
+		_, err = client.PutPublicAccessBlock(context.Background(), &s3.PutPublicAccessBlockInput{
+			Bucket: aws.String(bucket),
+			PublicAccessBlockConfiguration: &s3types.PublicAccessBlockConfiguration{
+				BlockPublicAcls:       aws.Bool(blockPublicAcls),
+				IgnorePublicAcls:      aws.Bool(ignorePublicAcls),
+				BlockPublicPolicy:     aws.Bool(blockPublicPolicy),
+				RestrictPublicBuckets: aws.Bool(restrictPublicBuckets),
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("out-of-band PutPublicAccessBlock on %s: %s", bucket, err)
+		}
+		return nil
+	}
 }
 
 func testAccBucketPublicAccessBlockConfig(bucket string, blockPublicAcls, ignorePublicAcls, blockPublicPolicy, restrictPublicBuckets bool) string {
@@ -118,4 +328,26 @@ resource "rustfs_bucket_public_access_block" "test" {
   restrict_public_buckets = %t
 }
 `, bucket, blockPublicAcls, ignorePublicAcls, blockPublicPolicy, restrictPublicBuckets)
+}
+
+// testAccBucketPublicAccessBlockReplacementConfig points the resource at a second
+// bucket, which exercises the RequiresReplace plan modifier on `bucket`.
+func testAccBucketPublicAccessBlockReplacementConfig(bucket, replacementBucket string, blockPublicAcls, ignorePublicAcls, blockPublicPolicy, restrictPublicBuckets bool) string {
+	return testAccProviderConfig() + fmt.Sprintf(`
+resource "rustfs_bucket" "test" {
+  name = "%s"
+}
+
+resource "rustfs_bucket" "replacement" {
+  name = "%s"
+}
+
+resource "rustfs_bucket_public_access_block" "test" {
+  bucket                = rustfs_bucket.replacement.name
+  block_public_acls     = %t
+  ignore_public_acls    = %t
+  block_public_policy   = %t
+  restrict_public_buckets = %t
+}
+`, bucket, replacementBucket, blockPublicAcls, ignorePublicAcls, blockPublicPolicy, restrictPublicBuckets)
 }
