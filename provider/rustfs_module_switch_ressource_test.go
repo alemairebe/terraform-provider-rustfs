@@ -5,12 +5,14 @@ package provider
 
 import (
 	"context"
+	"net/http"
 	"os"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/caberdo/terraform-provider-rustfs/pkg/rustfs"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	fwresource "github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
@@ -177,4 +179,150 @@ func TestModuleSwitchUpdateFromModel(t *testing.T) {
 	if !update.NotifyEnabled || update.AuditEnabled {
 		t.Fatalf("unexpected update: %+v", update)
 	}
+}
+
+// TestModuleSwitchRessourceLifecyclePaths covers the paths the acceptance suite
+// cannot reach with a live server: every failing API call in Create, Read and
+// Update, and the destroy that must not depend on the server at all.
+//
+// The switches are a cluster-wide singleton: GET module-switches always answers
+// 200 with at least the defaults (probed against RustFS latest), and the admin
+// API has no endpoint that removes them, so there is no "gone" read to cover.
+func TestModuleSwitchRessourceLifecyclePaths(t *testing.T) {
+	t.Parallel()
+
+	readCases := []struct {
+		name        string
+		routes      []requestRoute
+		wantSummary string
+		wantDetail  string
+		wantNotify  bool
+		wantAudit   bool
+	}{
+		{
+			name:        "server error keeps state and names the failing call",
+			routes:      []requestRoute{{status: http.StatusForbidden, body: s3ErrorXML("AccessDenied", "nope")}},
+			wantSummary: "Error reading module switches",
+			wantDetail:  "Could not read module switches: ",
+		},
+		{
+			name:       "server state is mirrored into state",
+			routes:     []requestRoute{{status: http.StatusOK, body: `{"notify_enabled":true,"audit_enabled":false,"notify_source":"console","audit_source":"console"}`}},
+			wantNotify: true,
+			wantAudit:  false,
+		},
+	}
+
+	for _, tc := range readCases {
+		t.Run("read: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewModuleSwitchRessource(), client)
+
+			resp := h.read(&ModuleSwitchRessourceModel{
+				ID:            types.StringValue("module-switches"),
+				NotifyEnabled: types.BoolValue(false),
+				AuditEnabled:  types.BoolValue(true),
+			})
+
+			if tc.wantSummary != "" {
+				assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+				assertStatePresent(t, resp.State)
+				return
+			}
+			requireNoDiagnostics(t, resp.Diagnostics)
+			assertStatePresent(t, resp.State)
+
+			var notify types.Bool
+			if diags := resp.State.GetAttribute(context.Background(), path.Root("notify_enabled"), &notify); diags.HasError() {
+				t.Fatalf("state notify_enabled: %v", diags)
+			}
+			if notify.ValueBool() != tc.wantNotify {
+				t.Errorf("state notify_enabled = %v, want %v", notify.ValueBool(), tc.wantNotify)
+			}
+			var audit types.Bool
+			if diags := resp.State.GetAttribute(context.Background(), path.Root("audit_enabled"), &audit); diags.HasError() {
+				t.Fatalf("state audit_enabled: %v", diags)
+			}
+			if audit.ValueBool() != tc.wantAudit {
+				t.Errorf("state audit_enabled = %v, want %v", audit.ValueBool(), tc.wantAudit)
+			}
+		})
+	}
+
+	t.Run("delete: is a no-op so an already gone switch set is never an error", func(t *testing.T) {
+		// The admin API exposes no reset endpoint, so Delete never talks to
+		// the server and cannot fail when the switches are already gone.
+		client, rec := routedClient(t)
+		h := newCRUDHarness(t, NewModuleSwitchRessource(), client)
+
+		resp := h.delete(&ModuleSwitchRessourceModel{
+			ID:            types.StringValue("module-switches"),
+			NotifyEnabled: types.BoolValue(true),
+			AuditEnabled:  types.BoolValue(false),
+		})
+
+		requireNoDiagnostics(t, resp.Diagnostics)
+		rec.assertNoRequest(t, "module-switches")
+	})
+
+	createCases := []struct {
+		name        string
+		routes      []requestRoute
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			name:        "rejected switch update reports a diagnostic and writes no state",
+			routes:      []requestRoute{{status: http.StatusForbidden, body: s3ErrorXML("AccessDenied", "notify module is pinned by an environment variable")}},
+			wantSummary: "Error setting module switches",
+			wantDetail:  "Could not set module switches: ",
+		},
+	}
+
+	for _, tc := range createCases {
+		t.Run("create: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewModuleSwitchRessource(), client)
+			plan := &ModuleSwitchRessourceModel{NotifyEnabled: types.BoolValue(true), AuditEnabled: types.BoolValue(true)}
+
+			resp := h.create(plan)
+
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+			h.assertNoPartialState(resp, plan)
+		})
+	}
+
+	updateCases := []struct {
+		name        string
+		routes      []requestRoute
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			name:        "rejected update reports a diagnostic",
+			routes:      []requestRoute{{status: http.StatusForbidden, body: s3ErrorXML("AccessDenied", "nope")}},
+			wantSummary: "Error updating module switches",
+			wantDetail:  "Could not update module switches: ",
+		},
+	}
+
+	for _, tc := range updateCases {
+		t.Run("update: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewModuleSwitchRessource(), client)
+			plan := &ModuleSwitchRessourceModel{NotifyEnabled: types.BoolValue(true), AuditEnabled: types.BoolValue(false)}
+
+			resp := h.update(plan, plan)
+
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+		})
+	}
+
+	t.Run("configure: rejects foreign provider data", func(t *testing.T) {
+		h := newCRUDHarness(t, NewModuleSwitchRessource(), cannedClient(t, http.StatusOK, ""))
+
+		resp := h.configure("not-a-client")
+
+		assertErrorDiagnostic(t, resp.Diagnostics, "Unexpected Resource Configure Type", "Expected *AllClient, got: string.")
+	})
 }

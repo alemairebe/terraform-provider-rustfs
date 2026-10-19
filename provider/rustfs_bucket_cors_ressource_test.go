@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -14,6 +15,7 @@ import (
 	"github.com/aws/smithy-go"
 	frameworkresource "github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 )
@@ -173,6 +175,176 @@ func TestAccBucketCorsResource_basic(t *testing.T) {
 				ImportStateId:     name,
 			},
 		},
+	})
+}
+
+// TestBucketCorsRessourceLifecyclePaths covers the paths the acceptance suite
+// cannot reach with a live server: a CORS configuration that disappeared behind
+// Terraform's back, a delete that arrives after the configuration is already
+// gone, and every failing API call in Create, Read and Delete.
+func TestBucketCorsRessourceLifecyclePaths(t *testing.T) {
+	t.Parallel()
+
+	plan := func() *bucketCorsModel {
+		return &bucketCorsModel{
+			Bucket: types.StringValue("tf-test"),
+			Rule: []corsRuleModel{{
+				AllowedMethods: stringSetFromSlice([]string{"GET"}),
+				AllowedOrigins: stringSetFromSlice([]string{"https://example.com"}),
+				AllowedHeaders: nullStringSet(),
+				ExposeHeaders:  nullStringSet(),
+				MaxAgeSeconds:  types.Int64Null(),
+				Id:             types.StringNull(),
+			}},
+		}
+	}
+
+	readCases := []struct {
+		name        string
+		routes      []requestRoute
+		wantRemoved bool
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			// GetBucketCors answers NoSuchCORSConfiguration when the bucket has
+			// no CORS configuration.
+			name:        "unset CORS configuration is removed from state",
+			routes:      []requestRoute{{status: http.StatusNotFound, body: s3ErrorXML("NoSuchCORSConfiguration", "The CORS configuration does not exist")}},
+			wantRemoved: true,
+		},
+		{
+			// Same 404 the S3 API uses for a bucket that is gone entirely.
+			name:        "missing bucket is removed from state",
+			routes:      []requestRoute{{status: http.StatusNotFound, body: s3ErrorXML("NoSuchBucket", "The specified bucket does not exist")}},
+			wantRemoved: true,
+		},
+		{
+			name:        "server error keeps state and names the failing call",
+			routes:      []requestRoute{{status: http.StatusForbidden, body: s3ErrorXML("AccessDenied", "Access Denied")}},
+			wantSummary: "Error reading bucket CORS configuration",
+			wantDetail:  "Could not read CORS configuration: ",
+		},
+	}
+
+	for _, tc := range readCases {
+		t.Run("read: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewBucketCorsRessource(), client)
+
+			resp := h.read(&bucketCorsModel{Bucket: types.StringValue("tf-test")})
+
+			if tc.wantRemoved {
+				requireNoDiagnostics(t, resp.Diagnostics)
+				assertStateRemoved(t, resp.State)
+				return
+			}
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+			assertStatePresent(t, resp.State)
+		})
+	}
+
+	deleteCases := []struct {
+		name        string
+		routes      []requestRoute
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			name:   "already deleted CORS configuration is not an error",
+			routes: []requestRoute{{status: http.StatusNotFound, body: s3ErrorXML("NoSuchCORSConfiguration", "The CORS configuration does not exist")}},
+		},
+		{
+			name:   "already deleted bucket is not an error",
+			routes: []requestRoute{{status: http.StatusNotFound, body: s3ErrorXML("NoSuchBucket", "The specified bucket does not exist")}},
+		},
+		{
+			name:        "real server error is reported",
+			routes:      []requestRoute{{status: http.StatusForbidden, body: s3ErrorXML("AccessDenied", "Access Denied")}},
+			wantSummary: "Error deleting bucket CORS configuration",
+			wantDetail:  "Could not delete CORS configuration: ",
+		},
+	}
+
+	for _, tc := range deleteCases {
+		t.Run("delete: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewBucketCorsRessource(), client)
+
+			resp := h.delete(&bucketCorsModel{Bucket: types.StringValue("tf-test")})
+
+			if tc.wantSummary == "" {
+				requireNoDiagnostics(t, resp.Diagnostics)
+				return
+			}
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+		})
+	}
+
+	createCases := []struct {
+		name        string
+		routes      []requestRoute
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			name:        "rejected configuration reports the server error and writes no state",
+			routes:      []requestRoute{{method: http.MethodPut, status: http.StatusBadRequest, body: s3ErrorXML("InvalidRequest", "malformed CORS configuration")}},
+			wantSummary: "Error creating bucket CORS configuration",
+			wantDetail:  "malformed CORS configuration",
+		},
+		{
+			name:        "missing bucket is reported",
+			routes:      []requestRoute{{method: http.MethodPut, status: http.StatusNotFound, body: s3ErrorXML("NoSuchBucket", "The specified bucket does not exist")}},
+			wantSummary: "Error creating bucket CORS configuration",
+			wantDetail:  "NoSuchBucket",
+		},
+	}
+
+	for _, tc := range createCases {
+		t.Run("create: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewBucketCorsRessource(), client)
+
+			p := plan()
+			resp := h.create(p)
+
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+			h.assertNoPartialState(resp, p)
+		})
+	}
+
+	updateCases := []struct {
+		name        string
+		routes      []requestRoute
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			name:        "rejected update reports the server error",
+			routes:      []requestRoute{{method: http.MethodPut, status: http.StatusBadRequest, body: s3ErrorXML("InvalidRequest", "malformed CORS configuration")}},
+			wantSummary: "Error updating bucket CORS configuration",
+			wantDetail:  "malformed CORS configuration",
+		},
+	}
+
+	for _, tc := range updateCases {
+		t.Run("update: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewBucketCorsRessource(), client)
+
+			resp := h.update(plan(), &bucketCorsModel{Bucket: types.StringValue("tf-test")})
+
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+		})
+	}
+
+	t.Run("configure: rejects foreign provider data", func(t *testing.T) {
+		h := newCRUDHarness(t, NewBucketCorsRessource(), cannedClient(t, http.StatusOK, ""))
+
+		resp := h.configure("not-a-client")
+
+		assertErrorDiagnostic(t, resp.Diagnostics, "Unexpected Resource Configure Type", "Expected *AllClient, got: string.")
 	})
 }
 

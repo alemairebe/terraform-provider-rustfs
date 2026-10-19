@@ -5,10 +5,13 @@ package provider
 
 import (
 	"fmt"
+	"net/http"
 	"slices"
 	"testing"
 
 	"github.com/caberdo/terraform-provider-rustfs/pkg/rustfs"
+	"github.com/hashicorp/terraform-plugin-framework/path"
+	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
@@ -248,4 +251,173 @@ func testAccCheckGroupPolicyAttachmentDestroy(s *terraform.State) error {
 		}
 	}
 	return nil
+}
+
+// TestGroupPolicyAttachmentResourceLifecyclePaths covers the paths the
+// acceptance suite cannot reach with a live server: a group that disappeared
+// behind Terraform's back, a policy detached outside Terraform, a delete that
+// arrives after the group is already gone, and every failing API call in
+// Create, Read and Delete.
+func TestGroupPolicyAttachmentResourceLifecyclePaths(t *testing.T) {
+	t.Parallel()
+
+	readCases := []struct {
+		name        string
+		routes      []requestRoute
+		wantRemoved bool
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			// RustFS answers 404 NoSuchResource for a group it does not have.
+			name: "missing group is removed from state",
+			routes: []requestRoute{{
+				method: http.MethodGet, pathContains: "/group",
+				status: http.StatusNotFound, body: s3ErrorXML("NoSuchResource", "group 'tf-test' does not exist"),
+			}},
+			wantRemoved: true,
+		},
+		{
+			// The group exists but its policy list no longer names the
+			// attached policy, so the attachment was detached out-of-band.
+			name: "policy no longer on the group is removed from state",
+			routes: []requestRoute{{
+				method: http.MethodGet, pathContains: "/group",
+				status: http.StatusOK, body: `{"name":"tf-test","status":"enabled","members":[],"policy":"other-policy"}`,
+			}},
+			wantRemoved: true,
+		},
+		{
+			name: "still attached policy keeps state",
+			routes: []requestRoute{{
+				method: http.MethodGet, pathContains: "/group",
+				status: http.StatusOK, body: `{"name":"tf-test","status":"enabled","members":[],"policy":"other-policy, tf-test-policy"}`,
+			}},
+		},
+		{
+			name: "server error keeps state and names the failing call",
+			routes: []requestRoute{{
+				method: http.MethodGet, pathContains: "/group",
+				status: http.StatusForbidden, body: s3ErrorXML("AccessDenied", "nope"),
+			}},
+			wantSummary: "Error reading group policy attachment",
+			wantDetail:  "Could not read group tf-test: ",
+		},
+	}
+
+	for _, tc := range readCases {
+		t.Run("read: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewGroupPolicyAttachmentResource(), client)
+
+			resp := h.read(&GroupPolicyAttachmentResourceModel{
+				Group:  types.StringValue("tf-test"),
+				Policy: types.StringValue("tf-test-policy"),
+				ID:     types.StringValue("tf-test/tf-test-policy"),
+			})
+
+			if tc.wantRemoved {
+				requireNoDiagnostics(t, resp.Diagnostics)
+				assertStateRemoved(t, resp.State)
+				return
+			}
+			if tc.wantSummary != "" {
+				assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+				assertStatePresent(t, resp.State)
+				return
+			}
+			requireNoDiagnostics(t, resp.Diagnostics)
+			assertStatePresent(t, resp.State)
+			assertStateString(t, resp.State, path.Root("id"), "tf-test/tf-test-policy")
+		})
+	}
+
+	deleteCases := []struct {
+		name        string
+		routes      []requestRoute
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			// A group that is gone cannot still carry the policy.
+			name: "already deleted group is not an error",
+			routes: []requestRoute{{
+				method: http.MethodPost, pathContains: "policy/detach",
+				status: http.StatusNotFound, body: s3ErrorXML("NoSuchResource", "group 'tf-test' does not exist"),
+			}},
+		},
+		{
+			name: "real server error is reported",
+			routes: []requestRoute{{
+				method: http.MethodPost, pathContains: "policy/detach",
+				status: http.StatusForbidden, body: s3ErrorXML("AccessDenied", "nope"),
+			}},
+			wantSummary: "Error detaching policy from group",
+			wantDetail:  "Could not detach policy: ",
+		},
+	}
+
+	for _, tc := range deleteCases {
+		t.Run("delete: "+tc.name, func(t *testing.T) {
+			client, rec := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewGroupPolicyAttachmentResource(), client)
+
+			resp := h.delete(&GroupPolicyAttachmentResourceModel{
+				Group:  types.StringValue("tf-test"),
+				Policy: types.StringValue("tf-test-policy"),
+				ID:     types.StringValue("tf-test/tf-test-policy"),
+			})
+
+			rec.assertRequest(t, "policy/detach")
+			if tc.wantSummary == "" {
+				requireNoDiagnostics(t, resp.Diagnostics)
+				return
+			}
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+		})
+	}
+
+	createCases := []struct {
+		name        string
+		routes      []requestRoute
+		plan        *GroupPolicyAttachmentResourceModel
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			name: "rejected attach reports a diagnostic and writes no state",
+			routes: []requestRoute{{
+				method: http.MethodPost, pathContains: "policy/attach",
+				status: http.StatusNotFound, body: s3ErrorXML("NoSuchResource", "group 'tf-test' does not exist"),
+			}},
+			plan: &GroupPolicyAttachmentResourceModel{
+				Group:  types.StringValue("tf-test"),
+				Policy: types.StringValue("tf-test-policy"),
+				ID:     types.StringNull(),
+			},
+			wantSummary: "Error attaching policy to group",
+			wantDetail:  "Could not attach policy: ",
+		},
+	}
+
+	for _, tc := range createCases {
+		t.Run("create: "+tc.name, func(t *testing.T) {
+			client, rec := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewGroupPolicyAttachmentResource(), client)
+
+			resp := h.create(tc.plan)
+
+			rec.assertRequest(t, "policy/attach")
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+			h.assertNoPartialState(resp, tc.plan)
+		})
+	}
+
+	t.Run("configure: rejects foreign provider data", func(t *testing.T) {
+		h := newCRUDHarness(t, NewGroupPolicyAttachmentResource(), cannedClient(t, http.StatusOK, ""))
+
+		resp := h.configure("not-a-client")
+
+		assertErrorDiagnostic(t, resp.Diagnostics, "Unexpected Resource Configure Type", "Expected *AllClient, got: string.")
+	})
 }

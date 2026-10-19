@@ -421,3 +421,145 @@ func TestLDAPServiceAccountResourceImportState(t *testing.T) {
 		t.Error("imported access_key does not match the import ID (value redacted)")
 	}
 }
+
+var (
+	lifecycleLdapSAAccessKey = unitTestCredential("RUSTFS_TEST_LDAP_SA_ACCESS_KEY", 'q')
+	lifecycleLdapSASecretKey = unitTestCredential("RUSTFS_TEST_LDAP_SA_SECRET_KEY_TEST", 'w')
+)
+
+// TestLdapServiceAccountResourceLifecyclePaths covers the paths the acceptance
+// suite cannot reach with a live server: a service account that disappeared
+// behind Terraform's back, a delete that arrives after the account is already
+// gone, and every failing API call in Create, Read and Delete.
+func TestLdapServiceAccountResourceLifecyclePaths(t *testing.T) {
+	t.Parallel()
+
+	state := func() *LDAPServiceAccountResourceModel {
+		return &LDAPServiceAccountResourceModel{
+			AccessKey: types.StringValue(lifecycleLdapSAAccessKey),
+			SecretKey: types.StringValue(lifecycleLdapSASecretKey),
+			Name:      types.StringValue("ldap-token"),
+			User:      types.StringValue("uid=alice,ou=people,dc=example,dc=com"),
+		}
+	}
+
+	readCases := []struct {
+		name        string
+		routes      []requestRoute
+		wantRemoved bool
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			// RustFS answers 404 NoSuchResource for a service account it does
+			// not have.
+			name:        "missing service account is removed from state",
+			routes:      []requestRoute{{status: http.StatusNotFound, body: s3ErrorXML("NoSuchResource", "service account 'tf-ldap-sa' does not exist")}},
+			wantRemoved: true,
+		},
+		{
+			name:        "server error keeps state and names the failing call",
+			routes:      []requestRoute{{status: http.StatusForbidden, body: s3ErrorXML("AccessDenied", "nope")}},
+			wantSummary: "Error reading LDAP service account",
+			wantDetail:  "Could not read service account, unexpected error: ",
+		},
+	}
+
+	for _, tc := range readCases {
+		t.Run("read: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewLDAPServiceAccountResource(), client)
+
+			resp := h.read(state())
+
+			if tc.wantRemoved {
+				requireNoDiagnostics(t, resp.Diagnostics)
+				assertStateRemoved(t, resp.State)
+				return
+			}
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+			assertStatePresent(t, resp.State)
+		})
+	}
+
+	deleteCases := []struct {
+		name        string
+		routes      []requestRoute
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			// Live RustFS answers 400 InvalidRequest "service account not
+			// exist" for an account that is already gone; the endpoint has no
+			// structured missing-object code.
+			name:   "already deleted service account is not an error",
+			routes: []requestRoute{{status: http.StatusBadRequest, body: s3ErrorXML("InvalidRequest", "service account not exist")}},
+		},
+		{
+			name:        "real server error is reported",
+			routes:      []requestRoute{{status: http.StatusInternalServerError, body: s3ErrorXML("InternalError", "delete exploded")}},
+			wantSummary: "Error deleting LDAP service account",
+			wantDetail:  "delete exploded",
+		},
+	}
+
+	for _, tc := range deleteCases {
+		t.Run("delete: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewLDAPServiceAccountResource(), client)
+
+			resp := h.delete(state())
+
+			if tc.wantSummary == "" {
+				requireNoDiagnostics(t, resp.Diagnostics)
+				return
+			}
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+		})
+	}
+
+	createCases := []struct {
+		name        string
+		routes      []requestRoute
+		plan        *LDAPServiceAccountResourceModel
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			// The endpoint rejects a target user that is not provisioned in the
+			// identity store.
+			name:        "unknown target user reports a diagnostic and writes no state",
+			routes:      []requestRoute{{method: http.MethodPut, pathContains: "add-service-account", status: http.StatusBadRequest, body: s3ErrorXML("InvalidRequest", "target user not exist")}},
+			plan:        state(),
+			wantSummary: "Error creating LDAP service account",
+			wantDetail:  "target user not exist",
+		},
+		{
+			name:        "invalid payload reports the server error and writes no state",
+			routes:      []requestRoute{{method: http.MethodPut, pathContains: "add-service-account", status: http.StatusBadRequest, body: s3ErrorXML("InvalidArgument", "invalid service account payload")}},
+			plan:        state(),
+			wantSummary: "Error creating LDAP service account",
+			wantDetail:  "invalid service account payload",
+		},
+	}
+
+	for _, tc := range createCases {
+		t.Run("create: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewLDAPServiceAccountResource(), client)
+
+			resp := h.create(tc.plan)
+
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+			h.assertNoPartialState(resp, tc.plan)
+		})
+	}
+
+	t.Run("configure: rejects foreign provider data", func(t *testing.T) {
+		h := newCRUDHarness(t, NewLDAPServiceAccountResource(), cannedClient(t, http.StatusOK, ""))
+
+		resp := h.configure("not-a-client")
+
+		assertErrorDiagnostic(t, resp.Diagnostics, "Unexpected Resource Configure Type", "Expected *AllClient, got: string.")
+	})
+}

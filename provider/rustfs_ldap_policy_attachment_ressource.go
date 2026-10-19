@@ -174,6 +174,13 @@ func (r *LDAPPolicyAttachmentRessource) Delete(ctx context.Context, req resource
 		IsGroup:     data.IsGroup.ValueBool(),
 	})
 	if err != nil {
+		// An LDAP entity that no longer exists cannot still carry the policy,
+		// so the attachment is already gone. The endpoint answers a missing
+		// LDAP group with 404 NoSuchResource and a missing LDAP user with 400
+		// InvalidArgument "user not exist" (both probed against RustFS latest).
+		if rustfs.IsAPIErrorCode(err, "NoSuchResource") || isMissingUserError(err) {
+			return
+		}
 		resp.Diagnostics.AddError(
 			"Error detaching policy from LDAP entity",
 			"Could not detach policy: "+err.Error(),

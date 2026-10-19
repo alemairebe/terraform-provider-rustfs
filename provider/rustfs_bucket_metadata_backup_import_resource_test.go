@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	frameworkresource "github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -335,4 +336,162 @@ func testAccBucketMetadataBackupArchive(t *testing.T) string {
 		t.Fatalf("exporting the live bucket metadata: %v", err)
 	}
 	return base64.StdEncoding.EncodeToString(data)
+}
+
+// TestBucketMetadataBackupImportResourceLifecyclePaths covers the paths the
+// acceptance suite cannot reach with a live server: an archive the server
+// rejects, an archive that is not base64 at all, and the client-side read/delete
+// steps that must not touch the server.
+func TestBucketMetadataBackupImportResourceLifecyclePaths(t *testing.T) {
+	t.Parallel()
+
+	readCases := []struct {
+		name   string
+		routes []requestRoute
+	}{
+		{name: "read keeps the imported archive and ignores a failing server", routes: []requestRoute{{status: http.StatusForbidden, body: s3ErrorXML("AccessDenied", "nope")}}},
+		{name: "read keeps the imported archive when the server is healthy", routes: []requestRoute{{status: http.StatusOK, body: `{"ok":true}`}}},
+	}
+
+	for _, tc := range readCases {
+		t.Run("read: "+tc.name, func(t *testing.T) {
+			// Read only mirrors state, so no response, failing or not, may be
+			// used and no request may be sent.
+			client, rec := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewBucketMetadataBackupImportResource(), client)
+
+			resp := h.read(&BucketMetadataBackupImportResourceModel{ContentBase64: types.StringValue(base64.StdEncoding.EncodeToString([]byte(bucketMetadataBackupImportPayload)))})
+
+			requireNoDiagnostics(t, resp.Diagnostics)
+			assertStatePresent(t, resp.State)
+			assertStateString(t, resp.State, path.Root("content_base64"), base64.StdEncoding.EncodeToString([]byte(bucketMetadataBackupImportPayload)))
+			rec.assertNoRequest(t, "import-bucket-metadata")
+		})
+	}
+
+	deleteCases := []struct {
+		name   string
+		routes []requestRoute
+	}{
+		{name: "delete is a no-op with a failing server", routes: []requestRoute{{status: http.StatusForbidden, body: s3ErrorXML("AccessDenied", "nope")}}},
+		{name: "delete is a no-op with a healthy server", routes: []requestRoute{{status: http.StatusOK, body: `{"ok":true}`}}},
+	}
+
+	for _, tc := range deleteCases {
+		t.Run("delete: "+tc.name, func(t *testing.T) {
+			client, rec := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewBucketMetadataBackupImportResource(), client)
+
+			resp := h.delete(&BucketMetadataBackupImportResourceModel{ContentBase64: types.StringValue(base64.StdEncoding.EncodeToString([]byte(bucketMetadataBackupImportPayload)))})
+
+			requireNoDiagnostics(t, resp.Diagnostics)
+			rec.assertNoRequest(t, "import-bucket-metadata")
+		})
+	}
+
+	createCases := []struct {
+		name        string
+		routes      []requestRoute
+		model       *BucketMetadataBackupImportResourceModel
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			name:   "accepted archive writes state",
+			routes: []requestRoute{{method: http.MethodPut, pathContains: "import-bucket-metadata", status: http.StatusOK}},
+			model:  &BucketMetadataBackupImportResourceModel{ContentBase64: types.StringValue(base64.StdEncoding.EncodeToString([]byte(bucketMetadataBackupImportPayload)))},
+		},
+		{
+			name:        "invalid base64 is rejected before any request",
+			routes:      []requestRoute{{status: http.StatusInternalServerError, body: s3ErrorXML("InternalError", "boom")}},
+			model:       &BucketMetadataBackupImportResourceModel{ContentBase64: types.StringValue("not base64!!")},
+			wantSummary: "Invalid base64 data",
+			wantDetail:  "illegal base64 data",
+		},
+		{
+			name:        "rejected archive reports the server error and writes no state",
+			routes:      []requestRoute{{method: http.MethodPut, pathContains: "import-bucket-metadata", status: http.StatusBadRequest, body: s3ErrorXML("InvalidRequest", "invalid zip archive")}},
+			model:       &BucketMetadataBackupImportResourceModel{ContentBase64: types.StringValue(base64.StdEncoding.EncodeToString([]byte(bucketMetadataBackupImportPayload)))},
+			wantSummary: "Error importing bucket metadata",
+			wantDetail:  "Could not import: ",
+		},
+		{
+			name:        "forbidden import names the failing call",
+			routes:      []requestRoute{{status: http.StatusForbidden, body: s3ErrorXML("AccessDenied", "nope")}},
+			model:       &BucketMetadataBackupImportResourceModel{ContentBase64: types.StringValue(base64.StdEncoding.EncodeToString([]byte(bucketMetadataBackupImportPayload)))},
+			wantSummary: "Error importing bucket metadata",
+			wantDetail:  "Could not import: ",
+		},
+	}
+
+	for _, tc := range createCases {
+		t.Run("create: "+tc.name, func(t *testing.T) {
+			client, rec := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewBucketMetadataBackupImportResource(), client)
+
+			resp := h.create(tc.model)
+
+			if tc.wantSummary == "" {
+				requireNoDiagnostics(t, resp.Diagnostics)
+				assertStatePresent(t, resp.State)
+				assertStateString(t, resp.State, path.Root("content_base64"), base64.StdEncoding.EncodeToString([]byte(bucketMetadataBackupImportPayload)))
+				rec.assertRequest(t, "import-bucket-metadata")
+				return
+			}
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+			h.assertNoPartialState(resp, tc.model)
+		})
+	}
+
+	updateCases := []struct {
+		name        string
+		routes      []requestRoute
+		model       *BucketMetadataBackupImportResourceModel
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			name:   "accepted archive writes state",
+			routes: []requestRoute{{method: http.MethodPut, pathContains: "import-bucket-metadata", status: http.StatusOK}},
+			model:  &BucketMetadataBackupImportResourceModel{ContentBase64: types.StringValue(base64.StdEncoding.EncodeToString([]byte(bucketMetadataBackupImportPayload)))},
+		},
+		{
+			name:        "invalid base64 is rejected before any request",
+			routes:      []requestRoute{{status: http.StatusInternalServerError, body: s3ErrorXML("InternalError", "boom")}},
+			model:       &BucketMetadataBackupImportResourceModel{ContentBase64: types.StringValue("not base64!!")},
+			wantSummary: "Invalid base64 data",
+			wantDetail:  "illegal base64 data",
+		},
+		{
+			name:        "rejected archive reports the server error",
+			routes:      []requestRoute{{method: http.MethodPut, pathContains: "import-bucket-metadata", status: http.StatusBadRequest, body: s3ErrorXML("InvalidRequest", "invalid zip archive")}},
+			model:       &BucketMetadataBackupImportResourceModel{ContentBase64: types.StringValue(base64.StdEncoding.EncodeToString([]byte(bucketMetadataBackupImportPayload)))},
+			wantSummary: "Error importing bucket metadata",
+			wantDetail:  "Could not import: ",
+		},
+	}
+
+	for _, tc := range updateCases {
+		t.Run("update: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewBucketMetadataBackupImportResource(), client)
+
+			resp := h.update(tc.model, &BucketMetadataBackupImportResourceModel{ContentBase64: types.StringValue(base64.StdEncoding.EncodeToString([]byte(bucketMetadataBackupImportPayload)))})
+
+			if tc.wantSummary == "" {
+				requireNoDiagnostics(t, resp.Diagnostics)
+				assertStatePresent(t, resp.State)
+				return
+			}
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+		})
+	}
+
+	t.Run("configure: rejects foreign provider data", func(t *testing.T) {
+		h := newCRUDHarness(t, NewBucketMetadataBackupImportResource(), cannedClient(t, http.StatusOK, ""))
+
+		resp := h.configure("not-a-client")
+
+		assertErrorDiagnostic(t, resp.Diagnostics, "Unexpected Resource Configure Type", "Expected *AllClient, got: string.")
+	})
 }

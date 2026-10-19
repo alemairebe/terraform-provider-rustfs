@@ -57,3 +57,74 @@ func TestRemoveTier(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestTierExists(t *testing.T) {
+	cases := []struct {
+		name       string
+		status     int
+		body       string
+		wantExists bool
+		wantErr    bool
+	}{
+		{
+			// Probed on 1.0.1 and latest: a configured tier answers 200.
+			name:       "configured tier answers 200",
+			status:     http.StatusOK,
+			wantExists: true,
+		},
+		{
+			// The route reports a missing tier as a 500 with TierNotFound,
+			// not as a 404, so the code is what decides.
+			name:   "missing tier answers TierNotFound",
+			status: http.StatusInternalServerError,
+			body:   `<Error><Code>TierNotFound</Code><Message>tier not found!</Message></Error>`,
+		},
+		{
+			name:   "NoSuchTier is treated the same way",
+			status: http.StatusNotFound,
+			body:   `<Error><Code>NoSuchTier</Code><Message>no such tier</Message></Error>`,
+		},
+		{
+			name:    "other failures are returned",
+			status:  http.StatusForbidden,
+			body:    `<Error><Code>AccessDenied</Code><Message>nope</Message></Error>`,
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet {
+					t.Errorf("expected GET, got %s", r.Method)
+				}
+				if r.URL.Path != "/rustfs/admin/v3/tier/MYTIER" {
+					t.Errorf("unexpected path %s", r.URL.Path)
+				}
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer server.Close()
+
+			// No credentials: the mocked server never verifies the signature,
+			// so no credential-shaped value belongs in the source.
+			client := New(&RustfsAdminConfig{
+				Endpoint: server.Listener.Addr().String(),
+			})
+
+			exists, err := client.TierExists("MYTIER")
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected an error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if exists != tc.wantExists {
+				t.Errorf("TierExists = %v, want %v", exists, tc.wantExists)
+			}
+		})
+	}
+}

@@ -6,6 +6,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/caberdo/terraform-provider-rustfs/pkg/rustfs"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
@@ -111,6 +112,16 @@ func (r *BucketDurabilityRessource) Read(ctx context.Context, req resource.ReadR
 		)
 		return
 	}
+	// RustFS answers 200 with a null mode when the bucket has no durability
+	// override, and it answers the same for a bucket that no longer exists
+	// (probed live: GET bucket-durability/tf-probe-missing returns
+	// {"bucket":"tf-probe-missing","mode":null}). Either way the override this
+	// resource manages is gone, so drop it from state rather than write an
+	// empty mode into a required attribute.
+	if read.Mode == "" {
+		resp.State.RemoveResource(ctx)
+		return
+	}
 	state.Mode = types.StringValue(read.Mode)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
@@ -141,6 +152,15 @@ func (r *BucketDurabilityRessource) Delete(ctx context.Context, req resource.Del
 		return
 	}
 	if err := r.client.RustClient.DeleteBucketDurability(data.Bucket.ValueString()); err != nil {
+		// A bucket that no longer exists has no override left to remove:
+		// RustFS answers 500 InternalError "failed to capture bucket
+		// incarnation: Bucket not found: <bucket>" for the delete (probed
+		// live). That is the endpoint's own missing-bucket text, so destroying
+		// an already gone bucket is not an error; any other InternalError is
+		// still reported.
+		if rustfs.IsAPIErrorCode(err, "InternalError") && strings.Contains(err.Error(), "Bucket not found") {
+			return
+		}
 		resp.Diagnostics.AddError(
 			"Error deleting bucket durability",
 			"Could not delete bucket durability, unexpected error: "+err.Error(),

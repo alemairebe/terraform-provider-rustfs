@@ -6,6 +6,7 @@ package provider
 import (
 	"context"
 	"errors"
+	"net/http"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -333,4 +334,174 @@ func TestReconcileNotificationEventBridge(t *testing.T) {
 	if omitted.EventBridge != nil {
 		t.Error("an omitted event_bridge block must stay nil")
 	}
+}
+
+// TestBucketNotificationResourceLifecyclePaths covers the paths the acceptance
+// suite cannot reach with a live server: a notification configuration that
+// disappeared behind Terraform's back, a delete that arrives after the
+// configuration is already gone, and every failing API call in Create, Read and
+// Delete. Each operation is routed explicitly because the S3 client addresses
+// the bucket sub-resource path.
+func TestBucketNotificationResourceLifecyclePaths(t *testing.T) {
+	t.Parallel()
+
+	readCases := []struct {
+		name        string
+		routes      []requestRoute
+		wantRemoved bool
+		wantSummary string
+		wantDetail  string
+		wantServer  string
+	}{
+		{
+			// S3 reports a missing notification sub-resource as NoSuchConfiguration.
+			name:        "absent notification configuration is removed from state",
+			routes:      []requestRoute{{method: http.MethodGet, status: http.StatusNotFound, body: s3ErrorXML("NoSuchConfiguration", "The notification configuration does not exist")}},
+			wantRemoved: true,
+		},
+		{
+			// Live RustFS answers 404 NoSuchBucket when the bucket itself is gone.
+			name:        "missing bucket is removed from state",
+			routes:      []requestRoute{{method: http.MethodGet, status: http.StatusNotFound, body: s3ErrorXML("NoSuchBucket", "The specified bucket does not exist")}},
+			wantRemoved: true,
+		},
+		{
+			name:        "server error keeps state and names the failing call",
+			routes:      []requestRoute{{method: http.MethodGet, status: http.StatusForbidden, body: s3ErrorXML("AccessDenied", "access denied")}},
+			wantSummary: "Error reading bucket notification",
+			wantDetail:  "Could not read bucket notification: ",
+			wantServer:  "access denied",
+		},
+	}
+
+	for _, tc := range readCases {
+		t.Run("read: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewBucketNotificationResource(), client)
+
+			resp := h.read(&bucketNotificationResourceModel{Bucket: types.StringValue("tf-test")})
+
+			if tc.wantRemoved {
+				requireNoDiagnostics(t, resp.Diagnostics)
+				assertStateRemoved(t, resp.State)
+				return
+			}
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+			assertDiagnosticDetail(t, resp.Diagnostics, tc.wantServer)
+			assertStatePresent(t, resp.State)
+		})
+	}
+
+	deleteCases := []struct {
+		name       string
+		routes     []requestRoute
+		wantTitle  string
+		wantDetail string
+		wantServer string
+	}{
+		{
+			name:   "absent notification configuration is not an error",
+			routes: []requestRoute{{method: http.MethodPut, status: http.StatusNotFound, body: s3ErrorXML("NoSuchConfiguration", "The notification configuration does not exist")}},
+		},
+		{
+			name:   "missing bucket is not an error",
+			routes: []requestRoute{{method: http.MethodPut, status: http.StatusNotFound, body: s3ErrorXML("NoSuchBucket", "The specified bucket does not exist")}},
+		},
+		{
+			name:       "real server error is reported",
+			routes:     []requestRoute{{method: http.MethodPut, status: http.StatusForbidden, body: s3ErrorXML("AccessDenied", "access denied")}},
+			wantTitle:  "Error removing bucket notification",
+			wantDetail: "Could not remove bucket notification: ",
+			wantServer: "access denied",
+		},
+	}
+
+	for _, tc := range deleteCases {
+		t.Run("delete: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewBucketNotificationResource(), client)
+
+			resp := h.delete(&bucketNotificationResourceModel{Bucket: types.StringValue("tf-test")})
+
+			if tc.wantTitle == "" {
+				requireNoDiagnostics(t, resp.Diagnostics)
+				return
+			}
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantTitle, tc.wantDetail)
+			assertDiagnosticDetail(t, resp.Diagnostics, tc.wantServer)
+		})
+	}
+
+	invalidEvents, _ := types.SetValueFrom(context.Background(), types.StringType, []string{"s3:NotARealEvent"})
+	validEvents, _ := types.SetValueFrom(context.Background(), types.StringType, []string{"s3:ObjectCreated:*"})
+
+	createCases := []struct {
+		name       string
+		routes     []requestRoute
+		plan       *bucketNotificationResourceModel
+		wantTitle  string
+		wantDetail string
+		wantServer string
+	}{
+		{
+			// The schema validator rejects this event at plan time; the server
+			// rejects it too, which is the path a Create can still reach.
+			name: "rejected event reports the server error and writes no state",
+			routes: []requestRoute{{
+				method: http.MethodPut,
+				status: http.StatusBadRequest,
+				body:   s3ErrorXML("InvalidArgument", "The event 's3:NotARealEvent' is not valid"),
+			}},
+			plan: &bucketNotificationResourceModel{
+				Bucket: types.StringValue("tf-test"),
+				Queue: []bucketNotificationTargetModel{{
+					Arn:    types.StringValue("arn:minio:sqs::PRIMARY:amqp"),
+					Events: invalidEvents,
+				}},
+			},
+			wantTitle:  "Error setting bucket notification",
+			wantDetail: "Could not set bucket notification: ",
+			wantServer: "The event 's3:NotARealEvent' is not valid",
+		},
+		{
+			// Missing prerequisite: the destination bucket is gone.
+			name: "missing bucket reports the server error and writes no state",
+			routes: []requestRoute{{
+				method: http.MethodPut,
+				status: http.StatusNotFound,
+				body:   s3ErrorXML("NoSuchBucket", "The specified bucket does not exist"),
+			}},
+			plan: &bucketNotificationResourceModel{
+				Bucket: types.StringValue("tf-test"),
+				Queue: []bucketNotificationTargetModel{{
+					Arn:    types.StringValue("arn:minio:sqs::PRIMARY:amqp"),
+					Events: validEvents,
+				}},
+			},
+			wantTitle:  "Error setting bucket notification",
+			wantDetail: "Could not set bucket notification: ",
+			wantServer: "NoSuchBucket",
+		},
+	}
+
+	for _, tc := range createCases {
+		t.Run("create: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewBucketNotificationResource(), client)
+
+			resp := h.create(tc.plan)
+
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantTitle, tc.wantDetail)
+			assertDiagnosticDetail(t, resp.Diagnostics, tc.wantServer)
+			h.assertNoPartialState(resp, tc.plan)
+		})
+	}
+
+	t.Run("configure: rejects foreign provider data", func(t *testing.T) {
+		h := newCRUDHarness(t, NewBucketNotificationResource(), cannedClient(t, http.StatusOK, ""))
+
+		resp := h.configure("not-a-client")
+
+		assertErrorDiagnostic(t, resp.Diagnostics, "Unexpected Resource Configure Type", "Expected *AllClient, got: string.")
+	})
 }

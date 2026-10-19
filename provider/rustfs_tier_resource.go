@@ -6,8 +6,11 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 
+	"github.com/caberdo/terraform-provider-rustfs/pkg/rustfs"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -98,7 +101,48 @@ func (r *TierResource) Create(ctx context.Context, req resource.CreateRequest, r
 func (r *TierResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
 	var state tierResourceModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// GET tier/<name> is the server's own verdict on this exact tier: 200 when
+	// it holds the tier, 500 TierNotFound when it does not (probed on 1.0.1 and
+	// latest). It is preferred over tier-stats because a list only proves
+	// absence if it is complete, while this answers for the one name in state.
+	exists, err := r.client.RustClient.TierExists(state.Name.ValueString())
+	if err != nil {
+		// A server that does not implement the route cannot answer the
+		// question, so keep the last known state instead of guessing; the
+		// tier's destroy path has the same rule.
+		if rustfs.IsUnsupportedFeature(err) || isUnsupportedTierRoute(err) {
+			resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
+			return
+		}
+		resp.Diagnostics.AddError("Error reading tier", "Could not read tier: "+err.Error())
+		return
+	}
+
+	if !exists {
+		resp.State.RemoveResource(ctx)
+		return
+	}
+
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
+}
+
+// isUnsupportedTierRoute reports whether err only says the server does not
+// implement the per-tier verify route, which is not evidence that the tier is
+// gone. RustFS answers 501 NotImplemented (or 405) for a route it registered
+// but has not implemented.
+func isUnsupportedTierRoute(err error) bool {
+	var apiErr *rustfs.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	if apiErr.StatusCode == http.StatusNotImplemented || apiErr.StatusCode == http.StatusMethodNotAllowed {
+		return true
+	}
+	return apiErr.Code == "NotImplemented" || apiErr.Code == "MethodNotAllowed"
 }
 
 func (r *TierResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {

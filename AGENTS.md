@@ -262,6 +262,14 @@ copied from the RustFS admin API responses, not invented from the Go structs.
 (`providerserver.NewProtocol6WithError(New("test")())`) and the `testAccPreCheck` helper, which
 requires `TF_ACC`, `RUSTFS_ENDPOINT`, `RUSTFS_USER` and `RUSTFS_SECRET`.
 
+**Resource lifecycle paths** (`provider/lifecycle_test_harness_test.go`): every resource carries a
+`Test<Name>ResourceLifecyclePaths` that drives `Create`/`Read`/`Update`/`Delete`/`Configure`
+against a canned `httptest` server (`cannedClient` for one answer to everything, `routedClient` for
+one route per method and path) and asserts the diagnostic summary *and* detail, `RemoveResource`
+for a missing object, and that a failed create wrote no partial state. A new resource is not done
+until it has that table. Missing-object detection stays narrow: the structured admin/S3 error code,
+or — only where the endpoint has no code — its own wording, never a blanket `not found` substring.
+
 **Live CRUD tests:** `admin_client_test.go`, `lifecycle_test.go`, `policy_test.go`,
 `quota_test.go`, `service_account_test.go` and `user_account_test.go` read `RUSTFS_ENDPOINT`,
 `RUSTFS_USER` and `RUSTFS_SECRET` and dial the real endpoint. They skip themselves when those are

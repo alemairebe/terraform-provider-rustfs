@@ -6,6 +6,7 @@ package provider
 import (
 	"context"
 	"errors"
+	"net/http"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -134,5 +135,147 @@ func TestIsBucketSubresourceAbsent_Versioning(t *testing.T) {
 	}
 	if isBucketSubresourceAbsent(errors.New("AccessDenied"), "NoSuchBucket") {
 		t.Error("AccessDenied must not be reported absent")
+	}
+}
+
+// TestBucketVersioningResourceLifecyclePaths covers the paths the acceptance
+// suite cannot reach with a live server: a bucket that disappeared behind
+// Terraform's back, a delete that arrives after the bucket is already gone, and
+// every failing API call in Create, Read and Delete.
+func TestBucketVersioningResourceLifecyclePaths(t *testing.T) {
+	t.Parallel()
+
+	// A live RustFS answers 404 NoSuchBucket for GetBucketVersioning on a
+	// missing bucket.
+	readCases := []struct {
+		name        string
+		routes      []requestRoute
+		wantRemoved bool
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			name:        "missing bucket removes the resource from state",
+			routes:      []requestRoute{{status: http.StatusNotFound, body: s3ErrorXML("NoSuchBucket", "The specified bucket does not exist")}},
+			wantRemoved: true,
+		},
+		{
+			name:        "server error keeps state and names the failing call",
+			routes:      []requestRoute{{status: http.StatusForbidden, body: s3ErrorXML("AccessDenied", "nope")}},
+			wantSummary: "Error reading bucket versioning",
+			wantDetail:  "Could not read bucket versioning: ",
+		},
+	}
+
+	for _, tc := range readCases {
+		t.Run("read: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewBucketVersioningResource(), client)
+
+			resp := h.read(versioningModel("tf-test"))
+
+			if tc.wantRemoved {
+				requireNoDiagnostics(t, resp.Diagnostics)
+				assertStateRemoved(t, resp.State)
+				return
+			}
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+			assertStatePresent(t, resp.State)
+		})
+	}
+
+	deleteCases := []struct {
+		name        string
+		routes      []requestRoute
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			name:   "already deleted bucket is not an error",
+			routes: []requestRoute{{status: http.StatusNotFound, body: s3ErrorXML("NoSuchBucket", "gone")}},
+		},
+		{
+			name:        "real server error is reported",
+			routes:      []requestRoute{{status: http.StatusForbidden, body: s3ErrorXML("AccessDenied", "nope")}},
+			wantSummary: "Error suspending bucket versioning",
+			wantDetail:  "Could not suspend bucket versioning: ",
+		},
+	}
+
+	for _, tc := range deleteCases {
+		t.Run("delete: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewBucketVersioningResource(), client)
+
+			resp := h.delete(versioningModel("tf-test"))
+
+			if tc.wantSummary == "" {
+				requireNoDiagnostics(t, resp.Diagnostics)
+				return
+			}
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+		})
+	}
+
+	createCases := []struct {
+		name        string
+		routes      []requestRoute
+		wantSummary string
+		wantDetail  string
+	}{
+		{
+			name: "rejected payload reports the server error and writes no state",
+			routes: []requestRoute{
+				{method: http.MethodPut, status: http.StatusForbidden, body: s3ErrorXML("AccessDenied", "versioning rejected")},
+			},
+			wantSummary: "Error setting bucket versioning",
+			wantDetail:  "versioning rejected",
+		},
+		{
+			// The write succeeded but the read-back did not: the resource must
+			// report the failure rather than persist unverified state.
+			name: "failed read-back after a successful write is reported",
+			routes: []requestRoute{
+				{method: http.MethodPut, status: http.StatusOK},
+				{method: http.MethodGet, status: http.StatusForbidden, body: s3ErrorXML("AccessDenied", "nope")},
+			},
+			wantSummary: "Error reading bucket versioning",
+			wantDetail:  "Could not read bucket versioning after create: ",
+		},
+	}
+
+	for _, tc := range createCases {
+		t.Run("create: "+tc.name, func(t *testing.T) {
+			client, _ := routedClient(t, tc.routes...)
+			h := newCRUDHarness(t, NewBucketVersioningResource(), client)
+			plan := versioningModel("tf-test")
+
+			resp := h.create(plan)
+
+			assertErrorDiagnostic(t, resp.Diagnostics, tc.wantSummary, tc.wantDetail)
+			h.assertNoPartialState(resp, plan)
+		})
+	}
+
+	t.Run("configure: rejects foreign provider data", func(t *testing.T) {
+		h := newCRUDHarness(t, NewBucketVersioningResource(), cannedClient(t, http.StatusOK, ""))
+
+		resp := h.configure("not-a-client")
+
+		assertErrorDiagnostic(t, resp.Diagnostics, "Unexpected Resource Configure Type", "Expected *AllClient, got: string.")
+	})
+}
+
+// versioningModel is a minimal valid model: status is required, the
+// Optional+Computed mfa_delete and the write-only request fields stay null.
+func versioningModel(bucket string) *BucketVersioningResourceModel {
+	return &BucketVersioningResourceModel{
+		Bucket:              types.StringValue(bucket),
+		Status:              types.StringValue("Enabled"),
+		MfaDelete:           types.StringNull(),
+		Mfa:                 types.StringNull(),
+		ChecksumAlgorithm:   types.StringNull(),
+		ContentMD5:          types.StringNull(),
+		ExpectedBucketOwner: types.StringNull(),
 	}
 }

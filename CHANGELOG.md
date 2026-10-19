@@ -30,6 +30,53 @@ BUG FIXES:
   position: importing `'<user_or_group>/<policy>/true'` stored `<user_or_group>/<policy>` as the
   target and `true` as the policy name. The flag is now read from the last segment, which is the
   form the resource documentation and the acceptance test have always used
+- A refresh no longer fails when an object was deleted outside Terraform. `rustfs_group`,
+  `rustfs_user`, `rustfs_policy`, `rustfs_service_account`, `rustfs_ldap_service_account`,
+  `rustfs_quota`, `rustfs_config`, `rustfs_tier`, `rustfs_kms_key`, `rustfs_remote_target`,
+  `rustfs_bucket_durability`, `rustfs_bucket_encryption`, `rustfs_bucket_object_lock` and
+  `rustfs_user_policy_attachment` now remove the resource from state when the server reports it
+  missing (`resp.State.RemoveResource`), so the next plan offers to recreate it instead of failing
+  the refresh. The missing signal is the structured admin/S3 error code (`NoSuchResource`,
+  `NoSuchBucket`, `NoSuchConfiguration`, …) plus the endpoint's own wording where no code exists —
+  never a blanket "not found" substring — and each one was probed against a running RustFS
+- Destroying an object that is already gone is a no-op instead of a failure for the same resources
+  plus `rustfs_site_replication`, `rustfs_bucket_notification` and `rustfs_ldap_policy_attachment`;
+  `rustfs_remote_target` also treats a source bucket that no longer exists as already removed, next
+  to the target-not-found case it already handled. RustFS reports an already-gone object in several
+  shapes (404 `NoSuchResource`, 500 `InternalError` "failed to capture bucket incarnation", 400
+  `InvalidRequest` "service account not exist"), so each resource matches the code and text its
+  endpoint actually returns
+- `rustfs_tier` actually reads the tier. `Read` used to re-write the incoming state unchanged, which
+  meant a tier removed outside Terraform stayed in state forever; it now asks the server about that
+  exact name (`GET tier/<name>`, which answers `TierNotFound` for a tier it does not hold on 1.0.1
+  and latest) and drops the resource only on that positive answer. A server that does not implement
+  the route keeps the last known state instead of planning a destructive recreation, and a list
+  endpoint is deliberately not used because a list only proves absence when it is complete
+- `rustfs_user_policy_attachment`'s `Read` reads the user back instead of preserving the last known
+  state, so a policy detached outside Terraform is detected and the attachment is planned again
+  rather than left dangling in state
+- `rustfs_bucket_durability`'s `Read` no longer writes an empty `mode` into a required attribute: a
+  bucket without a durability override — which is also what the endpoint answers for a bucket that no
+  longer exists — removes the resource from state
+- `rustfs_config` matches the admin API's structured `InvalidRequest` code and the endpoint's own
+  wording (`config subsystem '…'`, `config target '…'`, `unsupported config subsystem '…'`) for a
+  scope that is not configured, instead of any error text containing "not found". A successful body
+  with no rendered keys no longer removes the resource: an unset subsystem answers with its
+  defaults, so an empty body is not proof that the scope is gone
+- `rustfs_notification_target`'s destroy no longer swallows any error whose text contains "404".
+  RustFS answers 200 for a reset of a target that is already gone, so the substring matcher could
+  only ever hide an unrelated failure
+- `rustfs_user` and `rustfs_serviceaccount` mark `secret_key` as `Sensitive`, so the plaintext secret
+  is redacted from plan and apply output instead of being printed with the rest of the plan
+- The KMS and service-account missing-object matchers only fire on the endpoint's own answer: a
+  missing KMS key is a 404 or the `Key not found` message the endpoint renders into a 200 body, so an
+  unrelated failure such as `503 kms service is not running` is still reported, and the
+  service-account read accepts the delete endpoint's `InvalidRequest "service account not exist"`
+  shape as well as `NoSuchResource`
+- `rustfs_bucket_encryption`, `rustfs_bucket_object_lock` and `rustfs_site_replication` report the
+  upstream error text in the diagnostic detail (for example `Could not remove bucket encryption: `)
+  instead of only the error string, and `rustfs_site_replication`'s destroy treats a site that is not
+  configured as already removed
 
 IMPROVEMENTS:
 - The eight types that had no test — `rustfs_tier`, `rustfs_rebalance`, `rustfs_iam_backup_import`,
@@ -49,7 +96,7 @@ IMPROVEMENTS:
   `.github/coverage-baseline.txt`, and the `latest` cell of the acceptance matrix repeats that gate
   on `main`, so the floor can only move up. The README carries a generated coverage badge and a
   per-package bar chart (`scripts/coverage-readme.sh`); CI fails when they drift from the baseline.
-  Merged coverage is 81.4% today, with 80% and then 90% tracked as milestones in the issue tracker
+  Merged coverage is 88.3% today (provider 85.5%), with 80% met and 90% next
 - The acceptance fixture provisions the prerequisites the bucket replication, bucket notification
   and remote target resources need, so their `TestAcc` tests run in CI instead of skipping:
   `rustfs-peer` is a second RustFS instance registered as a replication target, and the bucket
@@ -68,12 +115,31 @@ IMPROVEMENTS:
   for the peer to report ready, exercises an in-place update and keeps a verified import and
   destroy. A host-side run against a published port cannot form the group (RustFS refuses a
   loopback site endpoint) and skips with the server's own explanation
+
+CHORES:
+- Every resource's `Read`, `Create`, `Delete` and `Configure` error and idempotency paths are covered
+  by unit tests that need no server: `provider/lifecycle_test_harness_test.go` builds on the mocked
+  admin API primitives in `provider_test.go` (`newUnitAllClient`, `resourceSchemaOf`,
+  `resourcePlan`/`resourceState`) and adds the S3 half of the client, per-request routing and the
+  assertions a lifecycle case needs. Each resource's `_test.go` drives it through a table of canned
+  responses (`read:` / `delete:` / `create:` / `configure:` subtests), asserting the diagnostic
+  summary *and* detail, the removal from state, and that a failed create wrote no partial state.
+  `AGENTS.md` documents the pattern. Provider unit coverage rises from 25.3% to 67.6% and the merged
+  unit + acceptance figure from 81.4% to 88.3%
 - The LDAP resources are covered against a mocked admin API. RustFS 1.0.x cannot be given an LDAP
   identity provider (`help-config-kv` has no `identity_ldap` sub-system, there is no `RUSTFS_*LDAP*`
   environment variable and `add-user` rejects the distinguished names the LDAP routes expect), so
   `TestAccLdapServiceAccount` and `TestAccLdapPolicyAttachment_*` skip on every supported version;
   their create/read/update/delete/import flows, including every documented import ID form, are
   asserted in `provider/` instead, which also pins the wire bodies those resources send
+
+CHORES:
+- Every resource's `Read`, `Create`, `Delete` and `Configure` error and idempotency paths are covered
+  by unit tests that need no server: `provider/lifecycle_test_harness_test.go` points both API clients
+  (S3 and admin) at one `httptest` server, and each resource's `_test.go` drives the resource through a
+  table of canned responses (`read:` / `delete:` / `create:` / `configure:` subtests), asserting the
+  diagnostic summary *and* detail, the removal from state, and that a failed create wrote no partial
+  state. Provider unit coverage rose from 25.3% to 66.3%
 
 ## 0.5.0 (2026-10-18)
 
