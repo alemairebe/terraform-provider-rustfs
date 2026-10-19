@@ -37,7 +37,7 @@ and [`clients/cii_response.go`](https://github.com/ossf/scorecard/blob/main/clie
 The README badge is for humans (and it is what §3 adds) — Scorecard itself does not parse it.
 
 **Where that leaves the climb:** Passing (5) is reachable now; Silver (7) needs ~80% statement
-coverage, which is met at 89.8% today (§5); Gold (10) is **not reachable while the project
+coverage, which is met at 90.2% today (§5); Gold (10) is **not reachable while the project
 has one maintainer**, because `bus_factor`, `contributors_unassociated` and `two_person_review` are
 MUST criteria at that level and none of them can be satisfied by writing code (§5). The pack
 therefore pre-answers all three levels so the project can claim each one that its people and
@@ -197,7 +197,7 @@ Notes:
 | `updateable_reused_components` | Met | Every reused component is a versioned Go module (`go.mod` + `go.sum`) with no vendored or convenient copies, so a vulnerable dependency is updated with `go get` and a Dependabot pull request. | `blob/go.mod` |
 | `automated_integration_testing` | Met | Every pull request runs `go test -race` with a coverage report and the schema/metadata checks, and every push to `main` runs the acceptance matrix against real RustFS servers; both publish their result in the job summary. | `blob/.github/workflows/test.yml` |
 | `regression_tests_added50` | Met | The recent bug fixes came with test work, and the written policy requires a regression test: the module-switch fix restored and extended `TestAccModuleSwitchResource`, the storage-info fix removed the volatile output that made the refresh plan flap, and the pull request template makes "regression test added" a review checklist item. | `https://github.com/caberdo/terraform-provider-rustfs/pulls?q=is%3Apr+is%3Aclosed` |
-| `test_statement_coverage80` | **Met** | Merged unit + acceptance statement coverage is 89.8% (`pkg/rustfs` 97.8%, `provider` 87.5%), which meets the Silver threshold of 80%, and a gate fails any pull request that drops below the recorded floor — kept at 89%, above the threshold, so the criterion cannot be lost by a change that passes the gate ([#78](https://github.com/caberdo/terraform-provider-rustfs/issues/78) tracked the climb; [#79](https://github.com/caberdo/terraform-provider-rustfs/issues/79) tracks Gold). | `blob/README.md#testing-and-coverage` |
+| `test_statement_coverage80` | **Met** | Merged unit + acceptance statement coverage is 90.2% (`pkg/rustfs` 97.8%, `provider` 88.0%), which meets the Silver threshold of 80%, and a gate fails any pull request that drops below the recorded floor — kept at 89.5%, above the threshold, so the criterion cannot be lost by a change that passes the gate ([#78](https://github.com/caberdo/terraform-provider-rustfs/issues/78) tracked the climb; [#79](https://github.com/caberdo/terraform-provider-rustfs/issues/79) took it past 90%). | `blob/README.md#testing-and-coverage` |
 | `test_policy_mandated` | Met | Formal written policy in `CONTRIBUTING.md`: tests MUST be added for major new functionality, enforced by the pull request checklist. | `blob/.github/CONTRIBUTING.md` |
 | `tests_documented_added` | Met | The pull request template and `CONTRIBUTING.md` state that tests are part of the change, with the exact commands to run. | `blob/.github/PULL_REQUEST_TEMPLATE.md` |
 | `warnings_strict` | Met | Nearly all `go vet` checks are enabled (only `fieldalignment` and `shadow` are disabled, with the reason in the config), staticcheck's full default set runs, and gofmt is enforced. | `blob/.github/golangci.yml` |
@@ -238,7 +238,7 @@ so the level can be claimed the moment the people-side items are true.
 | `build_reproducible` | Met | The release build is reproducible from the tagged revision: `go.mod`/`go.sum` pin the whole module graph, `-trimpath` removes checkout paths, `mod_timestamp` is the commit timestamp and `CGO_ENABLED=0` removes toolchain variance. | `blob/.github/goreleaser.yml` |
 | `test_invocation` | Met | The suite is invocable in the standard way for Go: `go test ./...`, or `make test` / `make testacc-docker` for the documented split. | `blob/GNUmakefile` |
 | `test_continuous_integration` | Met | `test.yml` integrates every pull request into `main` after lint, vet, unit tests, example validation and (on `main`) the acceptance matrix, and the checks are required to merge. | `blob/.github/workflows/test.yml` |
-| `test_statement_coverage90` | **Unmet — see §5** | 69.1% merged statement coverage today; 90% requires covering the error and drift paths of the resource implementations ([#79](https://github.com/caberdo/terraform-provider-rustfs/issues/79)). | `blob/README.md#testing-and-coverage` |
+| `test_statement_coverage90` | **Met** | Merged unit + acceptance statement coverage is 90.2% (`pkg/rustfs` 97.8%, `provider` 88.0%): 4609 of 5110 statements ([#79](https://github.com/caberdo/terraform-provider-rustfs/issues/79)). The gate now enforces a 89.5% floor, and the statements that remain uncovered are enumerated as deliberate in §5.1. | `blob/README.md#testing-and-coverage` |
 | `test_branch_coverage80` | N/A (see §6) | Go's coverage tooling measures statement coverage only; no mature FLOSS branch-coverage tool exists for Go, so this cannot be measured with the standard toolchain. | — |
 | `crypto_used_network` | Met | Every network path uses TLS 1.2 or newer when the endpoint is configured for it (`ssl = true`) and certificate verification is on; the provider never downgrades a connection, and the plaintext admin port is used only when the user's endpoint says so (the endpoint is mandatory — the provider refuses to run without one). | `blob/provider/provider.go` |
 | `crypto_tls12` | Met | `MinVersion: tls.VersionTLS12` on the shared transport used by both API clients; TLS 1.3 is negotiated when the server offers it. | `blob/provider/provider.go` |
@@ -251,7 +251,7 @@ so the level can be claimed the moment the people-side items are true.
 
 | # | Criterion (level) | What has to happen | Who |
 |---|---|---|---|
-| 1 | `test_statement_coverage90` (Gold) | Raise merged statement coverage from 89.8% to 90% — [#79](https://github.com/caberdo/terraform-provider-rustfs/issues/79). The `provider` package is the gap (87.5%): the uncovered statements are the error and drift paths of the resource implementations that a live server cannot be made to produce, plus the two capabilities whose tests skip for want of infrastructure (LDAP identity provider, multi-site replication). A gate fails any pull request that lowers the number, so the floor only moves up; it now sits at 89%, which is where the Silver criterion ([#78](https://github.com/caberdo/terraform-provider-rustfs/issues/78)) landed. | Code work |
+| 1 | `test_statement_coverage90` (Gold) | **Met — this change.** Merged statement coverage is 90.2% (4609/5110) on the unit + acceptance profiles; see §5.1 for the statements that remain uncovered and why. The gate now enforces a 89.5% floor ([#79](https://github.com/caberdo/terraform-provider-rustfs/issues/79)). | Done |
 | 2 | `access_continuity` (Silver) | Add a second person with `maintain`/`admin` on the organization and access to the release secrets; name them in `GOVERNANCE.md`. | Maintainer |
 | 3 | `documentation_achievements` (Silver) | Merge the badge line from §3 (blocked on registration only). | Maintainer |
 | 4 | `bus_factor` (Gold, MUST) | Bus factor ≥ 2: a second person who can create/close issues, merge changes and cut releases. Same act as item 2. | Maintainer |
@@ -262,8 +262,43 @@ so the level can be claimed the moment the people-side items are true.
 | 9 | `security_review` (Gold, MUST) | Perform and date a security review against the shipped requirements and boundary (the scope is written in `SECURITY.md`); a self-review by the maintainer against the threat model satisfies the criterion. | Maintainer |
 | 10 | `vulnerabilities_fixed_60_days` (Passing, MUST) | Land [#49](https://github.com/caberdo/terraform-provider-rustfs/issues/49) (`x/net` + Go 1.27.2 + goldmark) so the answer is unambiguous instead of resting on the reachability argument in §6. | Code work |
 
-**Realistic target:** items 1–3 and 10 unlock **Silver (Scorecard 7)**; items 4–9 are the price of
+**Realistic target:** items 2–3 and 10 unlock **Silver (Scorecard 7)**; items 4–9 are the price of
 **Gold (10)** and are mostly about people, not code.
+
+### 5.1 What the remaining statements are
+
+`coverage-union.out` on the recorded revision covers 4609 of 5110 statements. The 501 that remain
+are deliberate, not a backlog of untested behaviour:
+
+| Scope | Uncovered | Why it is left uncovered |
+|---|---|---|
+| `.` (`main.go`) | 7 of 7 | The process entry point. `providerserver.Serve` runs until the host Terraform process closes the plugin connection and its error path ends in `log.Fatal`; every acceptance run executes it, but `go test -cover` cannot merge a profile from a subprocess. Covering it would need a test-only seam in `main`, which [#79](https://github.com/caberdo/terraform-provider-rustfs/issues/79) explicitly keeps out of scope. |
+| `provider` | 467 of 3882 (88.0%) | The groups below. |
+| `pkg/rustfs` | 27 of 1221 (97.8%) | Admin API failure replies the fixture cannot make the server produce (for example the error branches in `site_replication.go`). The package is already above 90%; a second fake server would assert the fake, not RustFS. |
+
+The `provider` remainder falls into four groups:
+
+* **Server states the fixture cannot force deterministically** — replication destinations and
+  filters (`rustfs_bucket_replication_resource.go`, 55 statements), notification and audit target
+  health transitions (26 + 21 + 16), group member races (21) and object-lock versioning
+  combinations (19). A test would have to race a live server or pin an image-specific reply.
+* **Optional-field flatteners** — branches for replication time/metrics, delete-marker
+  replication, ownership and target attributes that the pinned example configurations do not set
+  (`flattenReplicationTimeValue`, `flattenReplicationDestination`, `flattenReplicationFilter`,
+  `flattenTopicTargets`, `flatWebhookAttributesSet`). They are exercised wherever the acceptance
+  configuration sets the field; the remaining arms are configuration combinations the provider
+  documents but the suite does not need to prove twice.
+* **Defensive framework branches** — `newHTTPTransport`'s `SSL_CERT_FILE`/certificate-pool failures
+  and nil/unknown model values that the schema prevents the framework from producing. The
+  wrong-type `Configure` diagnostics are covered wherever a data source has a unit suite.
+* **Error mappings for responses a passing run does not produce** — not-found fallbacks such as
+  `isLifecycleNotFound` and per-service "gone" helpers. They are covered by the lifecycle-path
+  tests where the resource owns the mapping; the remaining arms are the codes RustFS does not emit.
+
+The import, trigger and no-op resources (`rustfs_iam_backup_import`,
+`rustfs_bucket_metadata_backup_import`, `rustfs_rebalance`, `rustfs_bucket_object_lock`) have empty
+`Delete` bodies: they contain no statements, so `go tool cover` prints `0.0%` for them without
+lowering the total.
 
 ## 6. Judgement calls a reviewer may push back on
 
