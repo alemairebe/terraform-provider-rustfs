@@ -7,9 +7,13 @@ import (
 	"context"
 )
 
+// StartRebalance starts a pool rebalance through
+// POST /rustfs/admin/v3/rebalance/start, which answers with the rebalance
+// trigger id. A deployment with a single pool has nothing to rebalance and
+// answers 501 NotImplemented; the route itself is registered on RustFS 1.0.x.
 func (c *RustfsAdmin) StartRebalance() error {
 	reqData := RequestData{
-		Method:  "PUT",
+		Method:  "POST",
 		RelPath: "rebalance/start",
 	}
 	ctx, cancel := context.WithCancel(context.Background())

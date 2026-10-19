@@ -5,324 +5,492 @@ package provider
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"os"
-	"regexp"
-	"sort"
-	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/caberdo/terraform-provider-rustfs/pkg/rustfs"
-	fwresource "github.com/hashicorp/terraform-plugin-framework/resource"
-	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
+	"github.com/hashicorp/terraform-plugin-framework/path"
+	frameworkresource "github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
-	"github.com/hashicorp/terraform-plugin-go/tftypes"
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
-	"github.com/hashicorp/terraform-plugin-testing/plancheck"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
 )
 
-const (
-	tierResourceName = "rustfs_tier.test"
-	// tierTypeRustFS is the tier type exercised by the acceptance test: the
-	// second RustFS instance configured through RUSTFS_PEER_* acts as the
-	// remote backend, so its own tier type is the natural fit.
-	tierTypeRustFS = "rustfs"
-	// tierTypeAlt carries RequiresReplace() like every other tier_type and is
-	// used to build the second replacement plan. The peer accepts it with the
-	// same backend fields.
-	tierTypeAlt = "minio"
-	// tierTypeConfigKey is the per-type sub-object key expected by the server.
-	// It always matches the tier type name.
-	tierTypeConfigKey = tierTypeRustFS
-)
+const tierResourceName = "rustfs_tier.test"
 
-// tierTestBackend is the second S3 backend a rustfs_tier needs: RustFS
-// validates the remote endpoint, its credentials and the destination bucket
-// before it registers a tier, so the tier cannot point at the primary
-// instance's own bucket.
-type tierTestBackend struct {
-	// tierEndpoint is written into config_json: the peer's S3 API as the RustFS
-	// server under test reaches it.
-	tierEndpoint string
-	// hostEndpoint is the peer's S3 API as this test process reaches it, used to
-	// create the destination bucket.
-	hostEndpoint string
-	bucket       string
-	accessKey    string
-	secretKey    string
-}
+func TestTierResourceSchema(t *testing.T) {
+	r := NewTierResource()
+	sch := resourceSchemaOf(t, r)
 
-// testAccTierBackend resolves the peer connection settings, creates the
-// destination bucket, and probes which peer endpoint the server under test
-// accepts for a tier. It skips (never fails) when the environment cannot host a
-// tier: no peer is configured, or the server rejects every reachable peer
-// endpoint - older RustFS releases and locked-down outbound policies reject the
-// addresses a local test harness can offer.
-func testAccTierBackend(t *testing.T) *tierTestBackend {
-	t.Helper()
-	testAccPreCheck(t)
+	attrs := sch.GetAttributes()
+	if len(attrs) != 3 {
+		t.Errorf("expected 3 attributes, got %d: %v", len(attrs), attrs)
+	}
 
-	peerEndpoint := os.Getenv("RUSTFS_PEER_ENDPOINT")
-	peerS3Endpoint := os.Getenv("RUSTFS_PEER_S3_ENDPOINT")
-	accessKey := os.Getenv("RUSTFS_PEER_ACCESS_KEY")
-	secretKey := os.Getenv("RUSTFS_PEER_SECRET_KEY")
+	name, ok := attrs["name"].(schema.StringAttribute)
+	if !ok {
+		t.Fatalf("name is not a StringAttribute")
+	}
+	if !name.Required || name.Optional || name.Computed {
+		t.Errorf("name must be Required only: %+v", name)
+	}
+	if !hasRequiresReplace(name.PlanModifiers) {
+		t.Error("name must force recreation, the server keys tiers by name")
+	}
 
-	var missing []string
-	for name, value := range map[string]string{
-		"RUSTFS_PEER_ENDPOINT":    peerEndpoint,
-		"RUSTFS_PEER_S3_ENDPOINT": peerS3Endpoint,
-		"RUSTFS_PEER_ACCESS_KEY":  accessKey,
-		"RUSTFS_PEER_SECRET_KEY":  secretKey,
-	} {
-		if value == "" {
-			missing = append(missing, name)
+	tierType, ok := attrs["tier_type"].(schema.StringAttribute)
+	if !ok {
+		t.Fatalf("tier_type is not a StringAttribute")
+	}
+	if !tierType.Required || tierType.Optional || tierType.Computed {
+		t.Errorf("tier_type must be Required only: %+v", tierType)
+	}
+	if !hasRequiresReplace(tierType.PlanModifiers) {
+		t.Error("tier_type must force recreation, the server cannot change a tier's type")
+	}
+
+	configJSON, ok := attrs["config_json"].(schema.StringAttribute)
+	if !ok {
+		t.Fatalf("config_json is not a StringAttribute")
+	}
+	if !configJSON.Required || configJSON.Optional || configJSON.Computed {
+		t.Errorf("config_json must be Required only: %+v", configJSON)
+	}
+	if !configJSON.Sensitive {
+		t.Error("config_json carries backend credentials and must be Sensitive")
+	}
+	if hasRequiresReplace(configJSON.PlanModifiers) {
+		t.Error("config_json is editable through EditTier and must not force recreation")
+	}
+
+	for name, attr := range attrs {
+		if attr.GetDescription() == "" {
+			t.Errorf("attribute %s has no description, tfplugindocs would publish an empty row", name)
 		}
 	}
-	if len(missing) > 0 {
-		sort.Strings(missing)
-		t.Skipf("rustfs_tier acceptance test needs a second S3 backend: %s must be set", strings.Join(missing, ", "))
-	}
+}
 
-	backend := &tierTestBackend{
-		hostEndpoint: peerS3Endpoint,
-		bucket:       fmt.Sprintf("tf-tier-%d", acctest.RandInt()),
-		accessKey:    accessKey,
-		secretKey:    secretKey,
+func TestTierResourceMetadata(t *testing.T) {
+	resp := &frameworkresource.MetadataResponse{}
+	NewTierResource().Metadata(context.Background(), frameworkresource.MetadataRequest{ProviderTypeName: "rustfs"}, resp)
+	if resp.TypeName != "rustfs_tier" {
+		t.Errorf("expected rustfs_tier, got %s", resp.TypeName)
 	}
+}
 
-	peer, err := newTestS3Client(backend.hostEndpoint, accessKey, secretKey)
-	if err != nil {
-		t.Fatalf("failed to build peer S3 client for %s: %v", backend.hostEndpoint, err)
-	}
-	if _, err := peer.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: aws.String(backend.bucket)}); err != nil {
-		t.Fatalf("failed to create tier destination bucket %s on the peer: %v", backend.bucket, err)
-	}
-	t.Cleanup(func() {
-		// Best effort: the peer's storage is ephemeral, and a tier that still
-		// references the bucket would keep it non-empty anyway.
-		if _, err := peer.DeleteBucket(context.Background(), &s3.DeleteBucketInput{Bucket: aws.String(backend.bucket)}); err != nil {
-			t.Logf("could not delete tier destination bucket %s on the peer: %v", backend.bucket, err)
+func TestTierResourceConfigure(t *testing.T) {
+	t.Run("nil provider data", func(t *testing.T) {
+		r := NewTierResource().(*TierResource)
+		resp := &frameworkresource.ConfigureResponse{}
+		r.Configure(context.Background(), frameworkresource.ConfigureRequest{}, resp)
+		if resp.Diagnostics.HasError() {
+			t.Fatalf("unexpected diagnostics: %v", resp.Diagnostics)
+		}
+		if r.client != nil {
+			t.Error("client must stay unset without provider data")
 		}
 	})
 
-	backend.tierEndpoint = testAccTierProbeEndpoint(t, backend, tierEndpointCandidates(peerEndpoint, peerS3Endpoint))
-	if backend.tierEndpoint == "" {
-		t.Skip("rustfs_tier acceptance test needs a peer endpoint the RustFS server under test accepts; see the probe errors above")
-	}
-	return backend
+	t.Run("unexpected provider data", func(t *testing.T) {
+		r := NewTierResource().(*TierResource)
+		resp := &frameworkresource.ConfigureResponse{}
+		r.Configure(context.Background(), frameworkresource.ConfigureRequest{ProviderData: "not-a-client"}, resp)
+		if !resp.Diagnostics.HasError() {
+			t.Fatal("expected a diagnostic for unexpected provider data")
+		}
+		if got := resp.Diagnostics[0].Summary(); got != "Unexpected Resource Configure Type" {
+			t.Errorf("unexpected diagnostic summary: %s", got)
+		}
+	})
+
+	t.Run("all client", func(t *testing.T) {
+		srv, _ := newRecorderServer(t, http.StatusOK, "")
+		r := NewTierResource().(*TierResource)
+		resp := &frameworkresource.ConfigureResponse{}
+		r.Configure(context.Background(), frameworkresource.ConfigureRequest{ProviderData: newUnitAllClient(srv)}, resp)
+		if resp.Diagnostics.HasError() {
+			t.Fatalf("unexpected diagnostics: %v", resp.Diagnostics)
+		}
+		if r.client == nil {
+			t.Error("client was not set")
+		}
+	})
 }
 
-// tierEndpointCandidates lists the peer endpoints worth probing, most portable
-// first. RUSTFS_PEER_ENDPOINT is how the RustFS server reaches the peer, which
-// is a service name inside a compose network but a private address on a
-// container-machine harness; the host gateway names cover the latter.
-func tierEndpointCandidates(peerEndpoint, peerS3Endpoint string) []string {
-	var candidates []string
-	add := func(endpoint string) {
-		if endpoint == "" {
-			return
-		}
-		if !strings.Contains(endpoint, "://") {
-			endpoint = "http://" + endpoint
-		}
-		for _, existing := range candidates {
-			if existing == endpoint {
-				return
-			}
-		}
-		candidates = append(candidates, endpoint)
-	}
+func TestTierResourceCreate(t *testing.T) {
+	t.Run("adds the tier", func(t *testing.T) {
+		srv, recorder := newRecorderServer(t, http.StatusOK, "")
+		r := NewTierResource().(*TierResource)
+		r.client = newUnitAllClient(srv)
+		sch := resourceSchemaOf(t, r)
 
-	add(os.Getenv("RUSTFS_TIER_TEST_ENDPOINT"))
-	add(peerEndpoint)
-	if port := endpointPort(peerS3Endpoint); port != "" {
-		add("host.containers.internal" + port)
-		add("host.docker.internal" + port)
-	}
-	return candidates
+		model := tierResourceModel{
+			Name:       types.StringValue("S3COLD"),
+			TierType:   types.StringValue("s3"),
+			ConfigJson: types.StringValue(`{"type":"rustfs","rustfs":{"name":"S3COLD"}}`),
+		}
+		resp := &frameworkresource.CreateResponse{State: resourceState(t, sch, tierResourceModel{})}
+		r.Create(context.Background(), frameworkresource.CreateRequest{Plan: resourcePlan(t, sch, model)}, resp)
+
+		if resp.Diagnostics.HasError() {
+			t.Fatalf("unexpected diagnostics: %v", resp.Diagnostics)
+		}
+		request := recorder.only(t)
+		if request.Method != http.MethodPut || request.Path != "/rustfs/admin/v3/tier" {
+			t.Errorf("unexpected request %s %s", request.Method, request.Path)
+		}
+		if string(request.Body) != model.ConfigJson.ValueString() {
+			t.Errorf("config_json was not sent verbatim: %s", request.Body)
+		}
+
+		var got tierResourceModel
+		if diags := resp.State.Get(context.Background(), &got); diags.HasError() {
+			t.Fatalf("reading the state back: %v", diags)
+		}
+		if got.Name.ValueString() != "S3COLD" || got.TierType.ValueString() != "s3" {
+			t.Errorf("state was not written from the plan: %+v", got)
+		}
+	})
+
+	t.Run("rejects invalid JSON before calling the API", func(t *testing.T) {
+		srv, recorder := newRecorderServer(t, http.StatusOK, "")
+		r := NewTierResource().(*TierResource)
+		r.client = newUnitAllClient(srv)
+		sch := resourceSchemaOf(t, r)
+
+		plan := resourcePlan(t, sch, tierResourceModel{
+			Name:       types.StringValue("S3COLD"),
+			TierType:   types.StringValue("s3"),
+			ConfigJson: types.StringValue("not json"),
+		})
+		resp := &frameworkresource.CreateResponse{State: resourceState(t, sch, tierResourceModel{})}
+		r.Create(context.Background(), frameworkresource.CreateRequest{Plan: plan}, resp)
+
+		assertDiagnosticSummary(t, resp.Diagnostics, "Invalid JSON")
+		if got := recorder.count(); got != 0 {
+			t.Errorf("expected no admin API request, got %d", got)
+		}
+	})
+
+	t.Run("reports a server failure", func(t *testing.T) {
+		srv, _ := newRecorderServer(t, http.StatusInternalServerError, "<Error><Code>TierAddFailed</Code><Message>tier add failed</Message></Error>")
+		r := NewTierResource().(*TierResource)
+		r.client = newUnitAllClient(srv)
+		sch := resourceSchemaOf(t, r)
+
+		plan := resourcePlan(t, sch, tierResourceModel{
+			Name:       types.StringValue("S3COLD"),
+			TierType:   types.StringValue("s3"),
+			ConfigJson: types.StringValue("{}"),
+		})
+		resp := &frameworkresource.CreateResponse{State: resourceState(t, sch, tierResourceModel{})}
+		r.Create(context.Background(), frameworkresource.CreateRequest{Plan: plan}, resp)
+
+		diagnostic := assertDiagnosticSummary(t, resp.Diagnostics, "Error adding tier")
+		if !strings.Contains(diagnostic.Detail(), "TierAddFailed") {
+			t.Errorf("diagnostic detail lost the server payload: %s", diagnostic.Detail())
+		}
+	})
 }
 
-// endpointPort returns the ":port" suffix of an endpoint, or "" when it carries
-// no port.
-func endpointPort(endpoint string) string {
-	if i := strings.LastIndex(endpoint, "://"); i >= 0 {
-		endpoint = endpoint[i+3:]
+func TestTierResourceRead(t *testing.T) {
+	srv, recorder := newRecorderServer(t, http.StatusOK, "")
+	r := NewTierResource().(*TierResource)
+	r.client = newUnitAllClient(srv)
+	sch := resourceSchemaOf(t, r)
+
+	state := tierResourceModel{
+		Name:       types.StringValue("S3COLD"),
+		TierType:   types.StringValue("s3"),
+		ConfigJson: types.StringValue("{}"),
 	}
-	if i := strings.LastIndex(endpoint, ":"); i >= 0 {
-		return endpoint[i:]
+	resp := &frameworkresource.ReadResponse{State: resourceState(t, sch, tierResourceModel{})}
+	r.Read(context.Background(), frameworkresource.ReadRequest{State: resourceState(t, sch, state)}, resp)
+
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected diagnostics: %v", resp.Diagnostics)
 	}
-	return ""
+	var got tierResourceModel
+	if diags := resp.State.Get(context.Background(), &got); diags.HasError() {
+		t.Fatalf("reading the state back: %v", diags)
+	}
+	if got.Name.ValueString() != "S3COLD" {
+		t.Errorf("Read dropped state: %+v", got)
+	}
+	if got := recorder.count(); got != 0 {
+		t.Errorf("Read must not call the admin API, saw %d requests", got)
+	}
 }
 
-// testAccTierProbeEndpoint registers a throwaway tier on each candidate
-// endpoint and returns the first one the server accepts. The probed tier is
-// removed again, so a failed probe leaves at most one unreferenced tier on an
-// instance whose storage is ephemeral.
-func testAccTierProbeEndpoint(t *testing.T, backend *tierTestBackend, candidates []string) string {
-	t.Helper()
-	client := testAccRustClient()
+func TestTierResourceUpdate(t *testing.T) {
+	t.Run("edits the tier", func(t *testing.T) {
+		srv, recorder := newRecorderServer(t, http.StatusOK, "")
+		r := NewTierResource().(*TierResource)
+		r.client = newUnitAllClient(srv)
+		sch := resourceSchemaOf(t, r)
 
-	var failures []string
-	for _, endpoint := range candidates {
-		name := fmt.Sprintf("TFTIERPROBE%d", acctest.RandInt())
-		config := tierConfigJSON(t, tierTypeConfigKey, name, endpoint, backend.bucket, "tf-probe", backend.accessKey, backend.secretKey)
-		if err := client.AddTier(json.RawMessage(config)); err != nil {
-			failures = append(failures, fmt.Sprintf("%s: %v", endpoint, err))
-			continue
+		plan := tierResourceModel{
+			Name:       types.StringValue("S3COLD"),
+			TierType:   types.StringValue("s3"),
+			ConfigJson: types.StringValue(`{"type":"rustfs","rustfs":{"name":"S3COLD","region":"us-east-01"}}`),
 		}
-		t.Logf("tier probe: %s accepted a %s tier", endpoint, tierTypeConfigKey)
-		testAccRemoveTierEventually(t, client, name)
-		return endpoint
-	}
-	for _, failure := range failures {
-		t.Logf("tier probe rejected: %s", failure)
-	}
-	return ""
+		resp := &frameworkresource.UpdateResponse{State: resourceState(t, sch, tierResourceModel{})}
+		r.Update(context.Background(), frameworkresource.UpdateRequest{
+			Plan:  resourcePlan(t, sch, plan),
+			State: resourceState(t, sch, tierResourceModel{}),
+		}, resp)
+
+		if resp.Diagnostics.HasError() {
+			t.Fatalf("unexpected diagnostics: %v", resp.Diagnostics)
+		}
+		request := recorder.only(t)
+		if request.Method != http.MethodPost || request.Path != "/rustfs/admin/v3/tier/S3COLD" {
+			t.Errorf("unexpected request %s %s", request.Method, request.Path)
+		}
+	})
+
+	t.Run("rejects invalid JSON", func(t *testing.T) {
+		srv, recorder := newRecorderServer(t, http.StatusOK, "")
+		r := NewTierResource().(*TierResource)
+		r.client = newUnitAllClient(srv)
+		sch := resourceSchemaOf(t, r)
+
+		plan := tierResourceModel{
+			Name:       types.StringValue("S3COLD"),
+			TierType:   types.StringValue("s3"),
+			ConfigJson: types.StringValue("{"),
+		}
+		resp := &frameworkresource.UpdateResponse{State: resourceState(t, sch, tierResourceModel{})}
+		r.Update(context.Background(), frameworkresource.UpdateRequest{
+			Plan:  resourcePlan(t, sch, plan),
+			State: resourceState(t, sch, tierResourceModel{}),
+		}, resp)
+
+		assertDiagnosticSummary(t, resp.Diagnostics, "Invalid JSON")
+		if got := recorder.count(); got != 0 {
+			t.Errorf("expected no admin API request, got %d", got)
+		}
+	})
+
+	t.Run("reports a server failure", func(t *testing.T) {
+		srv, _ := newRecorderServer(t, http.StatusInternalServerError, "<Error><Code>TierEditFailed</Code></Error>")
+		r := NewTierResource().(*TierResource)
+		r.client = newUnitAllClient(srv)
+		sch := resourceSchemaOf(t, r)
+
+		plan := tierResourceModel{
+			Name:       types.StringValue("S3COLD"),
+			TierType:   types.StringValue("s3"),
+			ConfigJson: types.StringValue("{}"),
+		}
+		resp := &frameworkresource.UpdateResponse{State: resourceState(t, sch, tierResourceModel{})}
+		r.Update(context.Background(), frameworkresource.UpdateRequest{
+			Plan:  resourcePlan(t, sch, plan),
+			State: resourceState(t, sch, tierResourceModel{}),
+		}, resp)
+
+		assertDiagnosticSummary(t, resp.Diagnostics, "Error editing tier")
+	})
 }
 
-// tierConfigJSON builds the config_json payload for one tier. The server
-// expects {"type": "<type>", "<type>": {..backend..}}, which is exactly the
-// string the resource stores, so the test can pin it attribute by attribute.
-func tierConfigJSON(t *testing.T, tierType, name, endpoint, bucket, prefix, accessKey, secretKey string) string {
-	t.Helper()
-	payload := map[string]any{
-		"type": tierType,
-		tierType: map[string]any{
-			"name":      name,
-			"endpoint":  endpoint,
-			"accessKey": accessKey,
-			"secretKey": secretKey,
-			"bucket":    bucket,
-			"prefix":    prefix,
+func TestTierResourceDelete(t *testing.T) {
+	t.Run("removes the tier", func(t *testing.T) {
+		srv, recorder := newRecorderServer(t, http.StatusOK, "")
+		r := NewTierResource().(*TierResource)
+		r.client = newUnitAllClient(srv)
+		sch := resourceSchemaOf(t, r)
+
+		state := tierResourceModel{Name: types.StringValue("S3COLD")}
+		resp := &frameworkresource.DeleteResponse{}
+		r.Delete(context.Background(), frameworkresource.DeleteRequest{State: resourceState(t, sch, state)}, resp)
+
+		if resp.Diagnostics.HasError() {
+			t.Fatalf("unexpected diagnostics: %v", resp.Diagnostics)
+		}
+		request := recorder.only(t)
+		if request.Method != http.MethodDelete || request.Path != "/rustfs/admin/v3/tier/S3COLD" {
+			t.Errorf("unexpected request %s %s", request.Method, request.Path)
+		}
+	})
+
+	t.Run("reports a server failure", func(t *testing.T) {
+		srv, _ := newRecorderServer(t, http.StatusConflict, "<Error><Code>XMinioAdminTierBackendInUse</Code></Error>")
+		r := NewTierResource().(*TierResource)
+		r.client = newUnitAllClient(srv)
+		sch := resourceSchemaOf(t, r)
+
+		resp := &frameworkresource.DeleteResponse{}
+		r.Delete(context.Background(), frameworkresource.DeleteRequest{
+			State: resourceState(t, sch, tierResourceModel{Name: types.StringValue("S3COLD")}),
+		}, resp)
+
+		assertDiagnosticSummary(t, resp.Diagnostics, "Error removing tier")
+	})
+}
+
+func TestTierResourceImportState(t *testing.T) {
+	r := NewTierResource().(*TierResource)
+	sch := resourceSchemaOf(t, r)
+
+	resp := &frameworkresource.ImportStateResponse{State: resourceState(t, sch, tierResourceModel{})}
+	r.ImportState(context.Background(), frameworkresource.ImportStateRequest{ID: "S3COLD"}, resp)
+
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected diagnostics: %v", resp.Diagnostics)
+	}
+	var got types.String
+	if diags := resp.State.GetAttribute(context.Background(), path.Root("name"), &got); diags.HasError() {
+		t.Fatalf("reading the imported name: %v", diags)
+	}
+	if got.ValueString() != "S3COLD" {
+		t.Errorf("expected the import ID to land in name, got %q", got.ValueString())
+	}
+}
+
+// Tier acceptance coverage. A tier is only created when the server can probe a
+// reachable remote backend, so the test needs a second RustFS to point at and
+// skips when the environment does not provide one. The native `rustfs` tier
+// type is the one usable target here: the S3-compatible types additionally
+// require credentials the remote accepts, which a two-container CI deployment
+// cannot supply.
+
+func TestAccTierResource(t *testing.T) {
+	// The precheck runs here as well as in the test case below: the endpoint
+	// environment is read before resource.Test, so an unconfigured environment
+	// must skip the test rather than fail reading it.
+	tierTestPreCheck(t)
+
+	tierEndpoint := tierTestEndpoint(t)
+	s3Endpoint := tierTestS3Endpoint(t)
+	name := fmt.Sprintf("TFACCTIER%d", acctest.RandInt())
+	bucket := fmt.Sprintf("tf-acc-tier-%d", acctest.RandInt())
+
+	// The tier probe requires the target bucket to exist, and the provider's
+	// aliased-provider route is not available here: RUSTFS_ENDPOINT overrides a
+	// configured endpoint, so a second provider block would still talk to the
+	// deployment under test. Create the bucket with the same S3 client the
+	// acceptance bucket tests use instead.
+	tierBackendBucket := tierTestBucket{endpoint: s3Endpoint, name: bucket}
+	tierBackendBucket.create(t)
+	defer tierBackendBucket.delete(t)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckTierDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccTierConfig(tierEndpoint, name, bucket),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(tierResourceName, "name", name),
+					resource.TestCheckResourceAttr(tierResourceName, "tier_type", "rustfs"),
+					resource.TestCheckResourceAttrSet(tierResourceName, "config_json"),
+				),
+			},
+			{
+				// ImportStatePassthroughID maps the tier name; tier_type and
+				// config_json are not readable back from the server, so the
+				// import step ignores them and expects the plan to want them
+				// re-supplied from the configuration.
+				ResourceName:                         tierResourceName,
+				ImportState:                          true,
+				ImportStateId:                        name,
+				ImportStateVerify:                    true,
+				ImportStateVerifyIdentifierAttribute: "name",
+				ImportStateVerifyIgnore:              []string{"tier_type", "config_json"},
+				ExpectNonEmptyPlan:                   true,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(tierResourceName, "name", name),
+				),
+			},
 		},
-	}
-	encoded, err := json.Marshal(payload)
-	if err != nil {
-		t.Fatalf("failed to encode tier config: %v", err)
-	}
-	return string(encoded)
+	})
 }
 
-func testAccTierConfig(name, tierType, configJSON string) string {
-	return testAccProviderConfig() + fmt.Sprintf(`
-resource "rustfs_tier" "test" {
-  name        = %q
-  tier_type   = %q
-  config_json = %s
-}
-`, name, tierType, strconv.Quote(configJSON))
-}
-
-// testAccCheckTierRegistered asserts the server itself reports the tier. The
-// resource's Read is a state passthrough, so this is the only server-side fact
-// Terraform's state cannot fake.
-func testAccCheckTierRegistered(t *testing.T, name string) resource.TestCheckFunc {
-	t.Helper()
-	return func(*terraform.State) error {
-		client := testAccRustClient()
-		stats, err := client.TierStats()
-		if err != nil {
-			return fmt.Errorf("failed to list tiers: %w", err)
-		}
-		if _, ok := stats[name]; !ok {
-			return fmt.Errorf("tier %s is not registered on the server (have %v)", name, tierNames(stats))
-		}
-		return nil
-	}
-}
-
-// testAccCheckTierAbsent asserts the server no longer reports the tier. The
-// registry drops a tier shortly after the removal is accepted, so this waits
-// briefly instead of racing it.
-func testAccCheckTierAbsent(t *testing.T, name string) resource.TestCheckFunc {
-	t.Helper()
-	return func(*terraform.State) error {
-		client := testAccRustClient()
-		deadline := time.Now().Add(tierAbsentWait)
-		for {
-			stats, err := client.TierStats()
-			if err != nil {
-				return fmt.Errorf("failed to list tiers: %w", err)
-			}
-			if _, ok := stats[name]; !ok {
-				return nil
-			}
-			if time.Now().After(deadline) {
-				return fmt.Errorf("tier %s is still registered on the server", name)
-			}
-			time.Sleep(tierProbeInterval)
-		}
-	}
-}
-
-// testAccMutateTierOutOfBand rewrites the tier's backend configuration without
-// going through Terraform.
-func testAccMutateTierOutOfBand(t *testing.T, backend *tierTestBackend, name, prefix string) resource.TestCheckFunc {
-	t.Helper()
-	return func(*terraform.State) error {
-		client := testAccRustClient()
-		config := tierConfigJSON(t, tierTypeConfigKey, name, backend.tierEndpoint, backend.bucket, prefix, backend.accessKey, backend.secretKey)
-		var err error
-		for range tierProbeAttempts {
-			if err = client.EditTier(name, json.RawMessage(config)); err == nil {
-				return nil
-			}
-			// The server serialises tier mutations: an edit issued while the
-			// previous one is still recovering is refused, not lost.
-			time.Sleep(tierProbeInterval)
-		}
-		return fmt.Errorf("failed to edit tier %s out-of-band: %w", name, err)
-	}
-}
-
-func tierNames(stats map[string]rustfs.TierStat) []string {
-	names := make([]string, 0, len(stats))
-	for name := range stats {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
-}
-
-// The server reconciles every tier mutation in the background and refuses the
-// next one until it has finished ("Remote tier mutation recovery must finish
-// before applying a new tier configuration update"), so every out-of-band call
-// the test makes retries briefly. The resource retries the same conditions
-// internally.
 const (
-	tierProbeAttempts = 8
-	tierProbeInterval = 500 * time.Millisecond
-	tierAbsentWait    = 10 * time.Second
-	tierDestroyWait   = 30 * time.Second
+	// tierTestEndpointEnv is the endpoint the RustFS server probes when it adds
+	// the tier: a second RustFS, reachable from the server.
+	tierTestEndpointEnv = "RUSTFS_TIER_ENDPOINT"
+	// tierTestS3EndpointEnv overrides the host:port the test dials for that
+	// second RustFS. It defaults to the host:port of RUSTFS_TIER_ENDPOINT,
+	// which is correct inside the acceptance compose network; a host-based
+	// local run sets it to the published port.
+	tierTestS3EndpointEnv = "RUSTFS_TIER_S3_ENDPOINT"
 )
 
-// testAccRemoveTierEventually removes a tier, retrying while the server is
-// still finishing the mutation it followed.
-func testAccRemoveTierEventually(t *testing.T, client rustfs.RustfsAdmin, name string) {
+// tierTestEndpoint returns the endpoint a tier can point at, failing when the
+// variable is set but does not look like a URL.
+func tierTestEndpoint(t *testing.T) string {
 	t.Helper()
-	var err error
-	for range tierProbeAttempts {
-		if err = client.RemoveTier(name); err == nil {
-			return
-		}
-		time.Sleep(tierProbeInterval)
+	full := os.Getenv(tierTestEndpointEnv)
+	if !strings.HasPrefix(full, "http://") && !strings.HasPrefix(full, "https://") {
+		t.Fatalf("%s must be a URL such as http://rustfs-peer:9000, got %q", tierTestEndpointEnv, full)
 	}
-	t.Logf("could not remove tier %s: %v", name, err)
+	return full
 }
 
-// testAccCheckTierDestroy asserts every tier Terraform managed is gone from the
-// server, allowing for the asynchronous removal.
+// tierTestS3Endpoint returns the host:port of the tier backend as the test
+// process reaches it.
+func tierTestS3Endpoint(t *testing.T) string {
+	t.Helper()
+	if override := os.Getenv(tierTestS3EndpointEnv); override != "" {
+		return override
+	}
+	return strings.TrimPrefix(strings.TrimPrefix(tierTestEndpoint(t), "http://"), "https://")
+}
+
+// tierTestPreCheck skips the test when no tier backend is configured: without a
+// second endpoint the server cannot probe a tier, and pointing a tier at the
+// deployment itself is refused ("probe outcome is uncertain").
+func tierTestPreCheck(t *testing.T) {
+	testAccPreCheck(t)
+	if os.Getenv(tierTestEndpointEnv) == "" {
+		t.Skipf("%s is not set, skipping: no tier backend is available for the server to probe", tierTestEndpointEnv)
+	}
+}
+
+// tierTestBucket is the bucket the tier points at, on the tier backend.
+type tierTestBucket struct {
+	endpoint string
+	name     string
+}
+
+func (b tierTestBucket) create(t *testing.T) {
+	t.Helper()
+	client, err := newTestS3Client(b.endpoint, os.Getenv("RUSTFS_USER"), os.Getenv("RUSTFS_SECRET"))
+	if err != nil {
+		t.Fatalf("building the S3 client for the tier backend %s: %v", b.endpoint, err)
+	}
+	if _, err := client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: aws.String(b.name)}); err != nil {
+		t.Fatalf("creating the tier backend bucket %s on %s: %v", b.name, b.endpoint, err)
+	}
+}
+
+func (b tierTestBucket) delete(t *testing.T) {
+	t.Helper()
+	client, err := newTestS3Client(b.endpoint, os.Getenv("RUSTFS_USER"), os.Getenv("RUSTFS_SECRET"))
+	if err != nil {
+		t.Logf("could not build the S3 client to delete the tier backend bucket %s: %v", b.name, err)
+		return
+	}
+	if _, err := client.DeleteBucket(context.Background(), &s3.DeleteBucketInput{Bucket: aws.String(b.name)}); err != nil {
+		t.Logf("could not delete the tier backend bucket %s: %v", b.name, err)
+	}
+}
+
+// testAccCheckTierDestroy requires every tier the fixture created to be gone.
+// The admin API answers TierNotFound for a name it does not hold. A server that
+// does not implement the verify route at all (501 NotImplemented, 405) cannot
+// confirm the tier's absence and is not evidence of a leak, so that passes too;
+// an implemented route that still answers for the name fails.
 func testAccCheckTierDestroy(s *terraform.State) error {
 	client := testAccRustClient()
 	for _, rs := range s.RootModule().Resources {
@@ -333,447 +501,45 @@ func testAccCheckTierDestroy(s *terraform.State) error {
 		if name == "" {
 			continue
 		}
-		deadline := time.Now().Add(tierDestroyWait)
-		for {
-			stats, err := client.TierStats()
-			if err != nil {
-				return fmt.Errorf("failed to list tiers: %w", err)
+
+		res, err := client.DoDirectRequest(context.Background(), rustfs.RequestData{
+			Method: http.MethodGet,
+			// DoDirectRequest resolves against the host root, so the admin
+			// prefix the production client builds in createEndpointUrl is part
+			// of the path here.
+			RelPath: "rustfs/admin/v3/tier/" + name,
+		})
+		if err != nil {
+			if rustfs.IsAPIErrorCode(err, "TierNotFound", "NoSuchTier") ||
+				rustfs.IsAPIErrorCode(err, "NotImplemented", "MethodNotAllowed") ||
+				rustfs.IsUnsupportedFeature(err) {
+				continue
 			}
-			if _, ok := stats[name]; !ok {
-				break
-			}
-			if time.Now().After(deadline) {
-				return fmt.Errorf("tier %s still exists on the server", name)
-			}
-			time.Sleep(time.Second)
+			return fmt.Errorf("error checking tier %s destruction: %w", name, err)
 		}
+		_, _ = io.Copy(io.Discard, res.Body)
+		_ = res.Body.Close()
+		return fmt.Errorf("tier %s still exists", name)
 	}
 	return nil
 }
 
-func TestAccTierResource(t *testing.T) {
-	backend := testAccTierBackend(t)
-
-	name := fmt.Sprintf("TFTIER%d", acctest.RandInt())
-	replacementName := fmt.Sprintf("TFTIERR%d", acctest.RandInt())
-	const (
-		prefix        = "tf-prefix-1"
-		updatedPrefix = "tf-prefix-2"
-		driftedPrefix = "tf-prefix-drifted"
-	)
-
-	createConfig := tierConfigJSON(t, tierTypeConfigKey, name, backend.tierEndpoint, backend.bucket, prefix, backend.accessKey, backend.secretKey)
-	updateConfig := tierConfigJSON(t, tierTypeConfigKey, name, backend.tierEndpoint, backend.bucket, updatedPrefix, backend.accessKey, backend.secretKey)
-	replacementConfig := tierConfigJSON(t, tierTypeConfigKey, replacementName, backend.tierEndpoint, backend.bucket, prefix, backend.accessKey, backend.secretKey)
-	altTypeConfig := tierConfigJSON(t, tierTypeAlt, name, backend.tierEndpoint, backend.bucket, prefix, backend.accessKey, backend.secretKey)
-	recoveryConfig := tierConfigJSON(t, tierTypeConfigKey, replacementName, backend.tierEndpoint, backend.bucket, updatedPrefix, backend.accessKey, backend.secretKey)
-	// unreachableConfig points the tier at a closed loopback port: RustFS
-	// refuses it, so the provider must report the failure.
-	unreachableConfig := tierConfigJSON(t, tierTypeConfigKey, name, "http://127.0.0.1:1", backend.bucket, prefix, backend.accessKey, backend.secretKey)
-
-	resource.ParallelTest(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
-		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
-		CheckDestroy:             testAccCheckTierDestroy,
-		Steps: []resource.TestStep{
-			{
-				// config_json is validated before anything reaches the server: a
-				// create with a non-JSON payload must fail with the provider's
-				// own diagnostic and never register a tier.
-				Config:      testAccTierConfig(name, tierTypeRustFS, "{not json"),
-				ExpectError: regexp.MustCompile(`config_json must be valid JSON`),
-			},
-			{
-				// The server rejects a backend it cannot use, and the provider
-				// surfaces that error instead of recording a tier that does not
-				// exist. A loopback endpoint is refused by every RustFS release
-				// (either by the outbound-address guard or by the connection
-				// attempt itself).
-				Config:      testAccTierConfig(name, tierTypeRustFS, unreachableConfig),
-				ExpectError: regexp.MustCompile(`Could not add tier`),
-			},
-			{
-				Config: testAccTierConfig(name, tierTypeRustFS, createConfig),
-				Check: resource.ComposeTestCheckFunc(
-					resource.TestCheckResourceAttr(tierResourceName, "name", name),
-					resource.TestCheckResourceAttr(tierResourceName, "tier_type", tierTypeRustFS),
-					resource.TestCheckResourceAttr(tierResourceName, "config_json", createConfig),
-					testAccCheckTierRegistered(t, name),
-				),
-			},
-			{
-				// In-place update of the only non-replacement attribute. The
-				// provider sends the new configuration to the server and records
-				// it; the tier stays registered. The server's tier listing keeps
-				// reporting the configuration a tier was created with (and
-				// redacts secretKey), so the changed value cannot be read back
-				// from it - the value assertion below is the strongest one the
-				// provider's read path can support.
-				Config: testAccTierConfig(name, tierTypeRustFS, updateConfig),
-				Check: resource.ComposeTestCheckFunc(
-					resource.TestCheckResourceAttr(tierResourceName, "config_json", updateConfig),
-					testAccCheckTierRegistered(t, name),
-				),
-			},
-			{
-				// Revert the in-place update back to the original backend.
-				Config: testAccTierConfig(name, tierTypeRustFS, createConfig),
-				Check: resource.ComposeTestCheckFunc(
-					resource.TestCheckResourceAttr(tierResourceName, "config_json", createConfig),
-					testAccCheckTierRegistered(t, name),
-				),
-			},
-			{
-				// The update path validates before it calls the server too: the
-				// tier must stay exactly as it was.
-				Config:      testAccTierConfig(name, tierTypeRustFS, "{not json"),
-				ExpectError: regexp.MustCompile(`config_json must be valid JSON`),
-			},
-			{
-				// Explicit empty plan: the state must match the configuration,
-				// with no computed attribute causing a perpetual diff.
-				Config:   testAccTierConfig(name, tierTypeRustFS, createConfig),
-				PlanOnly: true,
-				ConfigPlanChecks: resource.ConfigPlanChecks{
-					PostApplyPreRefresh: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
-				},
-			},
-			{
-				// Replacement plan for "name", one of the two RequiresReplace
-				// attributes. PlanOnly: the replacement is applied later, on its
-				// own step, so the replace path really runs.
-				Config:             testAccTierConfig(replacementName, tierTypeRustFS, replacementConfig),
-				PlanOnly:           true,
-				ExpectNonEmptyPlan: true,
-				ConfigPlanChecks: resource.ConfigPlanChecks{
-					PostApplyPreRefresh: []plancheck.PlanCheck{
-						plancheck.ExpectResourceAction(tierResourceName, plancheck.ResourceActionReplace),
-					},
-				},
-			},
-			{
-				// Replacement plan for "tier_type", the other RequiresReplace
-				// attribute.
-				Config:             testAccTierConfig(name, tierTypeAlt, altTypeConfig),
-				PlanOnly:           true,
-				ExpectNonEmptyPlan: true,
-				ConfigPlanChecks: resource.ConfigPlanChecks{
-					PostApplyPreRefresh: []plancheck.PlanCheck{
-						plancheck.ExpectResourceAction(tierResourceName, plancheck.ResourceActionReplace),
-					},
-				},
-			},
-			{
-				// Apply the replacement so the replacement path really runs,
-				// then assert the new instance on both sides: the state and the
-				// server's own tier registry.
-				Config: testAccTierConfig(replacementName, tierTypeRustFS, replacementConfig),
-				Check: resource.ComposeTestCheckFunc(
-					resource.TestCheckResourceAttr(tierResourceName, "name", replacementName),
-					resource.TestCheckResourceAttr(tierResourceName, "config_json", replacementConfig),
-					testAccCheckTierRegistered(t, replacementName),
-					testAccCheckTierAbsent(t, name),
-				),
-			},
-			{
-				// Out-of-band drift. The server accepts the rewritten backend
-				// without Terraform, but rustfs_tier's Read is a state
-				// passthrough (the tier list endpoint redacts secretKey, so the
-				// stored configuration cannot be reconstructed from the
-				// server), which means Terraform proposes nothing at all. This
-				// step pins that behaviour: the tier is still registered, the
-				// plan is empty, and only a later apply of a changed
-				// configuration reaches the server again.
-				Config: testAccTierConfig(replacementName, tierTypeRustFS, replacementConfig),
-				Check: resource.ComposeTestCheckFunc(
-					testAccCheckTierRegistered(t, replacementName),
-					testAccMutateTierOutOfBand(t, backend, replacementName, driftedPrefix),
-				),
-				ConfigPlanChecks: resource.ConfigPlanChecks{
-					PostApplyPostRefresh: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
-				},
-			},
-			{
-				// Recovery after the drift: the tier is still registered and the
-				// configured backend is what Terraform keeps sending.
-				Config: testAccTierConfig(replacementName, tierTypeRustFS, recoveryConfig),
-				Check: resource.ComposeTestCheckFunc(
-					resource.TestCheckResourceAttr(tierResourceName, "config_json", recoveryConfig),
-					testAccCheckTierRegistered(t, replacementName),
-				),
-			},
-			{
-				// Import carries the tier name as its identifier. Read is a
-				// passthrough, so neither tier_type nor config_json can be
-				// recovered from the server: they are ignored here and verified
-				// by the create/update steps above.
-				ResourceName:                         tierResourceName,
-				ImportState:                          true,
-				ImportStateId:                        replacementName,
-				ImportStateVerify:                    true,
-				ImportStateVerifyIdentifierAttribute: "name",
-				ImportStateVerifyIgnore:              []string{"tier_type", "config_json"},
-			},
-		},
-	})
+func testAccTierConfig(tierEndpoint, name, bucket string) string {
+	return testAccProviderConfig() + fmt.Sprintf(`
+resource "rustfs_tier" "test" {
+  name      = %q
+  tier_type = "rustfs"
+  config_json = jsonencode({
+    type = "rustfs"
+    rustfs = {
+      name      = %q
+      endpoint  = %q
+      accessKey = %q
+      secretKey = %q
+      bucket    = %q
+      region    = "us-east-01"
+    }
+  })
 }
-
-// TestTierTransientMutationErrors pins which server answers are retried: only
-// the two conditions that report an unfinished tier reconciliation. A genuine
-// rejection must fail immediately.
-func TestTierTransientMutationErrors(t *testing.T) {
-	cases := []struct {
-		name string
-		err  error
-		want bool
-	}{
-		{name: "nil", err: nil},
-		{name: "unrelated", err: errors.New("NoSuchBucket")},
-		{name: "tier name taken", err: &rustfs.APIError{Code: "TierNameAlreadyExist", Message: "tier name already exists"}},
-		{name: "edit still recovering", err: &rustfs.APIError{Code: "TierEditFailed", Message: "tier edit failed. Remote tier mutation recovery must finish before applying a new tier configuration update"}, want: true},
-		{name: "backend in use", err: &rustfs.APIError{Code: "XMinioAdminTierBackendInUse", Message: "Specified remote tier is already in use"}, want: true},
-		{name: "unstructured backend in use", err: errors.New("<Error><Code>XMinioAdminTierBackendInUse</Code><Message>Specified remote tier is already in use</Message></Error>"), want: true},
-		{name: "unstructured edit recovery", err: errors.New("tier edit failed. Remote tier mutation recovery must finish before applying a new tier configuration update"), want: true},
-	}
-	for _, tc := range cases {
-		if got := isTransientTierMutationError(tc.err); got != tc.want {
-			t.Errorf("%s: isTransientTierMutationError = %v, want %v", tc.name, got, tc.want)
-		}
-	}
-}
-
-// TestTierMutationRetry checks that a transient refusal is retried and that a
-// permanent error is reported without a retry.
-func TestTierMutationRetry(t *testing.T) {
-	t.Run("retries a transient refusal", func(t *testing.T) {
-		calls := 0
-		err := tierMutation(func() error {
-			calls++
-			if calls < 3 {
-				return &rustfs.APIError{Code: "XMinioAdminTierBackendInUse", Message: "Specified remote tier is already in use"}
-			}
-			return nil
-		})
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if calls != 3 {
-			t.Fatalf("expected 3 attempts, got %d", calls)
-		}
-	})
-
-	t.Run("reports a permanent error immediately", func(t *testing.T) {
-		calls := 0
-		wantErr := errors.New("Specified tier type is unsupported")
-		err := tierMutation(func() error {
-			calls++
-			return wantErr
-		})
-		if !errors.Is(err, wantErr) {
-			t.Fatalf("expected %v, got %v", wantErr, err)
-		}
-		if calls != 1 {
-			t.Fatalf("expected 1 attempt, got %d", calls)
-		}
-	})
-}
-
-// TestTierConfigJSON checks the helper the acceptance test uses to build
-// config_json, so a formatting change cannot silently weaken its assertions.
-func TestTierConfigJSON(t *testing.T) {
-	got := tierConfigJSON(t, tierTypeRustFS, "TIER1", "http://peer:9000", "bucket1", "prefix1", "access", "secret")
-	want := `{"rustfs":{"accessKey":"access","bucket":"bucket1","endpoint":"http://peer:9000","name":"TIER1","prefix":"prefix1","secretKey":"secret"},"type":"rustfs"}`
-	if got != want {
-		t.Fatalf("tier config_json = %s, want %s", got, want)
-	}
-	var decoded map[string]any
-	if err := json.Unmarshal([]byte(got), &decoded); err != nil {
-		t.Fatalf("tier config_json is not valid JSON: %v", err)
-	}
-	if decoded["type"] != tierTypeRustFS {
-		t.Errorf("type = %v, want %v", decoded["type"], tierTypeRustFS)
-	}
-	if _, ok := decoded[tierTypeConfigKey]; !ok {
-		t.Errorf("config_json has no %s sub-object: %s", tierTypeConfigKey, got)
-	}
-}
-
-// TestTierEndpointCandidates checks the peer endpoints the acceptance test
-// probes, including the host-gateway fallbacks that make a
-// container-machine harness usable.
-func TestTierEndpointCandidates(t *testing.T) {
-	t.Setenv("RUSTFS_TIER_TEST_ENDPOINT", "")
-	got := tierEndpointCandidates("10.88.0.65:9000", "127.0.0.1:9002")
-	want := []string{
-		"http://10.88.0.65:9000",
-		"http://host.containers.internal:9002",
-		"http://host.docker.internal:9002",
-	}
-	if len(got) != len(want) {
-		t.Fatalf("candidates = %v, want %v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Errorf("candidate %d = %s, want %s", i, got[i], want[i])
-		}
-	}
-
-	t.Setenv("RUSTFS_TIER_TEST_ENDPOINT", "http://peer.example:9000")
-	got = tierEndpointCandidates("peer.example:9000", "")
-	if len(got) != 1 || got[0] != "http://peer.example:9000" {
-		t.Fatalf("explicit endpoint override = %v, want a single http://peer.example:9000", got)
-	}
-}
-
-// TestTierResourceUpdateAgainstAdminAPI closes the loop the acceptance test
-// cannot: RustFS keeps reporting the configuration a tier was created with and
-// redacts secretKey, so an acceptance step can only observe that the tier
-// survived an update. Driving Update against a stand-in admin API asserts what
-// the server is actually told - the edited config_json under the tier name -
-// and that the plan is written back to state.
-func TestTierResourceUpdateAgainstAdminAPI(t *testing.T) {
-	ctx := context.Background()
-	const (
-		tierName = "TIERUNIT1"
-		original = `{"type":"rustfs","rustfs":{"name":"TIERUNIT1","endpoint":"http://peer:9000","accessKey":"access","secretKey":"secret","bucket":"bucket","prefix":"tf-prefix-1"}}`
-		edited   = `{"type":"rustfs","rustfs":{"name":"TIERUNIT1","endpoint":"http://peer:9000","accessKey":"access","secretKey":"secret","bucket":"bucket","prefix":"tf-prefix-2"}}`
-	)
-
-	for _, tc := range []struct {
-		name      string
-		status    int
-		response  string
-		config    string
-		wantBody  string
-		wantErr   string
-		wantCalls int
-	}{
-		{
-			name:      "edit is accepted",
-			status:    http.StatusOK,
-			config:    edited,
-			wantBody:  edited,
-			wantCalls: 1,
-		},
-		{
-			// A permanent rejection must reach Terraform as a diagnostic and
-			// must not be retried.
-			name:      "edit is rejected",
-			status:    http.StatusForbidden,
-			response:  `<?xml version="1.0" encoding="UTF-8"?><Error><Code>XRustfsAdminTierInvalidCredentials</Code><Message>Invalid remote tier credentials</Message></Error>`,
-			config:    edited,
-			wantBody:  edited,
-			wantErr:   "Error editing tier",
-			wantCalls: 1,
-		},
-		{
-			// The JSON guard runs before the server is contacted at all.
-			name:    "invalid json never reaches the server",
-			status:  http.StatusOK,
-			config:  "{not json",
-			wantErr: "config_json must be valid JSON",
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var (
-				calls     int
-				gotPath   string
-				gotBody   string
-				gotMethod string
-			)
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				calls++
-				gotMethod, gotPath = r.Method, r.URL.Path
-				body, _ := io.ReadAll(r.Body)
-				gotBody = string(body)
-				w.WriteHeader(tc.status)
-				_, _ = w.Write([]byte(tc.response))
-			}))
-			t.Cleanup(server.Close)
-
-			client := rustfs.New(&rustfs.RustfsAdminConfig{
-				AccessKey:    "admin",
-				AccessSecret: "secret",
-				Endpoint:     strings.TrimPrefix(server.URL, "http://"),
-			})
-			r := &TierResource{client: &AllClient{RustClient: client}}
-
-			schemaResp := &fwresource.SchemaResponse{}
-			r.Schema(ctx, fwresource.SchemaRequest{}, schemaResp)
-			if schemaResp.Diagnostics.HasError() {
-				t.Fatalf("schema diagnostics: %s", schemaResp.Diagnostics)
-			}
-			schemaType := schemaResp.Schema.Type().TerraformType(ctx)
-
-			plan := tfsdk.Plan{Schema: schemaResp.Schema, Raw: tftypes.NewValue(schemaType, nil)}
-			if diags := plan.Set(ctx, tierResourceModel{
-				Name:       types.StringValue(tierName),
-				TierType:   types.StringValue(tierTypeRustFS),
-				ConfigJson: types.StringValue(tc.config),
-			}); diags.HasError() {
-				t.Fatalf("plan diagnostics: %s", diags)
-			}
-
-			state := tfsdk.State{Schema: schemaResp.Schema, Raw: tftypes.NewValue(schemaType, nil)}
-			if diags := state.Set(ctx, tierResourceModel{
-				Name:       types.StringValue(tierName),
-				TierType:   types.StringValue(tierTypeRustFS),
-				ConfigJson: types.StringValue(original),
-			}); diags.HasError() {
-				t.Fatalf("state diagnostics: %s", diags)
-			}
-
-			resp := &fwresource.UpdateResponse{State: state}
-			r.Update(ctx, fwresource.UpdateRequest{Plan: plan}, resp)
-
-			if calls != tc.wantCalls {
-				t.Errorf("admin API calls = %d, want %d", calls, tc.wantCalls)
-			}
-			if tc.wantCalls > 0 {
-				if gotMethod != http.MethodPost {
-					t.Errorf("edit request method = %q, want %q", gotMethod, http.MethodPost)
-				}
-				if want := "/rustfs/admin/v3/tier/" + tierName; gotPath != want {
-					t.Errorf("edit request path = %q, want %q", gotPath, want)
-				}
-				if gotBody != tc.wantBody {
-					t.Errorf("edit request body = %s, want %s", gotBody, tc.wantBody)
-				}
-			}
-
-			var got tierResourceModel
-			if diags := resp.State.Get(ctx, &got); diags.HasError() {
-				t.Fatalf("state diagnostics: %s", diags)
-			}
-
-			if tc.wantErr != "" {
-				if !resp.Diagnostics.HasError() {
-					t.Fatal("expected a diagnostic, got none")
-				}
-				var messages []string
-				for _, d := range resp.Diagnostics.Errors() {
-					messages = append(messages, fmt.Sprintf("%s: %s", d.Summary(), d.Detail()))
-				}
-				if joined := strings.Join(messages, "\n"); !strings.Contains(joined, tc.wantErr) {
-					t.Errorf("diagnostics = %q, want them to mention %q", joined, tc.wantErr)
-				}
-				// A rejected update must leave the previous state untouched
-				// rather than storing a plan the server never accepted.
-				if got.ConfigJson.ValueString() != original {
-					t.Errorf("config_json after a rejected edit = %s, want the previous value %s", got.ConfigJson.ValueString(), original)
-				}
-				return
-			}
-
-			if resp.Diagnostics.HasError() {
-				t.Fatalf("update diagnostics: %s", resp.Diagnostics)
-			}
-			if got.Name.ValueString() != tierName || got.TierType.ValueString() != tierTypeRustFS {
-				t.Errorf("state identity = %s/%s, want %s/%s", got.Name.ValueString(), got.TierType.ValueString(), tierName, tierTypeRustFS)
-			}
-			if got.ConfigJson.ValueString() != tc.config {
-				t.Errorf("config_json in state = %s, want the edited value %s", got.ConfigJson.ValueString(), tc.config)
-			}
-		})
-	}
+`, name, name, tierEndpoint, os.Getenv("RUSTFS_USER"), os.Getenv("RUSTFS_SECRET"), bucket)
 }

@@ -4,317 +4,334 @@
 package provider
 
 import (
-	"archive/zip"
-	"bytes"
 	"context"
 	"encoding/base64"
 	"fmt"
-	"regexp"
+	"net/http"
+	"strings"
 	"testing"
 
-	"github.com/hashicorp/terraform-plugin-framework/path"
-	fwresource "github.com/hashicorp/terraform-plugin-framework/resource"
+	frameworkresource "github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
-	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
-	"github.com/hashicorp/terraform-plugin-go/tftypes"
-	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
-	"github.com/hashicorp/terraform-plugin-testing/plancheck"
-	"github.com/hashicorp/terraform-plugin-testing/terraform"
 )
-
-// rustfs_iam_backup_import has a single required attribute, content_base64,
-// and it carries RequiresReplace(). Terraform can therefore never call
-// IamBackupImportResource.Update: any change to the archive is planned as a
-// delete/create pair and the create path runs again. The tests below assert
-// that from the schema (TestIamBackupImportResourceSchema), from the plan
-// modifier itself
-// (TestIamBackupImportResourceContentBase64RequiresReplace) and from a real
-// plan (TestAccIamBackupImportResource), and cover the code path that is
-// reachable instead: create, import, replace (with the archive content read
-// back from the server), the empty follow-up plan, and out-of-band drift.
 
 const iamBackupImportResourceName = "rustfs_iam_backup_import.test"
 
-// testAccIamBackupImportSchema returns the resource schema under test.
-func testAccIamBackupImportSchema(t *testing.T) schema.Schema {
-	t.Helper()
+// iamBackupImportPayload is the decoded archive the tests feed the resource:
+// the ZIP local-file magic plus a body, so the assertion compares real bytes
+// rather than a round-tripped string.
+const iamBackupImportPayload = "PK\x03\x04archive"
 
-	resp := fwresource.SchemaResponse{}
-	NewIamBackupImportResource().Schema(context.Background(), fwresource.SchemaRequest{}, &resp)
-	if resp.Diagnostics.HasError() {
-		t.Fatalf("schema diagnostics: %v", resp.Diagnostics)
-	}
-
-	return resp.Schema
-}
-
-// The resource exposes exactly one attribute. Anything that changes it must be
-// a replacement, otherwise Update (which is unreachable today) would have to
-// be reachable and implemented.
 func TestIamBackupImportResourceSchema(t *testing.T) {
-	sch := testAccIamBackupImportSchema(t)
+	sch := resourceSchemaOf(t, NewIamBackupImportResource())
 
-	if len(sch.Attributes) != 1 {
-		t.Fatalf("expected exactly one attribute, got %d: %v", len(sch.Attributes), sch.Attributes)
+	attrs := sch.GetAttributes()
+	if len(attrs) != 1 {
+		t.Errorf("expected 1 attribute, got %d: %v", len(attrs), attrs)
 	}
 
-	attr, ok := sch.Attributes["content_base64"].(schema.StringAttribute)
+	content, ok := attrs["content_base64"].(schema.StringAttribute)
 	if !ok {
-		t.Fatalf("content_base64 is not a StringAttribute: %T", sch.Attributes["content_base64"])
+		t.Fatalf("content_base64 is not a StringAttribute")
 	}
-	if !attr.Required {
-		t.Error("content_base64 must be required")
+	if !content.Required || content.Optional || content.Computed {
+		t.Errorf("content_base64 must be Required only: %+v", content)
 	}
-	if !attr.Sensitive {
-		t.Error("content_base64 must be sensitive: it carries IAM material")
+	if !content.Sensitive {
+		t.Error("content_base64 carries the whole IAM backup and must be Sensitive")
 	}
-	if len(attr.PlanModifiers) != 1 {
-		t.Fatalf("content_base64 must carry exactly one plan modifier, got %d", len(attr.PlanModifiers))
+	if !hasRequiresReplace(content.PlanModifiers) {
+		t.Error("content_base64 must force recreation, an import is a one-shot action")
 	}
-	if got, want := attr.PlanModifiers[0].Description(context.Background()), stringplanmodifier.RequiresReplace().Description(context.Background()); got != want {
-		t.Errorf("content_base64 plan modifier must be RequiresReplace, got %q", got)
+	if content.Description == "" {
+		t.Error("content_base64 has no description, tfplugindocs would publish an empty row")
 	}
 }
 
-// Run the resource's own plan modifier over a state/plan pair that differs:
-// RequiresReplace (and no other modifier) means a change can only ever be
-// planned as a replacement, which is why Update is dead code.
-func TestIamBackupImportResourceContentBase64RequiresReplace(t *testing.T) {
-	ctx := context.Background()
-	sch := testAccIamBackupImportSchema(t)
-
-	attr, ok := sch.Attributes["content_base64"].(schema.StringAttribute)
-	if !ok {
-		t.Fatalf("content_base64 is not a StringAttribute: %T", sch.Attributes["content_base64"])
-	}
-
-	objectType, ok := sch.Type().TerraformType(ctx).(tftypes.Object)
-	if !ok {
-		t.Fatalf("schema type is not an object: %T", sch.Type().TerraformType(ctx))
-	}
-
-	archiveA := base64.StdEncoding.EncodeToString([]byte("archive-a"))
-	archiveB := base64.StdEncoding.EncodeToString([]byte("archive-b"))
-
-	value := func(content string) tftypes.Value {
-		return tftypes.NewValue(objectType, map[string]tftypes.Value{
-			"content_base64": tftypes.NewValue(tftypes.String, content),
-		})
-	}
-
-	for _, tc := range []struct {
-		name            string
-		state, plan     string
-		wantReplacement bool
-	}{
-		{name: "changed", state: archiveA, plan: archiveB, wantReplacement: true},
-		{name: "unchanged", state: archiveA, plan: archiveA, wantReplacement: false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			req := planmodifier.StringRequest{
-				Path:       path.Root("content_base64"),
-				Config:     tfsdk.Config{Schema: sch, Raw: value(tc.plan)},
-				Plan:       tfsdk.Plan{Schema: sch, Raw: value(tc.plan)},
-				State:      tfsdk.State{Schema: sch, Raw: value(tc.state)},
-				PlanValue:  types.StringValue(tc.plan),
-				StateValue: types.StringValue(tc.state),
-			}
-
-			resp := planmodifier.StringResponse{}
-			for _, modifier := range attr.PlanModifiers {
-				modifier.PlanModifyString(ctx, req, &resp)
-			}
-			if resp.Diagnostics.HasError() {
-				t.Fatalf("plan modifier diagnostics: %v", resp.Diagnostics)
-			}
-			if resp.RequiresReplace != tc.wantReplacement {
-				t.Errorf("RequiresReplace = %v, want %v", resp.RequiresReplace, tc.wantReplacement)
-			}
-		})
+func TestIamBackupImportResourceMetadata(t *testing.T) {
+	resp := &frameworkresource.MetadataResponse{}
+	NewIamBackupImportResource().Metadata(context.Background(), frameworkresource.MetadataRequest{ProviderTypeName: "rustfs"}, resp)
+	if resp.TypeName != "rustfs_iam_backup_import" {
+		t.Errorf("expected rustfs_iam_backup_import, got %s", resp.TypeName)
 	}
 }
 
-// TestAccIamBackupImportResource covers the contract that is reachable:
-//
-//  1. create imports a base64 ZIP and the imported IAM policy is read back
-//     from the server (Update is never called: the attribute is
-//     RequiresReplace),
-//  2. changing content_base64 plans a replacement for that attribute,
-//  3. applying it runs the create path again and the new archive content is
-//     read back from the server,
-//  4. the follow-up plan is explicitly empty,
-//  5. a change made to the server behind Terraform's back does not appear in
-//     the plan: Read only echoes the state, so this resource never reconciles
-//     external drift.
-func TestAccIamBackupImportResource(t *testing.T) {
-	suffix := acctest.RandInt()
-	policyA := fmt.Sprintf("tf-acc-iam-import-a-%d", suffix)
-	policyB := fmt.Sprintf("tf-acc-iam-import-b-%d", suffix)
-
-	archiveA := testAccIamBackupImportArchive(t, map[string]string{
-		"iam-assets/policies.json": fmt.Sprintf(
-			`{"%s":{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:GetObject"],"Resource":["arn:aws:s3:::tf-acc-iam-import-a/*"]}]}}`,
-			policyA),
-	})
-	archiveB := testAccIamBackupImportArchive(t, map[string]string{
-		"iam-assets/policies.json": fmt.Sprintf(
-			`{"%s":{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:GetObjectVersion"],"Resource":["arn:aws:s3:::tf-acc-iam-import-b/*"]}]}}`,
-			policyB),
-	})
-
-	// The import resource cannot delete what it imported (its Delete is a
-	// no-op), so the policies it creates are removed here. The drift step
-	// below already deletes policyB, hence the errors are ignored.
-	t.Cleanup(func() {
-		client := testAccRustClient()
-		for _, name := range []string{policyA, policyB} {
-			_ = client.DeletePolicy(name)
+func TestIamBackupImportResourceConfigure(t *testing.T) {
+	t.Run("nil provider data", func(t *testing.T) {
+		r := NewIamBackupImportResource().(*IamBackupImportResource)
+		resp := &frameworkresource.ConfigureResponse{}
+		r.Configure(context.Background(), frameworkresource.ConfigureRequest{}, resp)
+		if resp.Diagnostics.HasError() {
+			t.Fatalf("unexpected diagnostics: %v", resp.Diagnostics)
+		}
+		if r.client != nil {
+			t.Error("client must stay unset without provider data")
 		}
 	})
 
-	resource.ParallelTest(t, resource.TestCase{
+	t.Run("unexpected provider data", func(t *testing.T) {
+		r := NewIamBackupImportResource().(*IamBackupImportResource)
+		resp := &frameworkresource.ConfigureResponse{}
+		r.Configure(context.Background(), frameworkresource.ConfigureRequest{ProviderData: "not-a-client"}, resp)
+		if !resp.Diagnostics.HasError() {
+			t.Fatal("expected a diagnostic for unexpected provider data")
+		}
+		if got := resp.Diagnostics[0].Summary(); got != "Unexpected Resource Configure Type" {
+			t.Errorf("unexpected diagnostic summary: %s", got)
+		}
+	})
+
+	t.Run("all client", func(t *testing.T) {
+		srv, _ := newRecorderServer(t, http.StatusOK, "")
+		r := NewIamBackupImportResource().(*IamBackupImportResource)
+		resp := &frameworkresource.ConfigureResponse{}
+		r.Configure(context.Background(), frameworkresource.ConfigureRequest{ProviderData: newUnitAllClient(srv)}, resp)
+		if resp.Diagnostics.HasError() {
+			t.Fatalf("unexpected diagnostics: %v", resp.Diagnostics)
+		}
+		if r.client == nil {
+			t.Error("client was not set")
+		}
+	})
+}
+
+func TestIamBackupImportResourceCreate(t *testing.T) {
+	t.Run("imports the archive", func(t *testing.T) {
+		srv, recorder := newRecorderServer(t, http.StatusOK, "")
+		r := NewIamBackupImportResource().(*IamBackupImportResource)
+		r.client = newUnitAllClient(srv)
+		sch := resourceSchemaOf(t, r)
+
+		model := IamBackupImportResourceModel{
+			ContentBase64: types.StringValue(base64.StdEncoding.EncodeToString([]byte(iamBackupImportPayload))),
+		}
+		resp := &frameworkresource.CreateResponse{State: resourceState(t, sch, IamBackupImportResourceModel{})}
+		r.Create(context.Background(), frameworkresource.CreateRequest{Plan: resourcePlan(t, sch, model)}, resp)
+
+		if resp.Diagnostics.HasError() {
+			t.Fatalf("unexpected diagnostics: %v", resp.Diagnostics)
+		}
+		request := recorder.only(t)
+		if request.Method != http.MethodPut || request.Path != "/rustfs/admin/v3/import-iam" {
+			t.Errorf("unexpected request %s %s", request.Method, request.Path)
+		}
+		if string(request.Body) != iamBackupImportPayload {
+			t.Errorf("the decoded archive was not sent: %q", request.Body)
+		}
+
+		var got IamBackupImportResourceModel
+		if diags := resp.State.Get(context.Background(), &got); diags.HasError() {
+			t.Fatalf("reading the state back: %v", diags)
+		}
+		if got.ContentBase64.ValueString() != model.ContentBase64.ValueString() {
+			t.Errorf("state was not written from the plan: %+v", got)
+		}
+	})
+
+	t.Run("rejects invalid base64 before calling the API", func(t *testing.T) {
+		srv, recorder := newRecorderServer(t, http.StatusOK, "")
+		r := NewIamBackupImportResource().(*IamBackupImportResource)
+		r.client = newUnitAllClient(srv)
+		sch := resourceSchemaOf(t, r)
+
+		plan := resourcePlan(t, sch, IamBackupImportResourceModel{
+			ContentBase64: types.StringValue("not base64!"),
+		})
+		resp := &frameworkresource.CreateResponse{State: resourceState(t, sch, IamBackupImportResourceModel{})}
+		r.Create(context.Background(), frameworkresource.CreateRequest{Plan: plan}, resp)
+
+		assertDiagnosticSummary(t, resp.Diagnostics, "Invalid base64 data")
+		if got := recorder.count(); got != 0 {
+			t.Errorf("expected no admin API request, got %d", got)
+		}
+	})
+
+	t.Run("reports a server failure", func(t *testing.T) {
+		srv, _ := newRecorderServer(t, http.StatusInternalServerError, "<Error><Code>IamImportFailed</Code><Message>import failed</Message></Error>")
+		r := NewIamBackupImportResource().(*IamBackupImportResource)
+		r.client = newUnitAllClient(srv)
+		sch := resourceSchemaOf(t, r)
+
+		plan := resourcePlan(t, sch, IamBackupImportResourceModel{
+			ContentBase64: types.StringValue(base64.StdEncoding.EncodeToString([]byte(iamBackupImportPayload))),
+		})
+		resp := &frameworkresource.CreateResponse{State: resourceState(t, sch, IamBackupImportResourceModel{})}
+		r.Create(context.Background(), frameworkresource.CreateRequest{Plan: plan}, resp)
+
+		diagnostic := assertDiagnosticSummary(t, resp.Diagnostics, "Error importing IAM data")
+		if !strings.Contains(diagnostic.Detail(), "IamImportFailed") {
+			t.Errorf("diagnostic detail lost the server payload: %s", diagnostic.Detail())
+		}
+	})
+}
+
+func TestIamBackupImportResourceUpdate(t *testing.T) {
+	t.Run("imports the archive", func(t *testing.T) {
+		srv, recorder := newRecorderServer(t, http.StatusOK, "")
+		r := NewIamBackupImportResource().(*IamBackupImportResource)
+		r.client = newUnitAllClient(srv)
+		sch := resourceSchemaOf(t, r)
+
+		plan := IamBackupImportResourceModel{
+			ContentBase64: types.StringValue(base64.StdEncoding.EncodeToString([]byte(iamBackupImportPayload))),
+		}
+		resp := &frameworkresource.UpdateResponse{State: resourceState(t, sch, IamBackupImportResourceModel{})}
+		r.Update(context.Background(), frameworkresource.UpdateRequest{
+			Plan:  resourcePlan(t, sch, plan),
+			State: resourceState(t, sch, IamBackupImportResourceModel{}),
+		}, resp)
+
+		if resp.Diagnostics.HasError() {
+			t.Fatalf("unexpected diagnostics: %v", resp.Diagnostics)
+		}
+		request := recorder.only(t)
+		if request.Method != http.MethodPut || request.Path != "/rustfs/admin/v3/import-iam" {
+			t.Errorf("unexpected request %s %s", request.Method, request.Path)
+		}
+		if string(request.Body) != iamBackupImportPayload {
+			t.Errorf("the decoded archive was not sent: %q", request.Body)
+		}
+
+		var got IamBackupImportResourceModel
+		if diags := resp.State.Get(context.Background(), &got); diags.HasError() {
+			t.Fatalf("reading the state back: %v", diags)
+		}
+		if got.ContentBase64.ValueString() != plan.ContentBase64.ValueString() {
+			t.Errorf("state was not written from the plan: %+v", got)
+		}
+	})
+
+	t.Run("rejects invalid base64 before calling the API", func(t *testing.T) {
+		srv, recorder := newRecorderServer(t, http.StatusOK, "")
+		r := NewIamBackupImportResource().(*IamBackupImportResource)
+		r.client = newUnitAllClient(srv)
+		sch := resourceSchemaOf(t, r)
+
+		plan := resourcePlan(t, sch, IamBackupImportResourceModel{
+			ContentBase64: types.StringValue("not base64!"),
+		})
+		resp := &frameworkresource.UpdateResponse{State: resourceState(t, sch, IamBackupImportResourceModel{})}
+		r.Update(context.Background(), frameworkresource.UpdateRequest{
+			Plan:  plan,
+			State: resourceState(t, sch, IamBackupImportResourceModel{}),
+		}, resp)
+
+		assertDiagnosticSummary(t, resp.Diagnostics, "Invalid base64 data")
+		if got := recorder.count(); got != 0 {
+			t.Errorf("expected no admin API request, got %d", got)
+		}
+	})
+
+	t.Run("reports a server failure", func(t *testing.T) {
+		srv, _ := newRecorderServer(t, http.StatusInternalServerError, "<Error><Code>IamImportFailed</Code></Error>")
+		r := NewIamBackupImportResource().(*IamBackupImportResource)
+		r.client = newUnitAllClient(srv)
+		sch := resourceSchemaOf(t, r)
+
+		plan := resourcePlan(t, sch, IamBackupImportResourceModel{
+			ContentBase64: types.StringValue(base64.StdEncoding.EncodeToString([]byte(iamBackupImportPayload))),
+		})
+		resp := &frameworkresource.UpdateResponse{State: resourceState(t, sch, IamBackupImportResourceModel{})}
+		r.Update(context.Background(), frameworkresource.UpdateRequest{
+			Plan:  plan,
+			State: resourceState(t, sch, IamBackupImportResourceModel{}),
+		}, resp)
+
+		diagnostic := assertDiagnosticSummary(t, resp.Diagnostics, "Error importing IAM data")
+		if !strings.Contains(diagnostic.Detail(), "IamImportFailed") {
+			t.Errorf("diagnostic detail lost the server payload: %s", diagnostic.Detail())
+		}
+	})
+}
+
+func TestIamBackupImportResourceRead(t *testing.T) {
+	srv, recorder := newRecorderServer(t, http.StatusOK, "")
+	r := NewIamBackupImportResource().(*IamBackupImportResource)
+	r.client = newUnitAllClient(srv)
+	sch := resourceSchemaOf(t, r)
+
+	state := IamBackupImportResourceModel{
+		ContentBase64: types.StringValue(base64.StdEncoding.EncodeToString([]byte(iamBackupImportPayload))),
+	}
+	resp := &frameworkresource.ReadResponse{State: resourceState(t, sch, IamBackupImportResourceModel{})}
+	r.Read(context.Background(), frameworkresource.ReadRequest{State: resourceState(t, sch, state)}, resp)
+
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected diagnostics: %v", resp.Diagnostics)
+	}
+	var got IamBackupImportResourceModel
+	if diags := resp.State.Get(context.Background(), &got); diags.HasError() {
+		t.Fatalf("reading the state back: %v", diags)
+	}
+	if got.ContentBase64.ValueString() != state.ContentBase64.ValueString() {
+		t.Errorf("Read dropped state: %+v", got)
+	}
+	if got := recorder.count(); got != 0 {
+		t.Errorf("Read must not call the admin API, saw %d requests", got)
+	}
+}
+
+func TestIamBackupImportResourceDelete(t *testing.T) {
+	srv, recorder := newRecorderServer(t, http.StatusOK, "")
+	r := NewIamBackupImportResource().(*IamBackupImportResource)
+	r.client = newUnitAllClient(srv)
+	sch := resourceSchemaOf(t, r)
+
+	resp := &frameworkresource.DeleteResponse{}
+	r.Delete(context.Background(), frameworkresource.DeleteRequest{
+		State: resourceState(t, sch, IamBackupImportResourceModel{
+			ContentBase64: types.StringValue(base64.StdEncoding.EncodeToString([]byte(iamBackupImportPayload))),
+		}),
+	}, resp)
+
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected diagnostics: %v", resp.Diagnostics)
+	}
+	if got := recorder.count(); got != 0 {
+		t.Errorf("Delete is a no-op and must not call the admin API, saw %d requests", got)
+	}
+}
+
+// IAM import acceptance coverage. The import route is registered on RustFS
+// 1.0.x: importing is a write the server performs immediately, so the resource
+// has no readable state beyond the archive it was given and no ImportState.
+
+func TestAccIamBackupImportResource(t *testing.T) {
+	archive := testAccIamBackupArchive(t)
+
+	resource.Test(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
-				Config: testAccIamBackupImportConfig(archiveA),
+				Config: testAccProviderConfig() + fmt.Sprintf(`
+resource "rustfs_iam_backup_import" "test" {
+  content_base64 = %q
+}
+`, archive),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr(iamBackupImportResourceName, "content_base64", archiveA),
-					testAccCheckIamBackupImportPolicy(policyA, "s3:GetObject"),
+					resource.TestCheckResourceAttrSet(iamBackupImportResourceName, "content_base64"),
+					resource.TestCheckResourceAttr(iamBackupImportResourceName, "content_base64", archive),
 				),
-			},
-			{
-				// RequiresReplace: the archive change must be planned as a
-				// replacement, never as an in-place update.
-				Config:             testAccIamBackupImportConfig(archiveB),
-				PlanOnly:           true,
-				ExpectNonEmptyPlan: true,
-				ConfigPlanChecks: resource.ConfigPlanChecks{
-					PostApplyPreRefresh: []plancheck.PlanCheck{
-						plancheck.ExpectResourceAction(iamBackupImportResourceName, plancheck.ResourceActionReplace),
-					},
-				},
-			},
-			{
-				// Apply the replacement: the create path runs again and the
-				// server really holds the second archive's policy.
-				Config: testAccIamBackupImportConfig(archiveB),
-				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr(iamBackupImportResourceName, "content_base64", archiveB),
-					testAccCheckIamBackupImportPolicy(policyB, "s3:GetObjectVersion"),
-				),
-			},
-			{
-				// Computed consistency: nothing left to do.
-				Config:             testAccIamBackupImportConfig(archiveB),
-				PlanOnly:           true,
-				ExpectNonEmptyPlan: false,
-				ConfigPlanChecks: resource.ConfigPlanChecks{
-					PostApplyPreRefresh: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
-				},
-			},
-			{
-				// Out-of-band drift: policyB disappears from the server without
-				// Terraform knowing. The plan stays empty, because Read only
-				// echoes the stored state, and the state keeps the archive the
-				// last apply sent.
-				Config:             testAccIamBackupImportConfig(archiveB),
-				ExpectNonEmptyPlan: false,
-				Check: resource.ComposeAggregateTestCheckFunc(
-					testAccCheckIamBackupImportPolicy(policyB, "s3:GetObjectVersion"),
-					resource.TestCheckResourceAttr(iamBackupImportResourceName, "content_base64", archiveB),
-					testAccIamBackupImportDeletePolicyOutOfBand(t, policyB),
-				),
-				ConfigPlanChecks: resource.ConfigPlanChecks{
-					PostApplyPostRefresh: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
-				},
-			},
-			{
-				// Invalid base64 never reaches the server: the resource rejects
-				// it with its own diagnostic.
-				Config:      testAccIamBackupImportConfig("not-a-base64-archive!!"),
-				ExpectError: regexp.MustCompile(`Invalid base64 data`),
-			},
-			{
-				// A valid base64 payload that is not a ZIP archive is refused by
-				// the server, and the resource surfaces that refusal.
-				Config:      testAccIamBackupImportConfig(base64.StdEncoding.EncodeToString([]byte("this is not a zip archive"))),
-				ExpectError: regexp.MustCompile(`Error importing IAM data`),
 			},
 		},
 	})
 }
 
-func testAccIamBackupImportConfig(contentBase64 string) string {
-	return testAccProviderConfig() + fmt.Sprintf(`
-resource "rustfs_iam_backup_import" "test" {
-  content_base64 = "%s"
-}
-`, contentBase64)
-}
-
-// testAccIamBackupImportArchive builds a base64 ZIP archive in the layout
-// RustFS exports for IAM and returns it in the form the resource consumes.
-func testAccIamBackupImportArchive(t *testing.T, entries map[string]string) string {
+// testAccIamBackupArchive exports the live IAM data once so the configuration
+// carries a stable archive. It cannot come from the rustfs_iam_backup data
+// source: two consecutive exports differ byte for byte (the archive embeds
+// per-call metadata), and content_base64 forces replacement, so the plan after
+// apply would never be empty.
+func testAccIamBackupArchive(t *testing.T) string {
 	t.Helper()
-
-	var buf bytes.Buffer
-	zw := zip.NewWriter(&buf)
-	for name, body := range entries {
-		w, err := zw.Create(name)
-		if err != nil {
-			t.Fatalf("create zip entry %s: %v", name, err)
-		}
-		if _, err := w.Write([]byte(body)); err != nil {
-			t.Fatalf("write zip entry %s: %v", name, err)
-		}
+	testAccPreCheck(t)
+	client := testAccRustClient()
+	data, err := client.ExportIam()
+	if err != nil {
+		t.Fatalf("exporting the live IAM data: %v", err)
 	}
-	if err := zw.Close(); err != nil {
-		t.Fatalf("close zip: %v", err)
-	}
-
-	return base64.StdEncoding.EncodeToString(buf.Bytes())
-}
-
-// testAccCheckIamBackupImportPolicy reads the policy back from the server and
-// checks the action this archive asked for, which proves the import ran.
-func testAccCheckIamBackupImportPolicy(name, action string) resource.TestCheckFunc {
-	return func(*terraform.State) error {
-		client := testAccRustClient()
-		policy, err := client.ReadPolicy(name)
-		if err != nil {
-			return fmt.Errorf("imported policy %s not found on the server: %w", name, err)
-		}
-		if policy.Name != name {
-			return fmt.Errorf("imported policy name = %q, want %q", policy.Name, name)
-		}
-		for _, statement := range policy.Statement {
-			for _, got := range statement.Action {
-				if got == action {
-					return nil
-				}
-			}
-		}
-		return fmt.Errorf("imported policy %s does not carry action %q: %+v", name, action, policy.Statement)
-	}
-}
-
-// testAccIamBackupImportDeletePolicyOutOfBand removes an imported policy
-// through the admin client, behind Terraform's back.
-func testAccIamBackupImportDeletePolicyOutOfBand(t *testing.T, name string) resource.TestCheckFunc {
-	return func(*terraform.State) error {
-		client := testAccRustClient()
-		if err := client.DeletePolicy(name); err != nil {
-			return fmt.Errorf("out-of-band delete of policy %s: %w", name, err)
-		}
-		if _, err := client.ReadPolicy(name); err == nil {
-			return fmt.Errorf("policy %s still readable after the out-of-band delete", name)
-		}
-		t.Logf("deleted policy %s out of band; the follow-up plan must still be empty", name)
-		return nil
-	}
+	return base64.StdEncoding.EncodeToString(data)
 }

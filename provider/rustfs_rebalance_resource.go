@@ -78,9 +78,6 @@ func (r *RebalanceResource) Read(ctx context.Context, req resource.ReadRequest, 
 }
 
 func (r *RebalanceResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	// The plan is the new state: reading it into the model and writing the
-	// model back is what State.Set accepts. Passing req.Plan itself fails with
-	// "need a struct tag for \"tfsdk\" on Raw Value Conversion Error".
 	var plan RebalanceResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {

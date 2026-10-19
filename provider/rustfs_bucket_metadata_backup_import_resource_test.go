@@ -4,379 +4,335 @@
 package provider
 
 import (
-	"archive/zip"
-	"bytes"
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
-	"io"
-	"regexp"
+	"net/http"
+	"strings"
 	"testing"
 
-	"github.com/hashicorp/terraform-plugin-framework/path"
-	fwresource "github.com/hashicorp/terraform-plugin-framework/resource"
+	frameworkresource "github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
-	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
-	"github.com/hashicorp/terraform-plugin-go/tftypes"
-	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
-	"github.com/hashicorp/terraform-plugin-testing/plancheck"
-	"github.com/hashicorp/terraform-plugin-testing/terraform"
 )
-
-// rustfs_bucket_metadata_backup_import has a single required attribute,
-// content_base64, and it carries RequiresReplace(). Terraform can therefore
-// never call BucketMetadataBackupImportResource.Update: changing the archive is
-// planned as a delete/create pair and the create path runs again. The tests
-// below assert that from the schema
-// (TestBucketMetadataBackupImportResourceSchema), from the plan modifier itself
-// (TestBucketMetadataBackupImportResourceContentBase64RequiresReplace) and from
-// a real plan (TestAccBucketMetadataBackupImportResource), and cover what is
-// reachable instead: create, import (with the bucket metadata read back from
-// the server), replace, the empty follow-up plan, and out-of-band drift.
 
 const bucketMetadataBackupImportResourceName = "rustfs_bucket_metadata_backup_import.test"
 
-// The quotas the archives below carry, in bytes. Every step asserts the exact
-// value the server holds afterwards, so the three must differ.
-const (
-	bucketMetadataBackupImportQuotaA = 1048576
-	bucketMetadataBackupImportQuotaB = 2097152
-	bucketMetadataBackupImportQuotaC = 4194304
-)
+// bucketMetadataBackupImportPayload is the decoded archive the tests feed the
+// resource: the ZIP local-file magic plus a body, so the assertion compares
+// real bytes rather than a round-tripped string.
+const bucketMetadataBackupImportPayload = "PK\x03\x04archive"
 
-// testAccBucketMetadataBackupImportSchema returns the resource schema under test.
-func testAccBucketMetadataBackupImportSchema(t *testing.T) schema.Schema {
-	t.Helper()
-
-	resp := fwresource.SchemaResponse{}
-	NewBucketMetadataBackupImportResource().Schema(context.Background(), fwresource.SchemaRequest{}, &resp)
-	if resp.Diagnostics.HasError() {
-		t.Fatalf("schema diagnostics: %v", resp.Diagnostics)
-	}
-
-	return resp.Schema
-}
-
-// The resource exposes exactly one attribute and it is replace-only, so no
-// in-place update plan can ever exist.
 func TestBucketMetadataBackupImportResourceSchema(t *testing.T) {
-	sch := testAccBucketMetadataBackupImportSchema(t)
+	sch := resourceSchemaOf(t, NewBucketMetadataBackupImportResource())
 
-	if len(sch.Attributes) != 1 {
-		t.Fatalf("expected exactly one attribute, got %d: %v", len(sch.Attributes), sch.Attributes)
+	attrs := sch.GetAttributes()
+	if len(attrs) != 1 {
+		t.Errorf("expected 1 attribute, got %d: %v", len(attrs), attrs)
 	}
 
-	attr, ok := sch.Attributes["content_base64"].(schema.StringAttribute)
+	content, ok := attrs["content_base64"].(schema.StringAttribute)
 	if !ok {
-		t.Fatalf("content_base64 is not a StringAttribute: %T", sch.Attributes["content_base64"])
+		t.Fatalf("content_base64 is not a StringAttribute")
 	}
-	if !attr.Required {
-		t.Error("content_base64 must be required")
+	if !content.Required || content.Optional || content.Computed {
+		t.Errorf("content_base64 must be Required only: %+v", content)
 	}
-	if !attr.Sensitive {
-		t.Error("content_base64 must be sensitive: it carries bucket metadata")
+	if !content.Sensitive {
+		t.Error("content_base64 carries the whole bucket metadata backup and must be Sensitive")
 	}
-	if len(attr.PlanModifiers) != 1 {
-		t.Fatalf("content_base64 must carry exactly one plan modifier, got %d", len(attr.PlanModifiers))
+	if !hasRequiresReplace(content.PlanModifiers) {
+		t.Error("content_base64 must force recreation, an import is a one-shot action")
 	}
-	if got, want := attr.PlanModifiers[0].Description(context.Background()), stringplanmodifier.RequiresReplace().Description(context.Background()); got != want {
-		t.Errorf("content_base64 plan modifier must be RequiresReplace, got %q", got)
+	if content.Description == "" {
+		t.Error("content_base64 has no description, tfplugindocs would publish an empty row")
 	}
 }
 
-// Run the resource's own plan modifier over a state/plan pair that differs:
-// RequiresReplace means a change can only ever be planned as a replacement,
-// which is why Update is dead code.
-func TestBucketMetadataBackupImportResourceContentBase64RequiresReplace(t *testing.T) {
-	ctx := context.Background()
-	sch := testAccBucketMetadataBackupImportSchema(t)
-
-	attr, ok := sch.Attributes["content_base64"].(schema.StringAttribute)
-	if !ok {
-		t.Fatalf("content_base64 is not a StringAttribute: %T", sch.Attributes["content_base64"])
-	}
-
-	objectType, ok := sch.Type().TerraformType(ctx).(tftypes.Object)
-	if !ok {
-		t.Fatalf("schema type is not an object: %T", sch.Type().TerraformType(ctx))
-	}
-
-	archiveA := base64.StdEncoding.EncodeToString([]byte("archive-a"))
-	archiveB := base64.StdEncoding.EncodeToString([]byte("archive-b"))
-
-	value := func(content string) tftypes.Value {
-		return tftypes.NewValue(objectType, map[string]tftypes.Value{
-			"content_base64": tftypes.NewValue(tftypes.String, content),
-		})
-	}
-
-	for _, tc := range []struct {
-		name            string
-		state, plan     string
-		wantReplacement bool
-	}{
-		{name: "changed", state: archiveA, plan: archiveB, wantReplacement: true},
-		{name: "unchanged", state: archiveA, plan: archiveA, wantReplacement: false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			req := planmodifier.StringRequest{
-				Path:       path.Root("content_base64"),
-				Config:     tfsdk.Config{Schema: sch, Raw: value(tc.plan)},
-				Plan:       tfsdk.Plan{Schema: sch, Raw: value(tc.plan)},
-				State:      tfsdk.State{Schema: sch, Raw: value(tc.state)},
-				PlanValue:  types.StringValue(tc.plan),
-				StateValue: types.StringValue(tc.state),
-			}
-
-			resp := planmodifier.StringResponse{}
-			for _, modifier := range attr.PlanModifiers {
-				modifier.PlanModifyString(ctx, req, &resp)
-			}
-			if resp.Diagnostics.HasError() {
-				t.Fatalf("plan modifier diagnostics: %v", resp.Diagnostics)
-			}
-			if resp.RequiresReplace != tc.wantReplacement {
-				t.Errorf("RequiresReplace = %v, want %v", resp.RequiresReplace, tc.wantReplacement)
-			}
-		})
+func TestBucketMetadataBackupImportResourceMetadata(t *testing.T) {
+	resp := &frameworkresource.MetadataResponse{}
+	NewBucketMetadataBackupImportResource().Metadata(context.Background(), frameworkresource.MetadataRequest{ProviderTypeName: "rustfs"}, resp)
+	if resp.TypeName != "rustfs_bucket_metadata_backup_import" {
+		t.Errorf("expected rustfs_bucket_metadata_backup_import, got %s", resp.TypeName)
 	}
 }
 
-// TestAccBucketMetadataBackupImportResource covers the contract that is
-// reachable:
-//
-//  1. create imports a base64 ZIP for a bucket that already exists and the
-//     imported quota is read back from the server (Update is never called: the
-//     attribute is RequiresReplace),
-//  2. changing content_base64 plans a replacement for that attribute,
-//  3. applying it runs the create path again and the new quota is read back
-//     from the server,
-//  4. the follow-up plan is explicitly empty,
-//  5. metadata imported behind Terraform's back does not appear in the plan:
-//     Read only echoes the state, so this resource never reconciles external
-//     drift.
-func TestAccBucketMetadataBackupImportResource(t *testing.T) {
-	bucket := fmt.Sprintf("tf-acc-bm-import-%d", acctest.RandInt())
-
-	archiveA := testAccBucketMetadataBackupImportArchive(t, bucket, bucketMetadataBackupImportQuotaA)
-	archiveB := testAccBucketMetadataBackupImportArchive(t, bucket, bucketMetadataBackupImportQuotaB)
-	archiveC := testAccBucketMetadataBackupImportArchive(t, bucket, bucketMetadataBackupImportQuotaC)
-
-	// The bucket itself is destroyed by its own resource; the imported quota
-	// metadata is not (the import resource cannot delete what it imported), so
-	// remove it here.
-	t.Cleanup(func() {
-		client := testAccRustClient()
-		_ = client.DeletQuota(bucket)
+func TestBucketMetadataBackupImportResourceConfigure(t *testing.T) {
+	t.Run("nil provider data", func(t *testing.T) {
+		r := NewBucketMetadataBackupImportResource().(*BucketMetadataBackupImportResource)
+		resp := &frameworkresource.ConfigureResponse{}
+		r.Configure(context.Background(), frameworkresource.ConfigureRequest{}, resp)
+		if resp.Diagnostics.HasError() {
+			t.Fatalf("unexpected diagnostics: %v", resp.Diagnostics)
+		}
+		if r.client != nil {
+			t.Error("client must stay unset without provider data")
+		}
 	})
 
-	resource.ParallelTest(t, resource.TestCase{
+	t.Run("unexpected provider data", func(t *testing.T) {
+		r := NewBucketMetadataBackupImportResource().(*BucketMetadataBackupImportResource)
+		resp := &frameworkresource.ConfigureResponse{}
+		r.Configure(context.Background(), frameworkresource.ConfigureRequest{ProviderData: "not-a-client"}, resp)
+		if !resp.Diagnostics.HasError() {
+			t.Fatal("expected a diagnostic for unexpected provider data")
+		}
+		if got := resp.Diagnostics[0].Summary(); got != "Unexpected Resource Configure Type" {
+			t.Errorf("unexpected diagnostic summary: %s", got)
+		}
+	})
+
+	t.Run("all client", func(t *testing.T) {
+		srv, _ := newRecorderServer(t, http.StatusOK, "")
+		r := NewBucketMetadataBackupImportResource().(*BucketMetadataBackupImportResource)
+		resp := &frameworkresource.ConfigureResponse{}
+		r.Configure(context.Background(), frameworkresource.ConfigureRequest{ProviderData: newUnitAllClient(srv)}, resp)
+		if resp.Diagnostics.HasError() {
+			t.Fatalf("unexpected diagnostics: %v", resp.Diagnostics)
+		}
+		if r.client == nil {
+			t.Error("client was not set")
+		}
+	})
+}
+
+func TestBucketMetadataBackupImportResourceCreate(t *testing.T) {
+	t.Run("imports the archive", func(t *testing.T) {
+		srv, recorder := newRecorderServer(t, http.StatusOK, "")
+		r := NewBucketMetadataBackupImportResource().(*BucketMetadataBackupImportResource)
+		r.client = newUnitAllClient(srv)
+		sch := resourceSchemaOf(t, r)
+
+		model := BucketMetadataBackupImportResourceModel{
+			ContentBase64: types.StringValue(base64.StdEncoding.EncodeToString([]byte(bucketMetadataBackupImportPayload))),
+		}
+		resp := &frameworkresource.CreateResponse{State: resourceState(t, sch, BucketMetadataBackupImportResourceModel{})}
+		r.Create(context.Background(), frameworkresource.CreateRequest{Plan: resourcePlan(t, sch, model)}, resp)
+
+		if resp.Diagnostics.HasError() {
+			t.Fatalf("unexpected diagnostics: %v", resp.Diagnostics)
+		}
+		request := recorder.only(t)
+		if request.Method != http.MethodPut || request.Path != "/rustfs/admin/v3/import-bucket-metadata" {
+			t.Errorf("unexpected request %s %s", request.Method, request.Path)
+		}
+		if string(request.Body) != bucketMetadataBackupImportPayload {
+			t.Errorf("the decoded archive was not sent: %q", request.Body)
+		}
+
+		var got BucketMetadataBackupImportResourceModel
+		if diags := resp.State.Get(context.Background(), &got); diags.HasError() {
+			t.Fatalf("reading the state back: %v", diags)
+		}
+		if got.ContentBase64.ValueString() != model.ContentBase64.ValueString() {
+			t.Errorf("state was not written from the plan: %+v", got)
+		}
+	})
+
+	t.Run("rejects invalid base64 before calling the API", func(t *testing.T) {
+		srv, recorder := newRecorderServer(t, http.StatusOK, "")
+		r := NewBucketMetadataBackupImportResource().(*BucketMetadataBackupImportResource)
+		r.client = newUnitAllClient(srv)
+		sch := resourceSchemaOf(t, r)
+
+		plan := resourcePlan(t, sch, BucketMetadataBackupImportResourceModel{
+			ContentBase64: types.StringValue("not base64!"),
+		})
+		resp := &frameworkresource.CreateResponse{State: resourceState(t, sch, BucketMetadataBackupImportResourceModel{})}
+		r.Create(context.Background(), frameworkresource.CreateRequest{Plan: plan}, resp)
+
+		assertDiagnosticSummary(t, resp.Diagnostics, "Invalid base64 data")
+		if got := recorder.count(); got != 0 {
+			t.Errorf("expected no admin API request, got %d", got)
+		}
+	})
+
+	t.Run("reports a server failure", func(t *testing.T) {
+		srv, _ := newRecorderServer(t, http.StatusInternalServerError, "<Error><Code>MetadataImportFailed</Code><Message>import failed</Message></Error>")
+		r := NewBucketMetadataBackupImportResource().(*BucketMetadataBackupImportResource)
+		r.client = newUnitAllClient(srv)
+		sch := resourceSchemaOf(t, r)
+
+		plan := resourcePlan(t, sch, BucketMetadataBackupImportResourceModel{
+			ContentBase64: types.StringValue(base64.StdEncoding.EncodeToString([]byte(bucketMetadataBackupImportPayload))),
+		})
+		resp := &frameworkresource.CreateResponse{State: resourceState(t, sch, BucketMetadataBackupImportResourceModel{})}
+		r.Create(context.Background(), frameworkresource.CreateRequest{Plan: plan}, resp)
+
+		diagnostic := assertDiagnosticSummary(t, resp.Diagnostics, "Error importing bucket metadata")
+		if !strings.Contains(diagnostic.Detail(), "MetadataImportFailed") {
+			t.Errorf("diagnostic detail lost the server payload: %s", diagnostic.Detail())
+		}
+	})
+}
+
+func TestBucketMetadataBackupImportResourceUpdate(t *testing.T) {
+	t.Run("imports the archive", func(t *testing.T) {
+		srv, recorder := newRecorderServer(t, http.StatusOK, "")
+		r := NewBucketMetadataBackupImportResource().(*BucketMetadataBackupImportResource)
+		r.client = newUnitAllClient(srv)
+		sch := resourceSchemaOf(t, r)
+
+		plan := BucketMetadataBackupImportResourceModel{
+			ContentBase64: types.StringValue(base64.StdEncoding.EncodeToString([]byte(bucketMetadataBackupImportPayload))),
+		}
+		resp := &frameworkresource.UpdateResponse{State: resourceState(t, sch, BucketMetadataBackupImportResourceModel{})}
+		r.Update(context.Background(), frameworkresource.UpdateRequest{
+			Plan:  resourcePlan(t, sch, plan),
+			State: resourceState(t, sch, BucketMetadataBackupImportResourceModel{}),
+		}, resp)
+
+		if resp.Diagnostics.HasError() {
+			t.Fatalf("unexpected diagnostics: %v", resp.Diagnostics)
+		}
+		request := recorder.only(t)
+		if request.Method != http.MethodPut || request.Path != "/rustfs/admin/v3/import-bucket-metadata" {
+			t.Errorf("unexpected request %s %s", request.Method, request.Path)
+		}
+		if string(request.Body) != bucketMetadataBackupImportPayload {
+			t.Errorf("the decoded archive was not sent: %q", request.Body)
+		}
+
+		var got BucketMetadataBackupImportResourceModel
+		if diags := resp.State.Get(context.Background(), &got); diags.HasError() {
+			t.Fatalf("reading the state back: %v", diags)
+		}
+		if got.ContentBase64.ValueString() != plan.ContentBase64.ValueString() {
+			t.Errorf("state was not written from the plan: %+v", got)
+		}
+	})
+
+	t.Run("rejects invalid base64 before calling the API", func(t *testing.T) {
+		srv, recorder := newRecorderServer(t, http.StatusOK, "")
+		r := NewBucketMetadataBackupImportResource().(*BucketMetadataBackupImportResource)
+		r.client = newUnitAllClient(srv)
+		sch := resourceSchemaOf(t, r)
+
+		plan := resourcePlan(t, sch, BucketMetadataBackupImportResourceModel{
+			ContentBase64: types.StringValue("not base64!"),
+		})
+		resp := &frameworkresource.UpdateResponse{State: resourceState(t, sch, BucketMetadataBackupImportResourceModel{})}
+		r.Update(context.Background(), frameworkresource.UpdateRequest{
+			Plan:  plan,
+			State: resourceState(t, sch, BucketMetadataBackupImportResourceModel{}),
+		}, resp)
+
+		assertDiagnosticSummary(t, resp.Diagnostics, "Invalid base64 data")
+		if got := recorder.count(); got != 0 {
+			t.Errorf("expected no admin API request, got %d", got)
+		}
+	})
+
+	t.Run("reports a server failure", func(t *testing.T) {
+		srv, _ := newRecorderServer(t, http.StatusInternalServerError, "<Error><Code>MetadataImportFailed</Code></Error>")
+		r := NewBucketMetadataBackupImportResource().(*BucketMetadataBackupImportResource)
+		r.client = newUnitAllClient(srv)
+		sch := resourceSchemaOf(t, r)
+
+		plan := resourcePlan(t, sch, BucketMetadataBackupImportResourceModel{
+			ContentBase64: types.StringValue(base64.StdEncoding.EncodeToString([]byte(bucketMetadataBackupImportPayload))),
+		})
+		resp := &frameworkresource.UpdateResponse{State: resourceState(t, sch, BucketMetadataBackupImportResourceModel{})}
+		r.Update(context.Background(), frameworkresource.UpdateRequest{
+			Plan:  plan,
+			State: resourceState(t, sch, BucketMetadataBackupImportResourceModel{}),
+		}, resp)
+
+		diagnostic := assertDiagnosticSummary(t, resp.Diagnostics, "Error importing bucket metadata")
+		if !strings.Contains(diagnostic.Detail(), "MetadataImportFailed") {
+			t.Errorf("diagnostic detail lost the server payload: %s", diagnostic.Detail())
+		}
+	})
+}
+
+func TestBucketMetadataBackupImportResourceRead(t *testing.T) {
+	srv, recorder := newRecorderServer(t, http.StatusOK, "")
+	r := NewBucketMetadataBackupImportResource().(*BucketMetadataBackupImportResource)
+	r.client = newUnitAllClient(srv)
+	sch := resourceSchemaOf(t, r)
+
+	state := BucketMetadataBackupImportResourceModel{
+		ContentBase64: types.StringValue(base64.StdEncoding.EncodeToString([]byte(bucketMetadataBackupImportPayload))),
+	}
+	resp := &frameworkresource.ReadResponse{State: resourceState(t, sch, BucketMetadataBackupImportResourceModel{})}
+	r.Read(context.Background(), frameworkresource.ReadRequest{State: resourceState(t, sch, state)}, resp)
+
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected diagnostics: %v", resp.Diagnostics)
+	}
+	var got BucketMetadataBackupImportResourceModel
+	if diags := resp.State.Get(context.Background(), &got); diags.HasError() {
+		t.Fatalf("reading the state back: %v", diags)
+	}
+	if got.ContentBase64.ValueString() != state.ContentBase64.ValueString() {
+		t.Errorf("Read dropped state: %+v", got)
+	}
+	if got := recorder.count(); got != 0 {
+		t.Errorf("Read must not call the admin API, saw %d requests", got)
+	}
+}
+
+func TestBucketMetadataBackupImportResourceDelete(t *testing.T) {
+	srv, recorder := newRecorderServer(t, http.StatusOK, "")
+	r := NewBucketMetadataBackupImportResource().(*BucketMetadataBackupImportResource)
+	r.client = newUnitAllClient(srv)
+	sch := resourceSchemaOf(t, r)
+
+	resp := &frameworkresource.DeleteResponse{}
+	r.Delete(context.Background(), frameworkresource.DeleteRequest{
+		State: resourceState(t, sch, BucketMetadataBackupImportResourceModel{
+			ContentBase64: types.StringValue(base64.StdEncoding.EncodeToString([]byte(bucketMetadataBackupImportPayload))),
+		}),
+	}, resp)
+
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected diagnostics: %v", resp.Diagnostics)
+	}
+	if got := recorder.count(); got != 0 {
+		t.Errorf("Delete is a no-op and must not call the admin API, saw %d requests", got)
+	}
+}
+
+// Bucket metadata import acceptance coverage. The import route is registered on
+// RustFS 1.0.x: importing is a write the server performs immediately, so the
+// resource has no readable state beyond the archive it was given and no
+// ImportState.
+
+func TestAccBucketMetadataBackupImportResource(t *testing.T) {
+	archive := testAccBucketMetadataBackupArchive(t)
+
+	resource.Test(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
-		CheckDestroy:             testAccCheckBucketDestroy,
 		Steps: []resource.TestStep{
 			{
-				Config: testAccBucketMetadataBackupImportConfig(bucket, archiveA),
+				Config: testAccProviderConfig() + fmt.Sprintf(`
+resource "rustfs_bucket_metadata_backup_import" "test" {
+  content_base64 = %q
+}
+`, archive),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr(bucketMetadataBackupImportResourceName, "content_base64", archiveA),
-					testAccCheckBucketMetadataBackupImportQuota(t, bucket, bucketMetadataBackupImportQuotaA),
+					resource.TestCheckResourceAttrSet(bucketMetadataBackupImportResourceName, "content_base64"),
+					resource.TestCheckResourceAttr(bucketMetadataBackupImportResourceName, "content_base64", archive),
 				),
-			},
-			{
-				// RequiresReplace: the archive change must be planned as a
-				// replacement, never as an in-place update.
-				Config:             testAccBucketMetadataBackupImportConfig(bucket, archiveB),
-				PlanOnly:           true,
-				ExpectNonEmptyPlan: true,
-				ConfigPlanChecks: resource.ConfigPlanChecks{
-					PostApplyPreRefresh: []plancheck.PlanCheck{
-						plancheck.ExpectResourceAction(bucketMetadataBackupImportResourceName, plancheck.ResourceActionReplace),
-					},
-				},
-			},
-			{
-				// Apply the replacement: the create path runs again and the
-				// server really holds the second archive's quota.
-				Config: testAccBucketMetadataBackupImportConfig(bucket, archiveB),
-				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr(bucketMetadataBackupImportResourceName, "content_base64", archiveB),
-					testAccCheckBucketMetadataBackupImportQuota(t, bucket, bucketMetadataBackupImportQuotaB),
-				),
-			},
-			{
-				// Computed consistency: nothing left to do.
-				Config:             testAccBucketMetadataBackupImportConfig(bucket, archiveB),
-				PlanOnly:           true,
-				ExpectNonEmptyPlan: false,
-				ConfigPlanChecks: resource.ConfigPlanChecks{
-					PostApplyPreRefresh: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
-				},
-			},
-			{
-				// Out-of-band drift: a third archive is imported straight
-				// through the admin API, behind Terraform's back. The server
-				// moves to quota C while the state keeps archive B and the plan
-				// stays empty, because Read only echoes the stored state.
-				Config:             testAccBucketMetadataBackupImportConfig(bucket, archiveB),
-				ExpectNonEmptyPlan: false,
-				Check: resource.ComposeAggregateTestCheckFunc(
-					testAccCheckBucketMetadataBackupImportQuota(t, bucket, bucketMetadataBackupImportQuotaB),
-					resource.TestCheckResourceAttr(bucketMetadataBackupImportResourceName, "content_base64", archiveB),
-					testAccBucketMetadataBackupImportOutOfBand(t, archiveC, bucket, bucketMetadataBackupImportQuotaC),
-				),
-				ConfigPlanChecks: resource.ConfigPlanChecks{
-					PostApplyPostRefresh: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
-				},
-			},
-			{
-				// Invalid base64 never reaches the server: the resource rejects
-				// it with its own diagnostic.
-				Config:      testAccBucketMetadataBackupImportConfig(bucket, "not-a-base64-archive!!"),
-				ExpectError: regexp.MustCompile(`Invalid base64 data`),
-			},
-			{
-				// A valid base64 payload that is not a ZIP archive is refused by
-				// the server, and the resource surfaces that refusal.
-				Config:      testAccBucketMetadataBackupImportConfig(bucket, base64.StdEncoding.EncodeToString([]byte("this is not a zip archive"))),
-				ExpectError: regexp.MustCompile(`Error importing bucket metadata`),
 			},
 		},
 	})
 }
 
-func testAccBucketMetadataBackupImportConfig(bucket, contentBase64 string) string {
-	return testAccProviderConfig() + fmt.Sprintf(`
-resource "rustfs_bucket" "test" {
-  name = "%s"
-}
-
-resource "rustfs_bucket_metadata_backup_import" "test" {
-  content_base64 = "%s"
-
-  # The metadata import targets an existing bucket, so it must run after it.
-  depends_on = [rustfs_bucket.test]
-}
-`, bucket, contentBase64)
-}
-
-// testAccBucketMetadataBackupImportArchive builds a base64 ZIP in the layout
-// RustFS exports for bucket metadata: one directory per bucket holding the
-// metadata documents. It is the shape the equivalent data source produces.
-func testAccBucketMetadataBackupImportArchive(t *testing.T, bucket string, quota int) string {
+// testAccBucketMetadataBackupArchive exports the live bucket metadata once so
+// the configuration carries a stable archive. The export is currently
+// byte-stable, but a data source would still re-export on every plan and
+// content_base64 forces replacement, so the step would depend on the cluster
+// not changing mid-plan.
+func testAccBucketMetadataBackupArchive(t *testing.T) string {
 	t.Helper()
-
-	document, err := json.Marshal(struct {
-		Quota     int    `json:"quota"`
-		QuotaType string `json:"quota_type"`
-	}{Quota: quota, QuotaType: "Hard"})
-	if err != nil {
-		t.Fatalf("marshal quota document: %v", err)
-	}
-
-	var buf bytes.Buffer
-	zw := zip.NewWriter(&buf)
-	w, err := zw.Create(bucket + "/quota.json")
-	if err != nil {
-		t.Fatalf("create zip entry: %v", err)
-	}
-	if _, err := w.Write(document); err != nil {
-		t.Fatalf("write zip entry: %v", err)
-	}
-	if err := zw.Close(); err != nil {
-		t.Fatalf("close zip: %v", err)
-	}
-
-	return base64.StdEncoding.EncodeToString(buf.Bytes())
-}
-
-// testAccCheckBucketMetadataBackupImportQuota exports the bucket metadata from
-// the server and checks the quota stored for the bucket, which proves the
-// import ran and what it wrote.
-func testAccCheckBucketMetadataBackupImportQuota(t *testing.T, bucket string, want int) resource.TestCheckFunc {
-	return func(*terraform.State) error {
-		got, err := testAccBucketMetadataBackupImportServerQuota(bucket)
-		if err != nil {
-			return err
-		}
-		if got != want {
-			return fmt.Errorf("server quota for bucket %s = %d, want %d", bucket, got, want)
-		}
-		t.Logf("server reports quota %d for bucket %s", got, bucket)
-		return nil
-	}
-}
-
-// testAccBucketMetadataBackupImportOutOfBand imports a third archive directly
-// through the admin API, without Terraform, and checks the server moved on.
-func testAccBucketMetadataBackupImportOutOfBand(t *testing.T, archive, bucket string, wantQuota int) resource.TestCheckFunc {
-	return func(*terraform.State) error {
-		data, err := base64.StdEncoding.DecodeString(archive)
-		if err != nil {
-			return fmt.Errorf("decode out-of-band archive: %w", err)
-		}
-		client := testAccRustClient()
-		if err := client.ImportBucketMetadata(data); err != nil {
-			return fmt.Errorf("out-of-band bucket metadata import: %w", err)
-		}
-
-		got, err := testAccBucketMetadataBackupImportServerQuota(bucket)
-		if err != nil {
-			return err
-		}
-		if got != wantQuota {
-			return fmt.Errorf("server quota for bucket %s after the out-of-band import = %d, want %d", bucket, got, wantQuota)
-		}
-		t.Logf("imported quota %d out of band for bucket %s; the follow-up plan must still be empty", got, bucket)
-		return nil
-	}
-}
-
-// testAccBucketMetadataBackupImportServerQuota reads the quota the server holds
-// for the bucket by parsing its own metadata export, which is the document the
-// import endpoint writes.
-func testAccBucketMetadataBackupImportServerQuota(bucket string) (int, error) {
+	testAccPreCheck(t)
 	client := testAccRustClient()
-	exported, err := client.ExportBucketMetadata()
+	data, err := client.ExportBucketMetadata()
 	if err != nil {
-		return 0, fmt.Errorf("export bucket metadata: %w", err)
+		t.Fatalf("exporting the live bucket metadata: %v", err)
 	}
-
-	reader, err := zip.NewReader(bytes.NewReader(exported), int64(len(exported)))
-	if err != nil {
-		return 0, fmt.Errorf("read exported archive: %w", err)
-	}
-
-	entry := bucket + "/quota.json"
-	for _, file := range reader.File {
-		if file.Name != entry {
-			continue
-		}
-		rc, err := file.Open()
-		if err != nil {
-			return 0, fmt.Errorf("open %s: %w", entry, err)
-		}
-		body, err := io.ReadAll(rc)
-		rc.Close()
-		if err != nil {
-			return 0, fmt.Errorf("read %s: %w", entry, err)
-		}
-
-		var document struct {
-			Quota *int `json:"quota"`
-		}
-		if err := json.Unmarshal(body, &document); err != nil {
-			return 0, fmt.Errorf("parse %s (%s): %w", entry, body, err)
-		}
-		if document.Quota == nil {
-			return 0, fmt.Errorf("%s carries no quota: %s", entry, body)
-		}
-		return *document.Quota, nil
-	}
-
-	return 0, fmt.Errorf("the server holds no %s after the import", entry)
+	return base64.StdEncoding.EncodeToString(data)
 }
