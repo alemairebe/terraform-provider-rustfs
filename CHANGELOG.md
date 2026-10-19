@@ -1,6 +1,20 @@
 ## Unreleased
 
 BUG FIXES:
+- `rustfs_pools` reads `GET /rustfs/admin/v3/pools/list`, the route RustFS 1.0.x serves, instead of the
+  MinIO-era `list-pools`, and exposes each pool's command line — its identity in the admin API — as
+  the pool name. The data source failed with `501 NotImplemented` against every supported server
+  before, and would have reported empty names even if the route had answered
+- `rustfs_users` decodes the `list-users` payload the server actually sends: an object keyed by access
+  key (`{"alice":{"status":"enabled"}}`, `{}` when a bucket has no users) instead of a JSON array it
+  never returns, and lists users sorted by access key so the attribute does not reshuffle between
+  reads
+- `rustfs_rebalance` starts a rebalance with `POST /rustfs/admin/v3/rebalance/start` (the registered
+  method; `PUT` is answered with `501 NotImplemented`) and `Update` copies `RebalanceResourceModel`
+  into the state instead of handing the framework a `tfsdk.Plan`, which failed the state write
+- The `rustfs_tier` example and the generated docs show the configuration shape RustFS 1.0.x accepts:
+  a top-level `type` inside `config_json` and camelCase credentials (`accessKey`/`secretKey`). The
+  previous example left `type` out, which the server rejects with "Specified tier type is unsupported"
 - `rustfs_remote_target` now replaces the target when `region` or `path` changes. RustFS embeds the
   region in the target ARN and only applies `path` through an update group this client does not
   send, so both were silently ignored and the plan never converged. Deleting the resource is also
@@ -8,12 +22,24 @@ BUG FIXES:
   the target deletion that follows reports "not found" and that is treated as success
 
 IMPROVEMENTS:
+- The eight types that had no test — `rustfs_tier`, `rustfs_rebalance`, `rustfs_iam_backup_import`,
+  `rustfs_bucket_metadata_backup_import`, `rustfs_pools`, `rustfs_users`, `rustfs_iam_backup` and
+  `rustfs_bucket_metadata_backup` — now have schema, metadata, configure and CRUD units driven
+  against a mocked admin API, which covers their failure paths too (invalid JSON, undecodable
+  base64, server errors), plus acceptance tests against a live server: the import resources import a
+  real archive exported from it, the pools and users data sources assert their shape, and
+  `rustfs_tier` covers its import round trip. The acceptance compose file runs a second RustFS so a
+  tier has a backend the server can probe (`RUSTFS_TIER_ENDPOINT`, plus `RUSTFS_TIER_S3_ENDPOINT`
+  for host-based runs)
+- `rustfs_rebalance`'s acceptance test skips itself unless the deployment has more than one pool: a
+  single-pool deployment has nothing to rebalance and the route answers `501 NotImplemented`, which
+  is what every supported server in CI reports
 - Statement coverage is enforced and published. `scripts/coverage-gate.sh` fails the new `Coverage`
   check when the merged unit + acceptance coverage drops below
   `.github/coverage-baseline.txt`, and the `latest` cell of the acceptance matrix repeats that gate
   on `main`, so the floor can only move up. The README carries a generated coverage badge and a
   per-package bar chart (`scripts/coverage-readme.sh`); CI fails when they drift from the baseline.
-  Merged coverage is 74.6% today, with 80% and then 90% tracked as milestones in the issue tracker
+  Merged coverage is 78.6% today, with 80% and then 90% tracked as milestones in the issue tracker
 - The acceptance fixture provisions the prerequisites the bucket replication, bucket notification
   and remote target resources need, so their `TestAcc` tests run in CI instead of skipping:
   `rustfs-peer` is a second RustFS instance registered as a replication target, and the bucket

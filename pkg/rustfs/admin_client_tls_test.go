@@ -18,7 +18,7 @@ import (
 func TestNewUsesTheConfiguredHTTPClient(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`[{"name":"pool-0"}]`))
+		_, _ = w.Write([]byte(`[{"id":0,"cmdline":"/data","status":"active"}]`))
 	}))
 	defer server.Close()
 
@@ -33,7 +33,7 @@ func TestNewUsesTheConfiguredHTTPClient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("admin request through the configured client failed: %v", err)
 	}
-	if len(pools) != 1 || pools[0].Name != "pool-0" {
+	if len(pools) != 1 || pools[0].Name != "/data" {
 		t.Fatalf("unexpected pools: %+v", pools)
 	}
 
