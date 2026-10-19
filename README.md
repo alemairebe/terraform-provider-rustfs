@@ -2,7 +2,7 @@
 
 [![CI](https://img.shields.io/github/actions/workflow/status/caberdo/terraform-provider-rustfs/test.yml?branch=main&label=CI)](https://github.com/caberdo/terraform-provider-rustfs/actions/workflows/test.yml)
 <!-- coverage-badge:start -->
-[![Coverage](https://img.shields.io/badge/coverage-69.1%25-orange)](#testing-and-coverage)
+[![Coverage](https://img.shields.io/badge/coverage-73.1%25-yellow)](#testing-and-coverage)
 <!-- coverage-badge:end -->
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/caberdo/terraform-provider-rustfs/badge)](https://scorecard.dev/viewer/?uri=github.com/caberdo/terraform-provider-rustfs)
 [![Release](https://img.shields.io/github/v/release/caberdo/terraform-provider-rustfs?label=release)](https://github.com/caberdo/terraform-provider-rustfs/releases)
@@ -349,12 +349,12 @@ Statement coverage of this repository, merged from the unit and acceptance profi
 
 <!-- coverage:start -->
 ```
-pkg/rustfs  ██████████████████░░  88.4%   floor 88.0%
-provider    █████████████░░░░░░░  63.0%   floor 62.5%
-total       ██████████████░░░░░░  69.1%   floor 68.5%   -> 80%, then 90%
+pkg/rustfs  ██████████████████░░  88.5%   floor 88.0%
+provider    ██████████████░░░░░░  68.2%   floor 67.5%
+total       ███████████████░░░░░  73.1%   floor 72.5%   -> 80%, then 90%
 ```
 
-Measured on `6d73c32` (unit + acceptance) on 2026-10-18.
+Measured on `2df03cb` (unit + acceptance) on 2026-10-19.
 <!-- coverage:end -->
 
 The floor is enforced: `scripts/coverage-gate.sh` fails the `Coverage` check on a pull request whose
@@ -402,6 +402,13 @@ how resources are added, and the code-layout migration tracked in
 **A resource fails with an error from the server, e.g. about KMS, LDAP, tiers or targets.**
 Those features live in RustFS sub-systems that must be enabled and configured first. The provider
 does not silently skip them; it surfaces the server's message.
+
+**`rustfs_tier` fails with "Remote tier probe outcome is uncertain".**
+The server probes the tier's backend before saving it, so the `endpoint` must be reachable from the
+server, must not be the deployment itself (loopback is refused with "not allowed: loopback
+address"), and the `bucket` named in `config_json` must already exist there. `config_json` also
+carries the backend type as a top-level `type` and its credentials as `accessKey`/`secretKey` —
+see the resource example.
 
 **Do I still need `access_secret`?**
 No. Use `secret_key` (or `RUSTFS_SECRET`). `access_secret` keeps working as a deprecated alias.

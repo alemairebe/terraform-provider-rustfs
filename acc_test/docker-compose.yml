@@ -52,9 +52,15 @@ services:
       RUSTFS_USER: "rustfsadmin"
       RUSTFS_SECRET: "rustfsadmin"
       RUSTFS_NOTIFY_TEST_ENDPOINT: "http://127.0.0.1:9001/health/ready"
+      # `rustfs_tier` needs a remote backend the server can probe. A tier may
+      # not point at the deployment itself (the probe fails with "outcome is
+      # uncertain"), so the suite points it at the second RustFS below.
+      RUSTFS_TIER_ENDPOINT: "http://rustfs-tier:9000"
       TEST_FILTER: "${TEST_FILTER:-TestAcc}"
     depends_on:
       rustfs:
+        condition: service_started
+      rustfs-tier:
         condition: service_started
     profiles:
       - test
@@ -80,6 +86,20 @@ services:
       RUSTFS_KMS_LOCAL_MASTER_KEY: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
       RUSTFS_KMS_DEFAULT_KEY_ID: "rustfs-default-key"
       RUSTFS_KMS_ALLOW_INSECURE_DEV_DEFAULTS: "true"
+
+  # A second, unreachable-from-the-host RustFS that `rustfs_tier` points at.
+  # The tier probe refuses the deployment's own endpoint and requires the
+  # target bucket to exist, which TestAccTierResource creates through this
+  # service. The published port is for host-based runs
+  # (RUSTFS_TIER_S3_ENDPOINT=127.0.0.1:19000); inside the compose network the
+  # service name is enough.
+  rustfs-tier:
+    image: rustfs/rustfs:${RUSTFS_VERSION:-latest}
+    ports:
+      - "19000:9000"
+    environment:
+      RUSTFS_ACCESS_KEY: rustfsadmin
+      RUSTFS_SECRET_KEY: rustfsadmin
 
 volumes:
   go-modules:
