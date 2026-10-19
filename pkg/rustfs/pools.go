@@ -8,14 +8,22 @@ import (
 	"encoding/json"
 )
 
+// PoolInfo describes one storage pool. The admin API identifies a pool by the
+// command line it was started with (its endpoint list), which is the name the
+// provider exposes.
 type PoolInfo struct {
-	Name string `json:"name"`
+	Name   string `json:"cmdline"`
+	Status string `json:"status"`
 }
 
+// ListPools returns the cluster's storage pools from
+// GET /rustfs/admin/v3/pools/list. The older MinIO-style `list-pools` path is
+// not registered on RustFS 1.0.x: the S3 fallback answers it with
+// 501 NotImplemented.
 func (c *RustfsAdmin) ListPools() ([]PoolInfo, error) {
 	reqData := RequestData{
 		Method:  "GET",
-		RelPath: "list-pools",
+		RelPath: "pools/list",
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

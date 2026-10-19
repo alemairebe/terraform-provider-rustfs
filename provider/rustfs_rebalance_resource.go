@@ -78,7 +78,13 @@ func (r *RebalanceResource) Read(ctx context.Context, req resource.ReadRequest, 
 }
 
 func (r *RebalanceResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	resp.Diagnostics.Append(resp.State.Set(ctx, &req.Plan)...)
+	var plan RebalanceResourceModel
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
 func (r *RebalanceResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
