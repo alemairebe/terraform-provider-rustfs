@@ -4,23 +4,19 @@
 package provider
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/caberdo/terraform-provider-rustfs/pkg/rustfs"
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 )
-
-// skipUnlessEnv skips a test unless the named environment variable is set. It is
-// used for tests that need server-side prerequisites (a registered remote
-// target) that the default acceptance harness does not provision.
-func skipUnlessEnv(t *testing.T, name, reason string) {
-	t.Helper()
-	if os.Getenv(name) == "" {
-		t.Skipf("%s not set: %s", name, reason)
-	}
-}
 
 func TestAccBucketVersioningResource_basic(t *testing.T) {
 	name := fmt.Sprintf("tf-test-ver-%d", acctest.RandInt())
@@ -223,28 +219,87 @@ resource "rustfs_bucket" "test" {
 `, bucket)
 }
 
+// bucketNotificationTargetID is the notification target the bucket
+// notification acceptance test registers in the acceptance environment. Its
+// ARN follows RustFS' own form, arn:rustfs:sqs:<region>:<id>:<service>; the
+// legacy MinIO form (arn:minio:sqs::...) is rejected as an invalid target ID.
+const bucketNotificationTargetID = "PRIMARY"
+
+// testAccBucketNotificationPreCheck enables the notify module and registers the
+// webhook target the notification configuration references. RustFS fails the
+// PutBucketNotificationConfiguration call with "No notify targets configured"
+// otherwise, so this is a fixture-level prerequisite rather than an optional
+// extra.
+func testAccBucketNotificationPreCheck(t *testing.T) {
+	t.Helper()
+	testAccPreCheck(t)
+
+	endpoint := os.Getenv("RUSTFS_NOTIFY_TEST_ENDPOINT")
+	if endpoint == "" {
+		t.Skip("RUSTFS_NOTIFY_TEST_ENDPOINT must be set for the bucket notification acceptance test")
+	}
+	testAccEnsureModuleEnabled(t, "notify")
+
+	client := testAccRustClient()
+	if err := client.SetNotificationTarget("notify_webhook", bucketNotificationTargetID, []rustfs.TargetKeyValue{
+		{Key: "endpoint", Value: endpoint},
+	}); err != nil {
+		if strings.Contains(err.Error(), "module is disabled") {
+			t.Skipf("notification module is disabled on the running RustFS; skipping: %v", err)
+		}
+		t.Fatalf("could not register the notification target fixture: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := client.ResetNotificationTarget("notify_webhook", bucketNotificationTargetID); err != nil {
+			t.Logf("could not reset notification target fixture %s: %v", bucketNotificationTargetID, err)
+		}
+	})
+}
+
 func TestAccBucketNotificationResource_basic(t *testing.T) {
-	skipUnlessEnv(t, "RUSTFS_TEST_REMOTE_TARGET", "RustFS rejects notification configs unless the target ARN references a registered notification target (ARN form ID:Name)")
 	name := fmt.Sprintf("tf-test-notif-%d", acctest.RandInt())
 	resourceName := "rustfs_bucket_notification.test"
 
 	resource.ParallelTest(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
+		PreCheck:                 func() { testAccBucketNotificationPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		CheckDestroy:             testAccCheckBucketDestroy,
 		Steps: []resource.TestStep{
 			{
-				Config: testAccNotificationConfig(name),
+				Config: testAccNotificationConfig(name, []string{"s3:ObjectCreated:*", "s3:ObjectRemoved:*"}, "uploads/", ".jpg"),
 				Check: resource.ComposeTestCheckFunc(
-					resource.TestCheckResourceAttr(resourceName, "queue.0.arn", "arn:minio:sqs::PRIMARY:amqp"),
+					resource.TestCheckResourceAttr(resourceName, "queue.0.arn", "arn:rustfs:sqs::PRIMARY:webhook"),
 					resource.TestCheckResourceAttr(resourceName, "queue.0.filter.prefix", "uploads/"),
+					resource.TestCheckResourceAttr(resourceName, "queue.0.filter.suffix", ".jpg"),
+					resource.TestCheckResourceAttr(resourceName, "queue.0.events.#", "2"),
 				),
+			},
+			{
+				// Update: narrower event set and a different prefix/suffix.
+				Config: testAccNotificationConfig(name, []string{"s3:ObjectCreated:*"}, "incoming/", ".png"),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr(resourceName, "queue.0.filter.prefix", "incoming/"),
+					resource.TestCheckResourceAttr(resourceName, "queue.0.filter.suffix", ".png"),
+					resource.TestCheckResourceAttr(resourceName, "queue.0.events.#", "1"),
+					resource.TestCheckTypeSetElemAttr(resourceName, "queue.0.events.*", "s3:ObjectCreated:*"),
+				),
+			},
+			{
+				ResourceName:                         resourceName,
+				ImportState:                          true,
+				ImportStateId:                        name,
+				ImportStateVerify:                    true,
+				ImportStateVerifyIdentifierAttribute: "bucket",
 			},
 		},
 	})
 }
 
-func testAccNotificationConfig(bucket string) string {
+func testAccNotificationConfig(bucket string, events []string, prefix, suffix string) string {
+	quotedEvents := make([]string, len(events))
+	for i, event := range events {
+		quotedEvents[i] = fmt.Sprintf("%q", event)
+	}
 	return fmt.Sprintf(testAccProviderConfig()+`
 resource "rustfs_bucket" "test" {
   name = "%s"
@@ -255,22 +310,48 @@ resource "rustfs_bucket_notification" "test" {
 
   queue = [
     {
-      arn    = "arn:minio:sqs::PRIMARY:amqp"
-      events = ["s3:ObjectCreated:*", "s3:ObjectRemoved:*"]
+      arn    = "arn:rustfs:sqs::%s:webhook"
+      events = [%s]
       filter = {
-        prefix = "uploads/"
-        suffix = ".jpg"
+        prefix = "%s"
+        suffix = "%s"
       }
     }
   ]
 }
-`, bucket)
+`, bucket, bucketNotificationTargetID, strings.Join(quotedEvents, ", "), prefix, suffix)
 }
 
 func TestAccBucketReplicationResource_basic(t *testing.T) {
-	skipUnlessEnv(t, "RUSTFS_TEST_REMOTE_TARGET", "replication requires a registered remote target (otherwise 'replication config has a stale target') plus versioned source and destination buckets")
+	peer, err := remoteTargetPeerConfig(t)
+	if err != nil {
+		t.Skipf("skipping replication acceptance test: %v", err)
+	}
 	name := fmt.Sprintf("tf-test-repl-%d", acctest.RandInt())
+	srcBucket := name + "-src"
+	dstBucket := name + "-dst"
 	resourceName := "rustfs_bucket_replication.test"
+
+	// The destination bucket lives on the peer and must be versioned before a
+	// remote target can be registered against it; the provider cannot manage it
+	// through the primary endpoint.
+	peerClient, err := newTestS3Client(peer.s3Endpoint, peer.accessKey, peer.secretKey)
+	if err != nil {
+		t.Fatalf("creating peer S3 client: %v", err)
+	}
+	ctx := context.Background()
+	if _, err := peerClient.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: aws.String(dstBucket)}); err != nil {
+		t.Fatalf("creating destination bucket on peer: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = peerClient.DeleteBucket(ctx, &s3.DeleteBucketInput{Bucket: aws.String(dstBucket)})
+	})
+	if _, err := peerClient.PutBucketVersioning(ctx, &s3.PutBucketVersioningInput{
+		Bucket:                  aws.String(dstBucket),
+		VersioningConfiguration: &s3types.VersioningConfiguration{Status: s3types.BucketVersioningStatusEnabled},
+	}); err != nil {
+		t.Fatalf("enabling versioning on the destination bucket: %v", err)
+	}
 
 	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
@@ -278,25 +359,37 @@ func TestAccBucketReplicationResource_basic(t *testing.T) {
 		CheckDestroy:             testAccCheckBucketDestroy,
 		Steps: []resource.TestStep{
 			{
-				Config: testAccReplicationConfig(name),
+				Config: testAccReplicationConfig(name, peer, "Enabled"),
 				Check: resource.ComposeTestCheckFunc(
-					resource.TestCheckResourceAttr(resourceName, "role", "arn:minio:replication::test:dest"),
+					resource.TestCheckResourceAttrPair(resourceName, "role", "rustfs_remote_target.test", "arn"),
 					resource.TestCheckResourceAttr(resourceName, "rule.0.status", "Enabled"),
-					resource.TestCheckResourceAttr(resourceName, "rule.0.destination.bucket", fmt.Sprintf("arn:aws:s3:::%s-dst", name)),
+					resource.TestCheckResourceAttr(resourceName, "rule.0.filter.prefix", "logs/"),
+					resource.TestCheckResourceAttr(resourceName, "rule.0.destination.bucket", fmt.Sprintf("arn:aws:s3:::%s", dstBucket)),
 				),
+			},
+			{
+				// Update: Rule status is mutable in place, so this exercises the
+				// Update path instead of recreating the resource.
+				Config: testAccReplicationConfig(name, peer, "Disabled"),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr(resourceName, "rule.0.status", "Disabled"),
+				),
+			},
+			{
+				ResourceName:                         resourceName,
+				ImportState:                          true,
+				ImportStateId:                        srcBucket,
+				ImportStateVerify:                    true,
+				ImportStateVerifyIdentifierAttribute: "bucket",
 			},
 		},
 	})
 }
 
-func testAccReplicationConfig(bucket string) string {
+func testAccReplicationConfig(bucket string, peer *remoteTargetPeer, status string) string {
 	return fmt.Sprintf(testAccProviderConfig()+`
 resource "rustfs_bucket" "src" {
   name = "%s-src"
-}
-
-resource "rustfs_bucket" "dst" {
-  name = "%s-dst"
 }
 
 resource "rustfs_bucket_versioning" "src" {
@@ -304,25 +397,35 @@ resource "rustfs_bucket_versioning" "src" {
   status = "Enabled"
 }
 
-resource "rustfs_bucket_versioning" "dst" {
-  bucket = rustfs_bucket.dst.name
-  status = "Enabled"
+resource "rustfs_remote_target" "test" {
+  type          = "replication"
+  endpoint      = "%s"
+  access_key    = "%s"
+  secret_key    = "%s"
+  secure        = false
+  bucket        = rustfs_bucket.src.name
+  target_bucket = "%s-dst"
+
+  depends_on = [rustfs_bucket_versioning.src]
 }
 
 resource "rustfs_bucket_replication" "test" {
   bucket = rustfs_bucket.src.name
-  role   = "arn:minio:replication::test:dest"
+  role   = rustfs_remote_target.test.arn
 
-  depends_on = [rustfs_bucket_versioning.src, rustfs_bucket_versioning.dst]
+  depends_on = [rustfs_remote_target.test]
 
   rule = [
     {
-      status = "Enabled"
+      status = "%s"
+      filter = {
+        prefix = "logs/"
+      }
       destination = {
         bucket = "arn:aws:s3:::%s-dst"
       }
     }
   ]
 }
-`, bucket, bucket, bucket)
+`, bucket, peer.endpoint, peer.accessKey, peer.secretKey, bucket, status, bucket)
 }

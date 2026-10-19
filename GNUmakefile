@@ -73,8 +73,13 @@ testacc-docker:
 	docker compose -f acc_test/docker-compose.yml --profile test run --rm test
 
 testacc-live:
-	podman-compose -f acc_test/docker-compose.yml up -d rustfs
-	RUSTFS_ENDPOINT=127.0.0.1:9001 RUSTFS_USER=rustfsadmin RUSTFS_SECRET=rustfsadmin TF_ACC=1 go test -v ./...
+	podman-compose -f acc_test/docker-compose.yml up -d rustfs rustfs-peer
+	RUSTFS_ENDPOINT=127.0.0.1:9001 RUSTFS_USER=rustfsadmin RUSTFS_SECRET=rustfsadmin \
+	RUSTFS_NOTIFY_TEST_ENDPOINT=http://127.0.0.1:9001/health/ready \
+	RUSTFS_PEER_ENDPOINT=rustfs-peer:9001 RUSTFS_PEER_ADMIN_ENDPOINT=127.0.0.1:9003 \
+	RUSTFS_PEER_S3_ENDPOINT=127.0.0.1:9002 \
+	RUSTFS_PEER_ACCESS_KEY=rustfsadmin RUSTFS_PEER_SECRET_KEY=rustfsadmin \
+	TF_ACC=1 go test -v ./...
 
 validate-examples:
 	./scripts/validate-examples.sh
