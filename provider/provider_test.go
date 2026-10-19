@@ -63,14 +63,15 @@ func testAccProviderConfig() string {
 // constructible from a schema plus a model, which is what these build.
 
 // newUnitAllClient points an AllClient at an httptest server that speaks the
-// RustFS admin API. The S3 client is deliberately left nil: these tests only
-// exercise admin API paths.
+// RustFS admin API. The mocked server never verifies the signature, so the
+// client carries no credentials at all: the access key below is a label for
+// identifying the requests, not a value that can authenticate anywhere. The S3
+// client is deliberately left nil: these tests only exercise admin API paths.
 func newUnitAllClient(srv *httptest.Server) *AllClient {
 	return &AllClient{
 		RustClient: rustfs.New(&rustfs.RustfsAdminConfig{
-			Endpoint:     srv.Listener.Addr().String(),
-			AccessKey:    "unit-test-access-key",
-			AccessSecret: "unit-test-access-secret",
+			Endpoint:  srv.Listener.Addr().String(),
+			AccessKey: "unit-test-access-key",
 		}),
 	}
 }

@@ -6,6 +6,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -13,12 +14,14 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/caberdo/terraform-provider-rustfs/pkg/rustfs"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	frameworkresource "github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/terraform"
 )
 
 const tierResourceName = "rustfs_tier.test"
@@ -380,8 +383,9 @@ func TestAccTierResource(t *testing.T) {
 	defer tierBackendBucket.delete(t)
 
 	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { tierTestPreCheck(t) },
+		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckTierDestroy,
 		Steps: []resource.TestStep{
 			{
 				Config: testAccTierConfig(tierEndpoint, name, bucket),
@@ -480,6 +484,41 @@ func (b tierTestBucket) delete(t *testing.T) {
 	if _, err := client.DeleteBucket(context.Background(), &s3.DeleteBucketInput{Bucket: aws.String(b.name)}); err != nil {
 		t.Logf("could not delete the tier backend bucket %s: %v", b.name, err)
 	}
+}
+
+// testAccCheckTierDestroy requires every tier the fixture created to be gone.
+// The admin API answers 500 TierNotFound for a name it does not hold, and a
+// server that does not implement the verify route at all is not evidence of a
+// leaked tier, so both pass; an implemented route that still answers for the
+// name fails.
+func testAccCheckTierDestroy(s *terraform.State) error {
+	client := testAccRustClient()
+	for _, rs := range s.RootModule().Resources {
+		if rs.Type != "rustfs_tier" {
+			continue
+		}
+		name := rs.Primary.Attributes["name"]
+		if name == "" {
+			continue
+		}
+
+		res, err := client.DoDirectRequest(context.Background(), rustfs.RequestData{
+			Method:  http.MethodGet,
+			RelPath: "rustfs/admin/v3/tier/" + name,
+		})
+		if err != nil {
+			if strings.Contains(err.Error(), "TierNotFound") ||
+				strings.Contains(err.Error(), "NotImplemented") ||
+				rustfs.IsUnsupportedFeature(err) {
+				continue
+			}
+			return fmt.Errorf("error checking tier %s destruction: %w", name, err)
+		}
+		_, _ = io.Copy(io.Discard, res.Body)
+		_ = res.Body.Close()
+		return fmt.Errorf("tier %s still exists", name)
+	}
+	return nil
 }
 
 func testAccTierConfig(tierEndpoint, name, bucket string) string {

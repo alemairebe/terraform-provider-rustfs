@@ -222,6 +222,7 @@ func TestAccUsersDataSource(t *testing.T) {
 	resource.Test(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckUsersDataSourceDestroy,
 		Steps: []resource.TestStep{
 			{
 				Config: testAccUsersDataSourceConfig(accessKey, bucket),
@@ -235,8 +236,29 @@ func TestAccUsersDataSource(t *testing.T) {
 					resource.TestCheckResourceAttr(usersBucketDataSourceName, "access_keys.#", "0"),
 				),
 			},
+			{
+				// The fixture creates the IAM user the data source reads, so
+				// its import round trip is worth covering here too.
+				ResourceName:                         usersTestResourceName,
+				ImportState:                          true,
+				ImportStateId:                        accessKey,
+				ImportStateVerify:                    true,
+				ImportStateVerifyIdentifierAttribute: "access_key",
+				ImportStateVerifyIgnore:              []string{"secret_key"},
+			},
 		},
 	})
+}
+
+const usersTestResourceName = "rustfs_user.test"
+
+// testAccCheckUsersDataSourceDestroy requires both halves of the fixture — the
+// IAM user and the bucket — to be gone once the test case is destroyed.
+func testAccCheckUsersDataSourceDestroy(s *terraform.State) error {
+	if err := testAccCheckUserDestroy(s); err != nil {
+		return err
+	}
+	return testAccCheckBucketDestroy(s)
 }
 
 func testAccUsersDataSourceConfig(accessKey, bucket string) string {
