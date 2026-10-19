@@ -18,11 +18,13 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/plancheck"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
 )
 
 func TestAccBucketResource_basic(t *testing.T) {
 	name := fmt.Sprintf("tf-test-bucket-%d", acctest.RandInt())
+	replacementName := fmt.Sprintf("tf-test-bucket-%d", acctest.RandInt())
 	resourceName := "rustfs_bucket.test"
 
 	resource.ParallelTest(t, resource.TestCase{
@@ -38,9 +40,40 @@ func TestAccBucketResource_basic(t *testing.T) {
 				),
 			},
 			{
+				// Explicit computed consistency: the post-apply plan for the
+				// configuration just applied must be empty.
+				Config:             testAccBucketConfig(name),
+				PlanOnly:           true,
+				ExpectNonEmptyPlan: false,
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PostApplyPreRefresh: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
+				},
+			},
+			{
+				// Replacement plan: name carries RequiresReplace(), so a new
+				// name must plan a replacement rather than an in-place update.
+				Config:             testAccBucketConfig(replacementName),
+				PlanOnly:           true,
+				ExpectNonEmptyPlan: true,
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PostApplyPreRefresh: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction(resourceName, plancheck.ResourceActionReplace),
+					},
+				},
+			},
+			{
+				// Apply the replacement so the replacement path really runs and
+				// the substitute bucket is created on the server.
+				Config: testAccBucketConfig(replacementName),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckBucketExists(resourceName),
+					resource.TestCheckResourceAttr(resourceName, "name", replacementName),
+				),
+			},
+			{
 				ResourceName:                         resourceName,
 				ImportState:                          true,
-				ImportStateId:                        name,
+				ImportStateId:                        replacementName,
 				ImportStateVerify:                    true,
 				ImportStateVerifyIdentifierAttribute: "name",
 			},

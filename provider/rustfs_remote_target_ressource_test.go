@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -23,6 +24,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/plancheck"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
 )
 
@@ -105,6 +107,71 @@ func testAccCheckBucketAndRemoteTargetDestroy(s *terraform.State) error {
 		return err
 	}
 	return testAccCheckRemoteTargetDestroy(s)
+}
+
+// testAccCheckRemoteTargetExists asserts that the target Terraform recorded is
+// still registered on the server and that the server reports the credentials
+// the state claims. The access key is read back from the admin API rather than
+// from state, so an update the server silently dropped fails the check.
+func testAccCheckRemoteTargetExists(resourceName string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		rs, ok := s.RootModule().Resources[resourceName]
+		if !ok {
+			return fmt.Errorf("not found: %s", resourceName)
+		}
+		bucket := rs.Primary.Attributes["bucket"]
+		arn := rs.Primary.Attributes["arn"]
+		if bucket == "" || arn == "" {
+			return fmt.Errorf("remote target %s has no bucket/arn in state", resourceName)
+		}
+		client := testAccRustClient()
+		targets, err := client.ListRemoteTargets(bucket)
+		if err != nil {
+			return err
+		}
+		for _, target := range targets {
+			if target.Arn != arn {
+				continue
+			}
+			if target.Credentials == nil {
+				return fmt.Errorf("remote target %s has no credentials on the server", arn)
+			}
+			if want := rs.Primary.Attributes["access_key"]; target.Credentials.AccessKey != want {
+				// The values are credentials: report the mismatch, not them.
+				return fmt.Errorf("remote target %s reports an access key on the server that does not match the one in state", arn)
+			}
+			return nil
+		}
+		return fmt.Errorf("remote target %s not found on bucket %s", arn, bucket)
+	}
+}
+
+// testAccMutateRemoteTargetOutOfBand removes the remote target straight through
+// the admin API, behind Terraform's back, so the next refresh sees it missing
+// and Terraform has to propose re-creating it.
+func testAccMutateRemoteTargetOutOfBand(resourceName string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		rs, ok := s.RootModule().Resources[resourceName]
+		if !ok {
+			return fmt.Errorf("not found: %s", resourceName)
+		}
+		bucket := rs.Primary.Attributes["bucket"]
+		arn := rs.Primary.Attributes["arn"]
+		client := testAccRustClient()
+		if err := client.DeleteRemoteTarget(bucket, arn); err != nil {
+			return fmt.Errorf("removing remote target %s out of band: %w", arn, err)
+		}
+		targets, err := client.ListRemoteTargets(bucket)
+		if err != nil {
+			return fmt.Errorf("listing remote targets after out-of-band removal: %w", err)
+		}
+		for _, target := range targets {
+			if target.Arn == arn {
+				return fmt.Errorf("remote target %s is still registered after the out-of-band removal", arn)
+			}
+		}
+		return nil
+	}
 }
 
 // peerServiceAccount creates a service account on the peer with the caller's
@@ -270,20 +337,95 @@ func TestAccRemoteTargetResource(t *testing.T) {
 				ImportStateVerifyIgnore:              []string{"secret_key"},
 			},
 			{
-				// In-place update of the credentials group.
+				// Import accepts the composite <source-bucket>:<arn> ID only.
+				// An ID without the separator has to produce the explicit
+				// diagnostic rather than a panic or a half-filled state.
+				ResourceName:  resourceName,
+				ImportState:   true,
+				ImportStateId: "no-separator-here",
+				ExpectError:   regexp.MustCompile(`(?s)Invalid import ID.*Expected import ID in the format <source-bucket>:<arn>`),
+			},
+			{
+				// In-place update of the credentials group. Neither access_key
+				// nor secret_key carries RequiresReplace, so the plan has to be
+				// an update, and the server has to hand the new credential back.
 				Config: testAccRemoteTargetConfig(srcBucket, dstBucket, peer, "false", "us-east-1", saAccessKey, saSecretKey),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction(resourceName, plancheck.ResourceActionUpdate),
+					},
+				},
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr(resourceName, "access_key", saAccessKey),
 					resource.TestCheckResourceAttrSet(resourceName, "arn"),
+					testAccCheckRemoteTargetExists(resourceName),
 				),
+			},
+			{
+				// Explicit empty second plan: the state the update above wrote
+				// is the configuration, so neither the plan made from that state
+				// nor the plan after a refresh may propose a change.
+				Config:   testAccRemoteTargetConfig(srcBucket, dstBucket, peer, "false", "us-east-1", saAccessKey, saSecretKey),
+				PlanOnly: true,
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PostApplyPreRefresh: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
+				},
+			},
+			{
+				// path carries RequiresReplace and the server never applies it
+				// on update, so setting it has to replace the target. The step
+				// only plans: the replacement is asserted, never applied.
+				Config:             testAccRemoteTargetConfigWithPath(srcBucket, dstBucket, peer, "false", "us-east-1", "tf-rt-prefix", saAccessKey, saSecretKey),
+				PlanOnly:           true,
+				ExpectNonEmptyPlan: true,
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PostApplyPreRefresh: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction(resourceName, plancheck.ResourceActionReplace),
+					},
+				},
 			},
 			{
 				// Region is part of the target ARN and the server ignores it on
 				// update, so a region change replaces the target.
 				Config: testAccRemoteTargetConfig(srcBucket, dstBucket, peer, "false", "eu-west-1", saAccessKey, saSecretKey),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction(resourceName, plancheck.ResourceActionReplace),
+					},
+				},
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr(resourceName, "region", "eu-west-1"),
 					resource.TestCheckResourceAttrSet(resourceName, "arn"),
+					testAccCheckRemoteTargetExists(resourceName),
+				),
+			},
+			{
+				// Out-of-band drift: the Check function removes the target
+				// straight through the admin API after the (no-op) apply, so
+				// the plan made before the refresh is still empty while the
+				// plan Terraform proposes after the refresh has to re-create
+				// the resource.
+				Config:             testAccRemoteTargetConfig(srcBucket, dstBucket, peer, "false", "eu-west-1", saAccessKey, saSecretKey),
+				ExpectNonEmptyPlan: true,
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PostApplyPreRefresh: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
+					PostApplyPostRefresh: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction(resourceName, plancheck.ResourceActionCreate),
+					},
+				},
+				Check: resource.ComposeAggregateTestCheckFunc(
+					testAccCheckRemoteTargetExists(resourceName),
+					testAccMutateRemoteTargetOutOfBand(resourceName),
+				),
+			},
+			{
+				// Apply the drift the previous step discovered and assert the
+				// re-created target is on the server again.
+				Config: testAccRemoteTargetConfig(srcBucket, dstBucket, peer, "false", "eu-west-1", saAccessKey, saSecretKey),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(resourceName, "region", "eu-west-1"),
+					resource.TestCheckResourceAttr(resourceName, "access_key", saAccessKey),
+					testAccCheckRemoteTargetExists(resourceName),
 				),
 			},
 		},
@@ -291,6 +433,17 @@ func TestAccRemoteTargetResource(t *testing.T) {
 }
 
 func testAccRemoteTargetConfig(srcBucket, dstBucket string, peer *remoteTargetPeer, secure, region, accessKey, secretKey string) string {
+	return testAccRemoteTargetConfigWithPath(srcBucket, dstBucket, peer, secure, region, "", accessKey, secretKey)
+}
+
+// testAccRemoteTargetConfigWithPath is testAccRemoteTargetConfig with the path
+// attribute set. Only the plan-only replacement check uses it, so no target
+// with a path is ever applied.
+func testAccRemoteTargetConfigWithPath(srcBucket, dstBucket string, peer *remoteTargetPeer, secure, region, path, accessKey, secretKey string) string {
+	pathAttribute := ""
+	if path != "" {
+		pathAttribute = fmt.Sprintf("  path          = %q\n", path)
+	}
 	return testAccProviderConfig() + fmt.Sprintf(`
 resource "rustfs_remote_target" "test" {
   type          = "replication"
@@ -301,8 +454,8 @@ resource "rustfs_remote_target" "test" {
   region        = "%s"
   bucket        = "%s"
   target_bucket = "%s"
-}
-`, peer.endpoint, accessKey, secretKey, secure, region, srcBucket, dstBucket)
+%s}
+`, peer.endpoint, accessKey, secretKey, secure, region, srcBucket, dstBucket, pathAttribute)
 }
 
 var (

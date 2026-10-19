@@ -5,12 +5,16 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -21,6 +25,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/plancheck"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
 )
 
@@ -233,6 +238,9 @@ func TestTierResourceUpdate(t *testing.T) {
 		if request.Method != http.MethodPost || request.Path != "/rustfs/admin/v3/tier/S3COLD" {
 			t.Errorf("unexpected request %s %s", request.Method, request.Path)
 		}
+		if got, want := string(request.Body), plan.ConfigJson.ValueString(); got != want {
+			t.Errorf("the edited configuration did not reach the server: body = %q, want %q", got, want)
+		}
 	})
 
 	t.Run("rejects invalid JSON", func(t *testing.T) {
@@ -349,6 +357,7 @@ func TestAccTierResource(t *testing.T) {
 	tierEndpoint := tierTestEndpoint(t)
 	s3Endpoint := tierTestS3Endpoint(t)
 	name := fmt.Sprintf("TFACCTIER%d", acctest.RandInt())
+	replacementName := fmt.Sprintf("TFACCTIERR%d", acctest.RandInt())
 	bucket := fmt.Sprintf("tf-acc-tier-%d", acctest.RandInt())
 
 	// The tier probe requires the target bucket to exist, and the provider's
@@ -371,7 +380,94 @@ func TestAccTierResource(t *testing.T) {
 					resource.TestCheckResourceAttr(tierResourceName, "name", name),
 					resource.TestCheckResourceAttr(tierResourceName, "tier_type", "rustfs"),
 					resource.TestCheckResourceAttrSet(tierResourceName, "config_json"),
+					testAccCheckTierRegistered(t, name),
 				),
+			},
+			{
+				// In-place update: config_json is the only mutable attribute.
+				// The provider sends the new backend to the server and records
+				// it; the tier stays registered. RustFS keeps reporting the
+				// configuration a tier was created with (and redacts secretKey),
+				// so the edited value cannot be read back from this server -
+				// TestTierResourceUpdate pins the payload that reaches the wire
+				// instead, and the revert plus the empty plan below prove the
+				// plan converges.
+				Config: testAccTierConfigWithRegion(tierEndpoint, name, bucket, tierTestUpdatedRegion),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(tierResourceName, "name", name),
+					resource.TestCheckResourceAttrSet(tierResourceName, "config_json"),
+					testAccCheckTierRegistered(t, name),
+				),
+			},
+			{
+				// Revert the in-place update.
+				Config: testAccTierConfig(tierEndpoint, name, bucket),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(tierResourceName, "name", name),
+					testAccCheckTierRegistered(t, name),
+				),
+			},
+			{
+				// Computed consistency: the state must match the configuration,
+				// with no computed attribute causing a perpetual diff.
+				Config:   testAccTierConfig(tierEndpoint, name, bucket),
+				PlanOnly: true,
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PostApplyPreRefresh: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
+				},
+			},
+			{
+				// Replacement plan for "tier_type", one of the two
+				// RequiresReplace attributes. Plan-only: the replacement of the
+				// name below is the one that is applied, so the server is left
+				// with a single tier and never has to support this type.
+				Config:             testAccTierConfigWithType(tierEndpoint, name, bucket, tierTestReplacementType),
+				PlanOnly:           true,
+				ExpectNonEmptyPlan: true,
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PostApplyPreRefresh: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction(tierResourceName, plancheck.ResourceActionReplace),
+					},
+				},
+			},
+			{
+				// Replacement plan for "name", the other RequiresReplace
+				// attribute.
+				Config:             testAccTierConfig(tierEndpoint, replacementName, bucket),
+				PlanOnly:           true,
+				ExpectNonEmptyPlan: true,
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PostApplyPreRefresh: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction(tierResourceName, plancheck.ResourceActionReplace),
+					},
+				},
+			},
+			{
+				// Apply the replacement so the destroy-and-create path really
+				// runs: the old tier is gone and the new one is registered on
+				// the server.
+				Config: testAccTierConfig(tierEndpoint, replacementName, bucket),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(tierResourceName, "name", replacementName),
+					testAccCheckTierRegistered(t, replacementName),
+					testAccCheckTierAbsent(t, name),
+				),
+			},
+			{
+				// Out-of-band drift: the tier is edited straight through the
+				// admin API, behind Terraform's back. Read is a passthrough for
+				// this resource (the server's tier listing does not round-trip
+				// the configuration), so the follow-up plan stays empty by
+				// design; the check proves the server really moved.
+				Config:             testAccTierConfig(tierEndpoint, replacementName, bucket),
+				ExpectNonEmptyPlan: false,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					testAccCheckTierRegistered(t, replacementName),
+					testAccMutateTierOutOfBand(t, tierEndpoint, replacementName, bucket),
+				),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PostApplyPostRefresh: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
+				},
 			},
 			{
 				// ImportStatePassthroughID maps the tier name; tier_type and
@@ -380,16 +476,172 @@ func TestAccTierResource(t *testing.T) {
 				// re-supplied from the configuration.
 				ResourceName:                         tierResourceName,
 				ImportState:                          true,
-				ImportStateId:                        name,
+				ImportStateId:                        replacementName,
 				ImportStateVerify:                    true,
 				ImportStateVerifyIdentifierAttribute: "name",
 				ImportStateVerifyIgnore:              []string{"tier_type", "config_json"},
 				ExpectNonEmptyPlan:                   true,
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr(tierResourceName, "name", name),
+					resource.TestCheckResourceAttr(tierResourceName, "name", replacementName),
 				),
 			},
 		},
+	})
+}
+
+// tierTestUpdatedRegion is the region the in-place update step switches to: a
+// value the tier listing never echoes, like every other config_json field.
+const tierTestUpdatedRegion = "eu-west-01"
+
+// tierTestReplacementType is the tier type used for the plan-only replacement
+// check. It is never applied, so the server under test never has to support it.
+const tierTestReplacementType = "minio"
+
+// testAccCheckTierRegistered asserts the tier is present in the server's tier
+// listing, so a state assertion cannot pass for a tier the server never got.
+func testAccCheckTierRegistered(t *testing.T, name string) resource.TestCheckFunc {
+	t.Helper()
+
+	return func(*terraform.State) error {
+		client := testAccRustClient()
+		stats, err := client.TierStats()
+		if err != nil {
+			return fmt.Errorf("listing tiers: %w", err)
+		}
+		if _, ok := stats[name]; !ok {
+			return fmt.Errorf("tier %s is not registered on the server (have %v)", name, tierNames(stats))
+		}
+		return nil
+	}
+}
+
+// testAccCheckTierAbsent asserts the tier is gone from the server's listing.
+// The server reconciles a removal in the background, so the check polls.
+func testAccCheckTierAbsent(t *testing.T, name string) resource.TestCheckFunc {
+	t.Helper()
+
+	return func(*terraform.State) error {
+		client := testAccRustClient()
+		deadline := time.Now().Add(tierMutationAttempts * tierMutationInterval)
+		for {
+			stats, err := client.TierStats()
+			if err != nil {
+				return fmt.Errorf("listing tiers: %w", err)
+			}
+			if _, ok := stats[name]; !ok {
+				return nil
+			}
+			if time.Now().After(deadline) {
+				return fmt.Errorf("tier %s is still registered on the server (have %v)", name, tierNames(stats))
+			}
+			time.Sleep(tierMutationInterval)
+		}
+	}
+}
+
+// tierNames lists the tier names the server reports, for failure messages.
+func tierNames(stats map[string]rustfs.TierStat) []string {
+	names := make([]string, 0, len(stats))
+	for name := range stats {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// testAccMutateTierOutOfBand edits the tier through the admin API, behind
+// Terraform's back, and fails unless the edit is accepted.
+func testAccMutateTierOutOfBand(t *testing.T, tierEndpoint, name, bucket string) resource.TestCheckFunc {
+	t.Helper()
+
+	return func(*terraform.State) error {
+		client := testAccRustClient()
+		config, err := json.Marshal(map[string]any{
+			"type": "rustfs",
+			"rustfs": map[string]any{
+				"name":      name,
+				"endpoint":  tierEndpoint,
+				"accessKey": os.Getenv("RUSTFS_USER"),
+				"secretKey": os.Getenv("RUSTFS_SECRET"),
+				"bucket":    bucket,
+				"region":    "drifted-01",
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("rendering the out-of-band tier configuration: %w", err)
+		}
+
+		var editErr error
+		for range tierMutationAttempts {
+			if editErr = client.EditTier(name, config); editErr == nil {
+				t.Logf("edited tier %s out of band", name)
+				return nil
+			}
+			// The server serialises tier mutations: an edit issued while the
+			// previous one is still recovering is refused, not lost.
+			time.Sleep(tierMutationInterval)
+		}
+		return fmt.Errorf("out-of-band edit of tier %s: %w", name, editErr)
+	}
+}
+
+// TestTierTransientMutationErrors pins which refusals the resource retries: the
+// two the server answers while a previous tier mutation has not finished
+// reconciling, and nothing else.
+func TestTierTransientMutationErrors(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "nil", err: nil},
+		{name: "unrelated", err: errors.New("NoSuchBucket")},
+		{name: "tier name taken", err: &rustfs.APIError{Code: "TierNameAlreadyExist", Message: "tier name already exists"}},
+		{name: "edit still recovering", err: &rustfs.APIError{Code: "TierEditFailed", Message: "tier edit failed. Remote tier mutation recovery must finish before applying a new tier configuration update"}, want: true},
+		{name: "backend in use", err: &rustfs.APIError{Code: "XMinioAdminTierBackendInUse", Message: "Specified remote tier is already in use"}, want: true},
+		{name: "unstructured backend in use", err: errors.New("<Error><Code>XMinioAdminTierBackendInUse</Code><Message>Specified remote tier is already in use</Message></Error>"), want: true},
+		{name: "unstructured edit recovery", err: errors.New("tier edit failed. Remote tier mutation recovery must finish before applying a new tier configuration update"), want: true},
+	}
+	for _, tc := range cases {
+		if got := isTransientTierMutationError(tc.err); got != tc.want {
+			t.Errorf("%s: isTransientTierMutationError = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestTierMutationRetry pins the retry itself: a transient refusal is retried
+// and a permanent one is reported on the first attempt.
+func TestTierMutationRetry(t *testing.T) {
+	t.Run("retries a transient refusal", func(t *testing.T) {
+		calls := 0
+		err := tierMutation(func() error {
+			calls++
+			if calls < 3 {
+				return &rustfs.APIError{Code: "XMinioAdminTierBackendInUse", Message: "Specified remote tier is already in use"}
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if calls != 3 {
+			t.Fatalf("expected 3 attempts, got %d", calls)
+		}
+	})
+
+	t.Run("reports a permanent error immediately", func(t *testing.T) {
+		calls := 0
+		wantErr := errors.New("Specified tier type is unsupported")
+		err := tierMutation(func() error {
+			calls++
+			return wantErr
+		})
+		if !errors.Is(err, wantErr) {
+			t.Fatalf("expected %v, got %v", wantErr, err)
+		}
+		if calls != 1 {
+			t.Fatalf("expected 1 attempt, got %d", calls)
+		}
 	})
 }
 
@@ -503,10 +755,26 @@ func testAccCheckTierDestroy(s *terraform.State) error {
 }
 
 func testAccTierConfig(tierEndpoint, name, bucket string) string {
+	return testAccTierConfigWith(tierEndpoint, name, bucket, "rustfs", "us-east-01")
+}
+
+// testAccTierConfigWithRegion varies the backend's region, which is the only
+// way to change config_json without changing an attribute that forces a
+// replacement.
+func testAccTierConfigWithRegion(tierEndpoint, name, bucket, region string) string {
+	return testAccTierConfigWith(tierEndpoint, name, bucket, "rustfs", region)
+}
+
+// testAccTierConfigWithType varies tier_type, which carries RequiresReplace().
+func testAccTierConfigWithType(tierEndpoint, name, bucket, tierType string) string {
+	return testAccTierConfigWith(tierEndpoint, name, bucket, tierType, "us-east-01")
+}
+
+func testAccTierConfigWith(tierEndpoint, name, bucket, tierType, region string) string {
 	return testAccProviderConfig() + fmt.Sprintf(`
 resource "rustfs_tier" "test" {
   name      = %q
-  tier_type = "rustfs"
+  tier_type = %q
   config_json = jsonencode({
     type = "rustfs"
     rustfs = {
@@ -515,11 +783,11 @@ resource "rustfs_tier" "test" {
       accessKey = %q
       secretKey = %q
       bucket    = %q
-      region    = "us-east-01"
+      region    = %q
     }
   })
 }
-`, name, name, tierEndpoint, os.Getenv("RUSTFS_USER"), os.Getenv("RUSTFS_SECRET"), bucket)
+`, name, tierType, name, tierEndpoint, os.Getenv("RUSTFS_USER"), os.Getenv("RUSTFS_SECRET"), bucket, region)
 }
 
 // TestTierResourceLifecyclePaths covers the paths the acceptance suite cannot

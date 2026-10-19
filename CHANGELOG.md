@@ -15,6 +15,21 @@ BUG FIXES:
 - The `rustfs_tier` example and the generated docs show the configuration shape RustFS 1.0.x accepts:
   a top-level `type` inside `config_json` and camelCase credentials (`accessKey`/`secretKey`). The
   previous example left `type` out, which the server rejects with "Specified tier type is unsupported"
+- `rustfs_group` could neither be updated nor destroyed once it had members: RustFS refuses
+  `DeleteGroup` with `group is not empty`, so every update failed with "Could not reset group
+  members" and Terraform could not destroy a populated group (it destroys the group before the
+  users it references). Updates now apply a membership delta over `update-group-members` and
+  deletes detach the members first. `rustfs_group.members` is no longer planned as unknown when the
+  configuration omits it either — that path treated the missing set as "no members wanted",
+  stripped the group and could end an apply with an unknown value in state
+- A resource removed outside Terraform no longer fails the refresh for `rustfs_policy`,
+  `rustfs_user`, `rustfs_serviceaccount` and `rustfs_user_policy_attachment`: it leaves state so
+  the next plan recreates it. `rustfs_serviceaccount` deletion is idempotent (RustFS answers
+  `service account not exist`), and `rustfs_user_policy_attachment` reads the attachment back from
+  `user-info`, so a policy detached outside Terraform is detected instead of staying in state
+- `rustfs_tier` retries an add, edit or remove while RustFS reports that the previous tier mutation
+  has not finished reconciling (`TierEditFailed`, `XMinioAdminTierBackendInUse`) instead of failing
+  the apply
 - `rustfs_remote_target` now replaces the target when `region` or `path` changes. RustFS embeds the
   region in the target ARN and only applies `path` through an update group this client does not
   send, so both were silently ignored and the plan never converged. Deleting the resource is also
@@ -79,6 +94,15 @@ BUG FIXES:
   configured as already removed
 
 IMPROVEMENTS:
+- The acceptance suite changes resources now instead of only creating and destroying them. Every
+  resource test drives the in-place update with the new value read back from the server and a
+  revert, an explicit empty second plan (the "Provider produced inconsistent result after apply"
+  class of bug), a replacement plan for each `RequiresReplace()` attribute that is then applied for
+  real, `ImportState` with `ImportStateVerify` — plus the malformed-ID diagnostic where the import
+  ID is composite — and out-of-band drift followed by the converging step. Merged unit + acceptance
+  statement coverage rose from 72.3% to 83.5%, and the floor in `.github/coverage-baseline.txt` moved
+  with it (`floor_total` 71.8 → 83.0), so the 17 `Update` and 11 `ImportState` functions that read
+  0% in issue #75 are covered
 - The eight types that had no test — `rustfs_tier`, `rustfs_rebalance`, `rustfs_iam_backup_import`,
   `rustfs_bucket_metadata_backup_import`, `rustfs_pools`, `rustfs_users`, `rustfs_iam_backup` and
   `rustfs_bucket_metadata_backup` — now have schema, metadata, configure and CRUD units driven
@@ -96,7 +120,9 @@ IMPROVEMENTS:
   `.github/coverage-baseline.txt`, and the `latest` cell of the acceptance matrix repeats that gate
   on `main`, so the floor can only move up. The README carries a generated coverage badge and a
   per-package bar chart (`scripts/coverage-readme.sh`); CI fails when they drift from the baseline.
-  Merged coverage is 88.3% today (provider 85.5%), with 80% met and 90% next
+  Merged coverage moved from 72.3% at 0.5.0 to 81.4% with the LDAP and site-replication tests, to
+  88.3% with the read/delete/create error-path units and further with the update/import contracts
+  below; 80% (Silver) is met and 90% (Gold) is tracked in the issue tracker
 - The acceptance fixture provisions the prerequisites the bucket replication, bucket notification
   and remote target resources need, so their `TestAcc` tests run in CI instead of skipping:
   `rustfs-peer` is a second RustFS instance registered as a replication target, and the bucket

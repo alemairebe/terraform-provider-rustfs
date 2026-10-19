@@ -16,6 +16,7 @@ import (
 	fwresource "github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/plancheck"
 ) // originalModuleSwitch captures the server's module switch state before the
 // test mutates it, so the test can restore the original state afterwards.
 var originalModuleSwitch *rustfs.ModuleSwitchState
@@ -104,6 +105,12 @@ func testAccEnsureModuleEnabled(t *testing.T, module string) {
 }
 
 func TestAccModuleSwitchResource(t *testing.T) {
+	// The module switches are global server state also toggled by
+	// testAccEnsureModuleEnabled, so hold the same lock for the whole test to
+	// keep the read-back assertions deterministic.
+	moduleSwitchMutex.Lock()
+	t.Cleanup(moduleSwitchMutex.Unlock)
+
 	resource.Test(t, resource.TestCase{
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		PreCheck: func() {
@@ -149,6 +156,43 @@ resource "rustfs_module_switch" "test" {
 					resource.TestCheckResourceAttr("rustfs_module_switch.test", "notify_enabled", "false"),
 					resource.TestCheckResourceAttr("rustfs_module_switch.test", "audit_enabled", "true"),
 				),
+			},
+			// Explicit computed-consistency check: the post-apply plan for the
+			// configuration that was just applied must be empty.
+			{
+				Config: testAccProviderConfig() + `
+resource "rustfs_module_switch" "test" {
+  notify_enabled = false
+  audit_enabled  = true
+}
+`,
+				PlanOnly:           true,
+				ExpectNonEmptyPlan: false,
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PostApplyPreRefresh: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
+				},
+			},
+			// Revert the switch and assert the server read it back.
+			{
+				Config: testAccProviderConfig() + `
+resource "rustfs_module_switch" "test" {
+  notify_enabled = true
+  audit_enabled  = true
+}
+`,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("rustfs_module_switch.test", "notify_enabled", "true"),
+					resource.TestCheckResourceAttr("rustfs_module_switch.test", "audit_enabled", "true"),
+				),
+			},
+			// Import reads the switches back from the server, so the state must
+			// match the configuration applied above.
+			{
+				ResourceName:                         "rustfs_module_switch.test",
+				ImportState:                          true,
+				ImportStateId:                        "module-switches",
+				ImportStateVerify:                    true,
+				ImportStateVerifyIdentifierAttribute: "id",
 			},
 		},
 	})

@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/caberdo/terraform-provider-rustfs/pkg/rustfs"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -23,6 +25,48 @@ var (
 	_ resource.Resource                = &TierResource{}
 	_ resource.ResourceWithImportState = &TierResource{}
 )
+
+// RustFS reconciles every tier mutation cluster-wide in the background and
+// refuses the next one until it has finished: an edit is answered with
+// TierEditFailed ("Remote tier mutation recovery must finish before applying a
+// new tier configuration update") and an add or remove with
+// XMinioAdminTierBackendInUse ("Specified remote tier is already in use"). Both
+// are transient - the same request succeeds a moment later - so the resource
+// retries them for a bounded time instead of failing a whole Terraform run.
+const (
+	tierMutationAttempts = 12
+	tierMutationInterval = 500 * time.Millisecond
+)
+
+// isTransientTierMutationError reports whether the server refused a tier
+// mutation only because a previous one has not finished reconciling.
+func isTransientTierMutationError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if rustfs.IsAPIErrorCode(err, "TierEditFailed", "XMinioAdminTierBackendInUse") {
+		return true
+	}
+	// Older releases answer without a structured error code.
+	message := err.Error()
+	return strings.Contains(message, "Remote tier mutation recovery must finish") ||
+		strings.Contains(message, "Specified remote tier is already in use")
+}
+
+// tierMutation retries one tier registry mutation while the server reports that
+// a previous mutation has not finished reconciling.
+func tierMutation(mutate func() error) error {
+	var err error
+	for attempt := range tierMutationAttempts {
+		if err = mutate(); err == nil || !isTransientTierMutationError(err) {
+			return err
+		}
+		if attempt < tierMutationAttempts-1 {
+			time.Sleep(tierMutationInterval)
+		}
+	}
+	return err
+}
 
 type TierResource struct {
 	client *AllClient
@@ -90,7 +134,9 @@ func (r *TierResource) Create(ctx context.Context, req resource.CreateRequest, r
 		return
 	}
 
-	if err := r.client.RustClient.AddTier(json.RawMessage(plan.ConfigJson.ValueString())); err != nil {
+	if err := tierMutation(func() error {
+		return r.client.RustClient.AddTier(json.RawMessage(plan.ConfigJson.ValueString()))
+	}); err != nil {
 		resp.Diagnostics.AddError("Error adding tier", "Could not add tier: "+err.Error())
 		return
 	}
@@ -157,7 +203,9 @@ func (r *TierResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		return
 	}
 
-	if err := r.client.RustClient.EditTier(plan.Name.ValueString(), json.RawMessage(plan.ConfigJson.ValueString())); err != nil {
+	if err := tierMutation(func() error {
+		return r.client.RustClient.EditTier(plan.Name.ValueString(), json.RawMessage(plan.ConfigJson.ValueString()))
+	}); err != nil {
 		resp.Diagnostics.AddError("Error editing tier", "Could not edit tier: "+err.Error())
 		return
 	}
@@ -172,7 +220,9 @@ func (r *TierResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 		return
 	}
 
-	if err := r.client.RustClient.RemoveTier(data.Name.ValueString()); err != nil {
+	if err := tierMutation(func() error {
+		return r.client.RustClient.RemoveTier(data.Name.ValueString())
+	}); err != nil {
 		resp.Diagnostics.AddError("Error removing tier", "Could not remove tier: "+err.Error())
 		return
 	}
