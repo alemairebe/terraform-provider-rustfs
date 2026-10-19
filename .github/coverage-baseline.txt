@@ -18,7 +18,7 @@
 measured_total=83.4
 measured_provider=79.0
 measured_pkg_rustfs=97.8
-measured_commit=MERGE_COMMIT
+measured_commit=5407df9
 measured_date=2026-10-19
 
 # Enforced floor.

@@ -53,8 +53,8 @@ IMPROVEMENTS:
   class of bug), a replacement plan for each `RequiresReplace()` attribute that is then applied for
   real, `ImportState` with `ImportStateVerify` — plus the malformed-ID diagnostic where the import
   ID is composite — and out-of-band drift followed by the converging step. Merged unit + acceptance
-  statement coverage rose from 72.3% to 81.2%, and the floor in `.github/coverage-baseline.txt` moved
-  with it (`floor_total` 71.8 → 80.0), so the 17 `Update` and 11 `ImportState` functions that read
+  statement coverage rose from 72.3% to 83.4%, and the floor in `.github/coverage-baseline.txt` moved
+  with it (`floor_total` 71.8 → 82.0), so the 17 `Update` and 11 `ImportState` functions that read
   0% in issue #75 are covered
 - The eight types that had no test — `rustfs_tier`, `rustfs_rebalance`, `rustfs_iam_backup_import`,
   `rustfs_bucket_metadata_backup_import`, `rustfs_pools`, `rustfs_users`, `rustfs_iam_backup` and
