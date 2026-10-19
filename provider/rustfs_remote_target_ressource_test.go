@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -26,9 +28,9 @@ import (
 // endpoint is reachable and the destination bucket exists, a second running
 // rustfs peer is required. When it is not configured the test is skipped.
 type remoteTargetPeer struct {
-	endpoint      string // admin endpoint reachable from the rustfs server
-	adminEndpoint string // admin endpoint reachable from the test host
-	s3Endpoint    string // endpoint reachable from the test host for bucket setup
+	endpoint      string // peer S3 endpoint reachable from the rustfs server
+	adminEndpoint string // peer admin endpoint reachable from the test host
+	s3Endpoint    string // peer S3 endpoint reachable from the test host
 	accessKey     string
 	secretKey     string
 }
@@ -36,23 +38,70 @@ type remoteTargetPeer struct {
 func remoteTargetPeerConfig(t *testing.T) (*remoteTargetPeer, error) {
 	t.Helper()
 	p := &remoteTargetPeer{
-		endpoint:  os.Getenv("RUSTFS_PEER_ENDPOINT"),
-		accessKey: os.Getenv("RUSTFS_PEER_ACCESS_KEY"),
-		secretKey: os.Getenv("RUSTFS_PEER_SECRET_KEY"),
+		endpoint:      os.Getenv("RUSTFS_PEER_ENDPOINT"),
+		adminEndpoint: os.Getenv("RUSTFS_PEER_ADMIN_ENDPOINT"),
+		s3Endpoint:    os.Getenv("RUSTFS_PEER_S3_ENDPOINT"),
+		accessKey:     os.Getenv("RUSTFS_PEER_ACCESS_KEY"),
+		secretKey:     os.Getenv("RUSTFS_PEER_SECRET_KEY"),
 	}
-	if p.endpoint == "" || p.accessKey == "" || p.secretKey == "" {
-		return nil, fmt.Errorf("RUSTFS_PEER_ENDPOINT, RUSTFS_PEER_ACCESS_KEY and RUSTFS_PEER_SECRET_KEY must be set")
+	// The three endpoints are distinct by design: the remote target's endpoint
+	// must be the peer's S3 API as the primary server sees it, while the admin
+	// and S3 endpoints the test host uses are reached through the published
+	// ports. Falling back from one to another would silently point an S3 or
+	// admin call at the wrong port, so every value is required.
+	var missing []string
+	for name, value := range map[string]string{
+		"RUSTFS_PEER_ENDPOINT":       p.endpoint,
+		"RUSTFS_PEER_ADMIN_ENDPOINT": p.adminEndpoint,
+		"RUSTFS_PEER_S3_ENDPOINT":    p.s3Endpoint,
+		"RUSTFS_PEER_ACCESS_KEY":     p.accessKey,
+		"RUSTFS_PEER_SECRET_KEY":     p.secretKey,
+	} {
+		if value == "" {
+			missing = append(missing, name)
+		}
 	}
-	p.adminEndpoint = p.endpoint
-	if v := os.Getenv("RUSTFS_PEER_ADMIN_ENDPOINT"); v != "" {
-		p.adminEndpoint = v
-	}
-	if v := os.Getenv("RUSTFS_PEER_S3_ENDPOINT"); v != "" {
-		p.s3Endpoint = v
-	} else {
-		p.s3Endpoint = p.endpoint
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		return nil, fmt.Errorf("remote target acceptance test needs a peer: %s must be set", strings.Join(missing, ", "))
 	}
 	return p, nil
+}
+
+// testAccCheckRemoteTargetDestroy asserts that the remote target is gone from
+// its source bucket. A bucket that no longer exists is an equally valid end
+// state: the replication test lets Terraform destroy the source bucket.
+func testAccCheckRemoteTargetDestroy(s *terraform.State) error {
+	client := testAccRustClient()
+	for _, rs := range s.RootModule().Resources {
+		if rs.Type != "rustfs_remote_target" {
+			continue
+		}
+		bucket := rs.Primary.Attributes["bucket"]
+		want := rs.Primary.Attributes["arn"]
+		targets, err := client.ListRemoteTargets(bucket)
+		if err != nil {
+			if isBucketSubresourceAbsent(err) {
+				continue
+			}
+			return err
+		}
+		for _, target := range targets {
+			if target.Arn == want {
+				return fmt.Errorf("remote target %s still exists on bucket %s", want, bucket)
+			}
+		}
+	}
+	return nil
+}
+
+// testAccCheckBucketAndRemoteTargetDestroy checks the buckets Terraform managed
+// and the remote targets that referenced them.
+func testAccCheckBucketAndRemoteTargetDestroy(s *terraform.State) error {
+	if err := testAccCheckBucketDestroy(s); err != nil {
+		return err
+	}
+	return testAccCheckRemoteTargetDestroy(s)
 }
 
 // peerServiceAccount creates a service account on the peer with the caller's
@@ -191,6 +240,7 @@ func TestAccRemoteTargetResource(t *testing.T) {
 	resource.Test(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckRemoteTargetDestroy,
 		Steps: []resource.TestStep{
 			{
 				Config: testAccRemoteTargetConfig(srcBucket, dstBucket, peer, "false", "us-east-1", peer.accessKey, peer.secretKey),

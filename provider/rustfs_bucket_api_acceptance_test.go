@@ -356,7 +356,7 @@ func TestAccBucketReplicationResource_basic(t *testing.T) {
 	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
-		CheckDestroy:             testAccCheckBucketDestroy,
+		CheckDestroy:             testAccCheckBucketAndRemoteTargetDestroy,
 		Steps: []resource.TestStep{
 			{
 				Config: testAccReplicationConfig(name, peer, "Enabled"),

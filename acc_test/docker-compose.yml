@@ -54,9 +54,10 @@ services:
       RUSTFS_NOTIFY_TEST_ENDPOINT: "http://127.0.0.1:9001/health/ready"
       # Second RustFS instance used as the replication peer for
       # TestAccRemoteTargetResource and TestAccBucketReplicationResource.
-      # The primary server reaches it at rustfs-peer:9001; the test container
-      # reaches its S3 endpoint at rustfs-peer:9000.
-      RUSTFS_PEER_ENDPOINT: "rustfs-peer:9001"
+      # RUSTFS_PEER_ENDPOINT is the peer's S3 data API as the primary server
+      # reaches it (a remote target replicates over S3); the admin and S3
+      # endpoints the test container uses follow.
+      RUSTFS_PEER_ENDPOINT: "rustfs-peer:9000"
       RUSTFS_PEER_ADMIN_ENDPOINT: "rustfs-peer:9001"
       RUSTFS_PEER_S3_ENDPOINT: "rustfs-peer:9000"
       RUSTFS_PEER_ACCESS_KEY: "rustfsadmin"
