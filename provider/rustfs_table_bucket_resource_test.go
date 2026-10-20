@@ -257,6 +257,14 @@ func TestTableBucketResourceLifecyclePaths(t *testing.T) {
 			wantSummary: "Error creating table bucket",
 			wantDetail:  "Could not enable the S3 Tables catalog for bucket lakehouse: ",
 		},
+		{
+			// A 200 that leaves the switch off would be dropped by the next
+			// Read and planned as a recreate; fail the apply instead.
+			name:        "enable request that leaves the catalog off fails loudly",
+			routes:      []requestRoute{{status: http.StatusOK, body: `{"table-bucket":"lakehouse","enabled":false,"catalog-type":"iceberg-rest","warehouse":"lakehouse","catalog-entry-present":false,"catalog-uri":"/iceberg/v1/lakehouse"}`}},
+			wantSummary: "Error creating table bucket",
+			wantDetail:  "is still disabled after the enable request",
+		},
 	}
 
 	for _, tc := range createCases {

@@ -121,6 +121,16 @@ func (r *TableBucketResource) Create(ctx context.Context, req resource.CreateReq
 		)
 		return
 	}
+	// Read drops the resource whenever the switch is off, so writing an off
+	// switch to state here would churn create/refresh/recreate forever. Fail
+	// the apply instead of hiding the server's refusal.
+	if !tableBucket.Enabled {
+		resp.Diagnostics.AddError(
+			"Error creating table bucket",
+			"The S3 Tables catalog for bucket "+bucket+" is still disabled after the enable request.",
+		)
+		return
+	}
 
 	applyTableBucket(&plan, tableBucket)
 	tflog.Trace(ctx, "enabled the S3 Tables catalog on a bucket", map[string]any{"bucket": bucket})

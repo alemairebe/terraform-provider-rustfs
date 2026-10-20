@@ -5,10 +5,10 @@ package provider
 
 import (
 	"fmt"
-	"os"
 	"testing"
 
 	"github.com/caberdo/terraform-provider-rustfs/pkg/rustfs"
+	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/plancheck"
@@ -78,8 +78,11 @@ func testAccCheckTableBucketEnabled(n string) resource.TestCheckFunc {
 		if bucketName == "" {
 			return fmt.Errorf("no bucket set")
 		}
-		client := testAccTableBucketClient()
-		tableBucket, err := client.GetTableBucket(bucketName)
+		client, err := testAccTableBucketClient()
+		if err != nil {
+			return err
+		}
+		tableBucket, err := client.RustClient.GetTableBucket(bucketName)
 		if err != nil {
 			return fmt.Errorf("error reading table bucket: %s", err)
 		}
@@ -95,8 +98,11 @@ func testAccCheckTableBucketEnabled(n string) resource.TestCheckFunc {
 // warns and drops the resource from state while the server keeps the catalog
 // enabled; the listener route cannot be asserted on that release.
 func testAccCheckTableBucketDestroy(s *terraform.State) error {
-	client := testAccTableBucketClient()
-	version, _, err := client.ServerVersion()
+	client, err := testAccTableBucketClient()
+	if err != nil {
+		return err
+	}
+	version, _, err := client.RustClient.ServerVersion()
 	supportsDisable := err == nil && version.AtLeast(rustfs.Version{Major: 1, Minor: 0, Patch: 2})
 
 	for _, rs := range s.RootModule().Resources {
@@ -110,7 +116,7 @@ func testAccCheckTableBucketDestroy(s *terraform.State) error {
 		if !supportsDisable {
 			continue
 		}
-		tableBucket, err := client.GetTableBucket(bucketName)
+		tableBucket, err := client.RustClient.GetTableBucket(bucketName)
 		if err != nil {
 			// A missing bucket has no catalog switch left to verify.
 			continue
@@ -122,10 +128,30 @@ func testAccCheckTableBucketDestroy(s *terraform.State) error {
 	return nil
 }
 
-func testAccTableBucketClient() rustfs.RustfsAdmin {
-	return rustfs.New(&rustfs.RustfsAdminConfig{
-		Endpoint:     os.Getenv("RUSTFS_ENDPOINT"),
-		AccessKey:    os.Getenv("RUSTFS_USER"),
-		AccessSecret: os.Getenv("RUSTFS_SECRET"),
+// testAccTableBucketClient returns the provider's own configured client. It
+// runs the same Configure path Terraform takes, so the endpoint and credential
+// resolution (environment variables in the acceptance run) is not re-implemented
+// in the check helpers.
+func testAccTableBucketClient() (*AllClient, error) {
+	// Null attributes let Configure resolve every value from the environment,
+	// exactly like the provider block the acceptance suite declares.
+	resp, err := configureProviderValue(RustfsProviderModel{
+		Endpoint:     types.StringNull(),
+		AccessKey:    types.StringNull(),
+		SecretKey:    types.StringNull(),
+		AccessSecret: types.StringNull(),
+		Ssl:          types.BoolNull(),
+		Insecure:     types.BoolNull(),
 	})
+	if err != nil {
+		return nil, err
+	}
+	if resp.Diagnostics.HasError() {
+		return nil, fmt.Errorf("provider configure: %v", resp.Diagnostics)
+	}
+	client, ok := resp.ResourceData.(*AllClient)
+	if !ok {
+		return nil, fmt.Errorf("expected *AllClient in ResourceData, got %T", resp.ResourceData)
+	}
+	return client, nil
 }

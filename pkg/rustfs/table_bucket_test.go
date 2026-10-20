@@ -29,9 +29,11 @@ func newTableBucketClient(t *testing.T, handler http.HandlerFunc) rustfs.RustfsA
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 
+	// The httptest server never verifies the signature; these values only label
+	// the requests, so they are fake fixtures rather than credentials.
 	return rustfs.New(&rustfs.RustfsAdminConfig{
-		AccessKey:    "rustfsadmin",
-		AccessSecret: "rustfsadmin",
+		AccessKey:    "unit-test-access-key",
+		AccessSecret: "unit-test-secret-key",
 		Endpoint:     strings.TrimPrefix(srv.URL, "http://"),
 	})
 }
