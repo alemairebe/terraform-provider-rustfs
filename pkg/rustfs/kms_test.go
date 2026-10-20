@@ -871,3 +871,100 @@ func TestCreateKmsBackupUnsupportedBackend(t *testing.T) {
 		t.Fatalf("expected a capability error, got %v", err)
 	}
 }
+
+func TestGetKmsRekeyStatusInvalidJSON(t *testing.T) {
+	client := newKmsTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`not-json`))
+	})
+
+	if _, err := client.GetKmsRekeyStatus(); err == nil {
+		t.Fatal("expected a decode error")
+	}
+}
+
+func TestGetKmsBackupStatusError(t *testing.T) {
+	client := newKmsTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`boom`))
+	})
+
+	if _, err := client.GetKmsBackupStatus(); err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("expected the server error, got %v", err)
+	}
+}
+
+func TestGetKmsBackupStatusInvalidJSON(t *testing.T) {
+	client := newKmsTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"service_status":`))
+	})
+
+	if _, err := client.GetKmsBackupStatus(); err == nil {
+		t.Fatal("expected a decode error")
+	}
+}
+
+func TestCreateKmsBackupInvalidJSON(t *testing.T) {
+	client := newKmsTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`not-json`))
+	})
+
+	if _, err := client.CreateKmsBackup("nightly-1"); err == nil {
+		t.Fatal("expected a decode error")
+	}
+}
+
+func TestKmsKeyMetadataMutationErrors(t *testing.T) {
+	t.Run("server error", func(t *testing.T) {
+		client := newKmsTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`boom`))
+		})
+		if _, err := client.TagKmsKey("k1", map[string]string{"env": "test"}); err == nil || !strings.Contains(err.Error(), "boom") {
+			t.Fatalf("expected the server error, got %v", err)
+		}
+	})
+
+	t.Run("invalid JSON", func(t *testing.T) {
+		client := newKmsTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`not-json`))
+		})
+		if _, err := client.TagKmsKey("k1", nil); err == nil {
+			t.Fatal("expected a decode error")
+		}
+	})
+
+	t.Run("missing key metadata reports the server message", func(t *testing.T) {
+		client := newKmsTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"success":false,"message":"key not found"}`))
+		})
+		_, err := client.TagKmsKey("k1", nil)
+		if err == nil || err.Error() != "key not found" {
+			t.Fatalf("expected the server message, got %v", err)
+		}
+	})
+}
+
+func TestKmsRekeyCallMarshalError(t *testing.T) {
+	client := newKmsTestClient(t, func(http.ResponseWriter, *http.Request) {
+		t.Error("no request should be sent when the body cannot be encoded")
+	})
+
+	if _, err := client.kmsRekeyCall(http.MethodPost, "kms/keys/rekey", make(chan int)); err == nil {
+		t.Fatal("expected a marshal error")
+	}
+}
+
+func TestKmsKeyMetadataMutationMarshalError(t *testing.T) {
+	client := newKmsTestClient(t, func(http.ResponseWriter, *http.Request) {
+		t.Error("no request should be sent when the body cannot be encoded")
+	})
+
+	if _, err := client.kmsKeyMetadataMutation("kms/keys/tag", make(chan int)); err == nil {
+		t.Fatal("expected a marshal error")
+	}
+}
