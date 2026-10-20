@@ -268,9 +268,15 @@ func testAccScannerCycleStateResetPreCheck(t *testing.T) {
 	testAccScannerStatusPreCheck(t)
 
 	client := testAccRustClient()
-	if _, err := client.ResetScannerCycleState(); err != nil {
+	_, err := resetWithScannerLeaderRetry(context.Background(), func() (rustfs.ScannerCycleStateResetResult, error) {
+		return client.ResetScannerCycleState()
+	})
+	if err != nil {
 		if rustfs.IsUnsupportedFeature(err) {
 			t.Skipf("scanner cycle-state reset is not implemented by the running RustFS, skipping: %v", err)
+		}
+		if rustfs.IsScannerLeaderLockBusy(err) {
+			t.Skipf("scanner cycle-state reset precheck could not take the scanner leader lock, skipping: %v", err)
 		}
 		t.Fatalf("could not reset scanner cycle state: %v", err)
 	}

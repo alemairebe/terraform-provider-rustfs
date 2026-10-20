@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/caberdo/terraform-provider-rustfs/pkg/rustfs"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
@@ -15,14 +14,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
-)
-
-var (
-	// usageResetBusyRetries bounds how often a reset is retried while the
-	// scanner leader still holds the state lock. usageResetBusyDelay is a
-	// variable so tests can remove the wait.
-	usageResetBusyRetries = 3
-	usageResetBusyDelay   = 2 * time.Second
 )
 
 var (
@@ -251,29 +242,9 @@ func (r *ScannerUsageStateResetResource) runReset(
 // holds the state lock. The async recovery-intent form is deliberately not
 // used, so a lock that never frees fails the apply with the server's error.
 func (r *ScannerUsageStateResetResource) resetUsageState(ctx context.Context) (rustfs.ScannerUsageStateResetResult, error) {
-	var lastErr error
-	for attempt := 0; attempt <= usageResetBusyRetries; attempt++ {
-		result, err := r.client.RustClient.ResetScannerUsageState()
-		if err == nil {
-			return result, nil
-		}
-		if !rustfs.IsScannerLeaderLockBusy(err) {
-			return rustfs.ScannerUsageStateResetResult{}, err
-		}
-		lastErr = err
-		if attempt == usageResetBusyRetries {
-			break
-		}
-
-		timer := time.NewTimer(usageResetBusyDelay)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return rustfs.ScannerUsageStateResetResult{}, ctx.Err()
-		case <-timer.C:
-		}
-	}
-	return rustfs.ScannerUsageStateResetResult{}, lastErr
+	return resetWithScannerLeaderRetry(ctx, func() (rustfs.ScannerUsageStateResetResult, error) {
+		return r.client.RustClient.ResetScannerUsageState()
+	})
 }
 
 func init() {

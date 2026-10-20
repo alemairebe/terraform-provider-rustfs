@@ -46,6 +46,7 @@ func (r *ScannerCycleStateResetResource) Schema(_ context.Context, _ resource.Sc
 		"Creating this resource clears the scanner's cycle-recovery bookkeeping and makes the next cycle " +
 		"scan the full namespace; it does not discard usage accounting. The action is one-shot: Read only " +
 		"echoes the recorded result, Delete is a no-op, and changing `triggers` runs the reset again. " +
+		"The provider retries a busy scanner leader lock a few times before failing. " +
 		"Scanner tuning stays in the `scanner` subsystem of `rustfs_config` or in the server environment."
 	resp.Schema = schema.Schema{
 		Description:         description,
@@ -134,12 +135,14 @@ func (r *ScannerCycleStateResetResource) Delete(_ context.Context, _ resource.De
 // runReset calls the reset route and fills the model. It is shared by Create
 // and Update so a trigger change has exactly the same effect as the first run.
 func (r *ScannerCycleStateResetResource) runReset(
-	_ context.Context,
+	ctx context.Context,
 	summary string,
 	model *ScannerCycleStateResetResourceModel,
 	diagnostics *diag.Diagnostics,
 ) {
-	result, err := r.client.RustClient.ResetScannerCycleState()
+	result, err := resetWithScannerLeaderRetry(ctx, func() (rustfs.ScannerCycleStateResetResult, error) {
+		return r.client.RustClient.ResetScannerCycleState()
+	})
 	if err != nil {
 		var unsupported *rustfs.UnsupportedFeatureError
 		if errors.As(err, &unsupported) {
