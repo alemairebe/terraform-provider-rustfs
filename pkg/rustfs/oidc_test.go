@@ -20,8 +20,9 @@ import (
 // they only label the requests. They are read from the environment when set and
 // otherwise generated, never embedded as literal credentials.
 var (
-	oidcTestAccessKey = oidcTestCredential("RUSTFS_TEST_OIDC_ACCESS_KEY", 'u')
-	oidcTestSecretKey = oidcTestCredential("RUSTFS_TEST_OIDC_SECRET_KEY", 'v')
+	oidcTestAccessKey    = oidcTestCredential("RUSTFS_TEST_OIDC_ACCESS_KEY", 'u')
+	oidcTestSecretKey    = oidcTestCredential("RUSTFS_TEST_OIDC_SECRET_KEY", 'v')
+	oidcTestClientSecret = oidcTestCredential("RUSTFS_TEST_OIDC_CLIENT_SECRET", 's')
 )
 
 func oidcTestCredential(env string, fill byte) string {
@@ -131,7 +132,7 @@ func TestUpsertOIDCProvider(t *testing.T) {
 		_, _ = io.WriteString(w, `{"success":true,"message":"OIDC provider saved","restart_required":true}`)
 	})
 
-	secret := "s3cr3t"
+	secret := oidcTestClientSecret
 	input := rustfs.OIDCProviderInput{
 		Enabled:            true,
 		DisplayName:        "Keycloak",
@@ -155,7 +156,7 @@ func TestUpsertOIDCProvider(t *testing.T) {
 	if method != http.MethodPut || requestPath != "/rustfs/admin/v3/oidc/config/keycloak" {
 		t.Errorf("request = %s %s", method, requestPath)
 	}
-	if body["client_secret"] != "s3cr3t" {
+	if body["client_secret"] != oidcTestClientSecret {
 		t.Errorf("client_secret = %v", body["client_secret"])
 	}
 	if body["config_url"] != input.ConfigURL || body["client_id"] != "rustfs" {

@@ -18,6 +18,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
+var oidcTestClientSecret = unitTestCredential("RUSTFS_TEST_OIDC_CLIENT_SECRET", 's')
+
 func TestOIDCProviderResourceSchema(t *testing.T) {
 	r := NewOIDCProviderResource()
 	resp := &resource.SchemaResponse{}
@@ -102,6 +104,7 @@ func TestOIDCDisplayNameDefaultModifier(t *testing.T) {
 	}{
 		{name: "omitted defaults to the provider id", configValue: types.StringNull(), want: types.StringValue("keycloak")},
 		{name: "unknown defaults to the provider id", configValue: types.StringUnknown(), want: types.StringValue("keycloak")},
+		{name: "whitespace-only defaults to the provider id", configValue: types.StringValue("   "), want: types.StringValue("keycloak")},
 		{name: "explicit value is kept", configValue: types.StringValue("Custom"), want: types.StringValue("Custom")},
 	}
 
@@ -149,7 +152,7 @@ func oidcProviderStateModel() *OIDCProviderResourceModel {
 		ConfigURL:              types.StringValue("https://kc.example.com/realms/rustfs/.well-known/openid-configuration"),
 		Issuer:                 types.StringNull(),
 		ClientID:               types.StringValue("rustfs"),
-		ClientSecret:           types.StringValue("s3cr3t"),
+		ClientSecret:           types.StringValue(oidcTestClientSecret),
 		ClientSecretConfigured: types.BoolValue(true),
 		Scopes:                 oidcScopeList(),
 		OtherAudiences:         emptyStringList(),
@@ -236,7 +239,7 @@ func TestOIDCProviderResourceLifecyclePaths(t *testing.T) {
 			// survive a refresh or every plan would diff forever.
 			name:       "configured secret is preserved from state",
 			routes:     []requestRoute{{method: http.MethodGet, pathContains: "/oidc/config", status: http.StatusOK, body: oidcProviderBody(true)}},
-			wantSecret: types.StringValue("s3cr3t"),
+			wantSecret: types.StringValue(oidcTestClientSecret),
 		},
 		{
 			name:       "secret removed on the server clears state",
@@ -248,7 +251,7 @@ func TestOIDCProviderResourceLifecyclePaths(t *testing.T) {
 			// empty value must not make the post-apply state disagree.
 			name:            "empty server display name falls back to the provider id",
 			routes:          []requestRoute{{method: http.MethodGet, pathContains: "/oidc/config", status: http.StatusOK, body: replaceOnce(oidcProviderBody(true), `"display_name":"Keycloak"`, `"display_name":""`)}},
-			wantSecret:      types.StringValue("s3cr3t"),
+			wantSecret:      types.StringValue(oidcTestClientSecret),
 			wantDisplayName: "keycloak",
 		},
 		{
@@ -317,7 +320,7 @@ func TestOIDCProviderResourceLifecyclePaths(t *testing.T) {
 
 		requireNoDiagnostics(t, resp.Diagnostics)
 		assertStateString(t, resp.State, path.Root("id"), "keycloak")
-		assertStateString(t, resp.State, path.Root("client_secret"), "s3cr3t")
+		assertStateString(t, resp.State, path.Root("client_secret"), oidcTestClientSecret)
 		assertStateString(t, resp.State, path.Root("source"), "persisted")
 		recorder.assertRequest(t, "POST /rustfs/admin/v3/oidc/validate")
 		recorder.assertRequest(t, "PUT /rustfs/admin/v3/oidc/config/keycloak")
@@ -407,7 +410,7 @@ func TestOIDCProviderResourceLifecyclePaths(t *testing.T) {
 
 		requireNoDiagnostics(t, resp.Diagnostics)
 		assertStateString(t, resp.State, path.Root("display_name"), "Keycloak Updated")
-		assertStateString(t, resp.State, path.Root("client_secret"), "s3cr3t")
+		assertStateString(t, resp.State, path.Root("client_secret"), oidcTestClientSecret)
 		recorder.assertRequest(t, "PUT /rustfs/admin/v3/oidc/config/keycloak")
 	})
 

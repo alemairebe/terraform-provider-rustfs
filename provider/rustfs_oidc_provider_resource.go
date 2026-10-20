@@ -497,7 +497,7 @@ func (oidcDisplayNameDefault) MarkdownDescription(context.Context) string {
 }
 
 func (oidcDisplayNameDefault) PlanModifyString(ctx context.Context, req planmodifier.StringRequest, resp *planmodifier.StringResponse) {
-	if !req.ConfigValue.IsNull() && !req.ConfigValue.IsUnknown() {
+	if !req.ConfigValue.IsNull() && !req.ConfigValue.IsUnknown() && strings.TrimSpace(req.ConfigValue.ValueString()) != "" {
 		return
 	}
 
