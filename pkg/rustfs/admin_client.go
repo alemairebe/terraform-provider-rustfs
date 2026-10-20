@@ -23,7 +23,14 @@ import (
 )
 
 const (
-	rustfsApiVersion    = "v3"
+	rustfsApiVersion = "v3"
+	// adminSigningRegion is the credential-scope region for every signed
+	// request. RustFS does not validate the scope's region: live probes on
+	// 1.0.1, 1.0.2 and 1.0.3 accepted both us-east-01 (this value) and
+	// us-east-1 for the /iceberg/v1 table-bucket routes, with the S3 data
+	// plane and the admin API behaving the same way. The value stays fixed for
+	// every call so existing requests are not re-signed; table_bucket_test.go
+	// pins the emitted credential scope.
 	adminSigningRegion  = "us-east-01"
 	adminSigningService = "s3"
 )

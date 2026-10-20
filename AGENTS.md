@@ -32,6 +32,7 @@ Registry address: `registry.terraform.io/caberdo/rustfs`.
 | `rustfs_bucket_notification` | `provider/rustfs_bucket_notification_resource.go` | Event notification targets |
 | `rustfs_bucket_replication` | `provider/rustfs_bucket_replication_resource.go` | Cross-bucket replication |
 | `rustfs_bucket_durability` | `provider/rustfs_bucket_durability_resource.go` | Per-bucket durability override |
+| `rustfs_table_bucket` | `provider/rustfs_table_bucket_resource.go` | S3 Tables (Iceberg REST catalog) switch on a bucket |
 | `rustfs_site_replication` | `provider/rustfs_site_replication_resource.go` | Site-replication peers |
 | `rustfs_remote_target` | `provider/rustfs_remote_target_resource.go` | Remote replication/notification targets |
 | `rustfs_rebalance` | `provider/rustfs_rebalance_resource.go` | Pool rebalancing |

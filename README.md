@@ -108,21 +108,24 @@ server version up front; it reports a capability gap when a route it needs is un
 | Capability | Provider types | `1.0.1` | `1.0.2` | `1.0.3` |
 |---|---|:--:|:--:|:--:|
 | S3 API and admin API v3 routes (buckets, IAM, quotas, replication, tiers, targets, config, health, info, …) | every resource and data source except `rustfs_metrics` | ✅ | ✅ | ✅ |
+| S3 Tables catalog switch — `PUT`/`GET /iceberg/v1/buckets/{bucket}` | `rustfs_table_bucket` create and read | ✅ | ✅ | ✅ |
+| S3 Tables catalog disable — `DELETE /iceberg/v1/buckets/{bucket}` | `rustfs_table_bucket` destroy | ❌ | ✅ | ✅ |
 | Admin metrics stream — `GET /rustfs/admin/v3/metrics` | `rustfs_metrics` data source | ❌ | ❌ | ❌ |
 
 `1.0.3` is a console-only update: it ships the same server code as `1.0.2`, so its server
 capabilities are identical. A ❌ means the route is registered but not implemented (see below); the
 data source fails with a diagnostic naming the route and the server version instead of the raw
-error payload.
+error payload, and destroying `rustfs_table_bucket` on `1.0.1` warns, names the route and drops the
+resource from state.
 
 #### Route presence is not support (501 semantics)
 
 RustFS registers admin routes before it implements them and answers `501 NotImplemented` (an
 S3-style `<Error><Code>NotImplemented</Code></Error>` body) instead of `404`. A route in the server's
 route table is therefore not proof of support — `DELETE /iceberg/v1/buckets/{warehouse}` is
-registered but unimplemented on these releases. For the routes it depends on, the provider treats
-`404`, `405` and `501` as a capability gap and reports an `UnsupportedFeatureError` naming the
-feature, the route and the server version:
+registered but unimplemented on `1.0.1` (it works on `1.0.2` and `1.0.3`). For the routes it depends
+on, the provider treats `404`, `405` and `501` as a capability gap and reports an
+`UnsupportedFeatureError` naming the feature, the route and the server version:
 
 ```text
 Error: Metrics are not available on this RustFS server
@@ -183,6 +186,7 @@ Every resource links to its documentation on the Terraform Registry.
 | [`rustfs_bucket_notification`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/bucket_notification) | Bucket event notification configuration |
 | [`rustfs_bucket_replication`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/bucket_replication) | Cross-bucket replication |
 | [`rustfs_bucket_durability`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/bucket_durability) | Per-bucket durability override |
+| [`rustfs_table_bucket`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/table_bucket) | S3 Tables (Iceberg REST catalog) switch on a bucket |
 | [`rustfs_site_replication`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/site_replication) | Site-replication peers |
 | [`rustfs_remote_target`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/remote_target) | Remote replication/notification targets |
 | [`rustfs_rebalance`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/rebalance) | Trigger pool rebalancing |

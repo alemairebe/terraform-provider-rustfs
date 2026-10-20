@@ -125,6 +125,11 @@ const (
 	// FeatureMetrics is the admin metrics stream read by the rustfs_metrics
 	// data source (GET /rustfs/admin/v3/metrics).
 	FeatureMetrics Feature = "metrics"
+
+	// FeatureTableBucket is the disable half of the S3 Tables catalog switch
+	// (DELETE /iceberg/v1/buckets/{bucket}). Enable and read work on every
+	// supported release; only the disable route is missing on 1.0.1.
+	FeatureTableBucket Feature = "the S3 Tables catalog switch"
 )
 
 // featureSpec records what a feature needs from the server.
@@ -143,6 +148,13 @@ var featureSpecs = map[Feature]featureSpec{
 		route: "GET /rustfs/admin/v3/metrics",
 		// No release implements the route yet: RustFS registers it and answers
 		// 501 NotImplemented (observed on 1.0.1, 1.0.2 and 1.0.3).
+	},
+	FeatureTableBucket: {
+		route: "DELETE /iceberg/v1/buckets/{bucket}",
+		// Probed live: 1.0.1 answers 501 NotImplemented for the disable route,
+		// while 1.0.2 and 1.0.3 disable the catalog. Enable and read work on
+		// all three.
+		minVersion: &Version{Major: 1, Minor: 0, Patch: 2, Raw: "1.0.2"},
 	},
 }
 
