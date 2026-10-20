@@ -133,7 +133,9 @@ func TestAdminClientErrorBranchesOnServerFailure(t *testing.T) {
 			_, err := client.SiteReplicationResyncOp("start", SiteReplicationPeer{Name: "peer"})
 			return err
 		}},
-		{"StartRebalance", func() error { return client.StartRebalance() }},
+		{"StartRebalance", func() error { _, err := client.StartRebalance(context.Background()); return err }},
+		{"RebalanceStatus", func() error { _, err := client.RebalanceStatus(context.Background()); return err }},
+		{"StopRebalance", func() error { return client.StopRebalance(context.Background()) }},
 		{"StorageInfo", func() error { _, err := client.StorageInfo(); return err }},
 		{"TierStats", func() error { _, err := client.TierStats(); return err }},
 		{"UpdateGroupMembers", func() error {
