@@ -73,11 +73,16 @@ services:
       # and records the local site from the Host header of the admin request, so
       # a host-side run against a published port cannot form the group.
       RUSTFS_SITE_REPLICATION_PEER_ENDPOINT: "http://rustfs-peer:9000"
+      # Native-TLS listener for rustfs_tls_certificate. The other instances
+      # serve plain HTTP, where RustFS refuses certificate management.
+      RUSTFS_TLS_ENDPOINT: "rustfs-tls:9001"
       TEST_FILTER: "${TEST_FILTER:-TestAcc}"
     depends_on:
       rustfs:
         condition: service_started
       rustfs-peer:
+        condition: service_started
+      rustfs-tls:
         condition: service_started
     profiles:
       - test
@@ -119,6 +124,60 @@ services:
       RUSTFS_ACCESS_KEY: rustfsadmin
       RUSTFS_SECRET_KEY: rustfsadmin
 
+  # Generates the ephemeral certificate pair the TLS fixture serves, so no
+  # private key is committed to the repository. The output lands in the ignored
+  # acc_test/tls directory, which both rustfs-tls and the test process mount.
+  tls-certgen:
+    image: golang:1.27@sha256:820153096fda4de6ac1b7194d12e416b7dd8f4e9a33d17e0345b111b945162d8
+    working_dir: /workspaces/terraform-provider-rustfs/acc_test/tlscertgen
+    volumes:
+      - ..:/workspaces/terraform-provider-rustfs
+    command:
+      - go
+      - run
+      - .
+      - /workspaces/terraform-provider-rustfs/acc_test/tls
+    environment:
+      # go.mod requires go 1.27.2; let the image fetch that toolchain if its
+      # bundled Go is older, matching the test service.
+      GOTOOLCHAIN: auto
+
+  # Native-TLS listener for rustfs_tls_certificate. RustFS only accepts
+  # certificate publication on a listener it serves TLS from, and only when a
+  # private publication directory is configured outside the TLS material path.
+  # The publication directory is a named volume because RustFS requires it to
+  # be 0700 and owned by the process, which a bind mount checked into git cannot
+  # guarantee.
+  rustfs-tls:
+    image: rustfs/rustfs:${RUSTFS_VERSION:-latest}
+    user: root
+    entrypoint:
+      - /bin/sh
+      - -c
+    command:
+      - >-
+        chmod 700 /tls-publish &&
+        exec /entrypoint.sh rustfs
+    depends_on:
+      tls-certgen:
+        condition: service_completed_successfully
+    ports:
+      - "9004:9000"
+      - "9005:9001"
+    volumes:
+      - ./tls:/tls-src:ro
+      - rustfs-tls-publish:/tls-publish
+    environment:
+      RUSTFS_ACCESS_KEY: rustfsadmin
+      RUSTFS_SECRET_KEY: rustfsadmin
+      RUSTFS_TLS_PATH: /tls-src
+      RUSTFS_TLS_PUBLISH_DIR: /tls-publish
+      RUSTFS_TLS_RELOAD_ENABLE: "true"
+      RUSTFS_TLS_RELOAD_INTERVAL: "5"
+      RUSTFS_TRUST_LEAF_CERT_AS_CA: "false"
+      RUSTFS_SERVER_MTLS_ENABLE: "false"
+
 volumes:
   go-modules:
   terraform-bin:
+  rustfs-tls-publish:

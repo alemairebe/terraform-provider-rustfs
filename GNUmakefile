@@ -77,7 +77,7 @@ testacc-docker:
 # RUSTFS_PEER_ACCESS_KEY/RUSTFS_PEER_SECRET_KEY (the peer) before running this
 # target, with the same values the compose fixture gives its services.
 testacc-live:
-	podman-compose -f acc_test/docker-compose.yml up -d rustfs rustfs-peer
+	podman-compose -f acc_test/docker-compose.yml up -d rustfs rustfs-peer rustfs-tls
 	RUSTFS_ENDPOINT=127.0.0.1:9001 \
 	RUSTFS_USER="$${RUSTFS_USER:?RUSTFS_USER must be set (the acceptance fixture's access key)}" \
 	RUSTFS_SECRET="$${RUSTFS_SECRET:?RUSTFS_SECRET must be set (the acceptance fixture's secret key)}" \
@@ -86,6 +86,7 @@ testacc-live:
 	RUSTFS_PEER_S3_ENDPOINT=127.0.0.1:9002 \
 	RUSTFS_PEER_ACCESS_KEY="$${RUSTFS_PEER_ACCESS_KEY:?RUSTFS_PEER_ACCESS_KEY must be set}" \
 	RUSTFS_PEER_SECRET_KEY="$${RUSTFS_PEER_SECRET_KEY:?RUSTFS_PEER_SECRET_KEY must be set}" \
+	RUSTFS_TLS_ENDPOINT=127.0.0.1:9005 \
 	TF_ACC=1 go test -v ./...
 
 validate-examples:

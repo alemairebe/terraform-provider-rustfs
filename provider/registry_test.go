@@ -50,6 +50,7 @@ var goldenResourceTypeNames = []string{
 	"rustfs_site_replication",
 	"rustfs_table_bucket",
 	"rustfs_tier",
+	"rustfs_tls_certificate",
 	"rustfs_user",
 	"rustfs_user_policy_attachment",
 }
@@ -72,6 +73,7 @@ var goldenDataSourceTypeNames = []string{
 	"rustfs_replication_metrics",
 	"rustfs_server_info",
 	"rustfs_storage_info",
+	"rustfs_tls_certificate_state",
 	"rustfs_user_mfa",
 	"rustfs_users",
 }
