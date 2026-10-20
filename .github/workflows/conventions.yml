@@ -1,0 +1,224 @@
+name: Conventions
+
+# Enforces the Markdown conventions that keep parallel pull requests from
+# conflicting: every user-visible change carries its own changelog fragment,
+# and the shared release files (CHANGELOG.md, AGENTS.md, README.md,
+# docs/index.md, templates/) are written by exactly one actor.
+#
+# Exemptions:
+#   - `release/*` branches: the release PR edits the shared files by design
+#     (scripts/changelog-release.sh + make generate-tables).
+#   - the `shared-md` label: a deliberate documentation PR that has to touch a
+#     shared file (for example a README correction).
+#   - the `skip-changelog` label: no fragment required (already excluded from
+#     the GitHub release notes in .github/release.yml).
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  changelog:
+    name: Changelog Fragment
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Dependabot cannot add a fragment or a label, and its PRs are excluded
+    # from the release notes by author in .github/release.yml.
+    if: github.actor != 'dependabot[bot]'
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Require a well-formed fragment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          # Backticks in the messages below are literal Markdown.
+          # shellcheck disable=SC2016
+          set -euo pipefail
+
+          if [[ "$HEAD_REF" == release/* ]]; then
+            echo "Release branch: the changelog is assembled from changelog.d/ by scripts/changelog-release.sh."
+            exit 0
+          fi
+
+          labels="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '.labels[].name')"
+          if grep -qx 'skip-changelog' <<<"$labels"; then
+            echo "skip-changelog label present; no fragment required."
+            exit 0
+          fi
+
+          files="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" --paginate \
+            --jq '.[] | [.status, .filename] | @tsv')"
+
+          tab=$'\t'
+
+          if grep -qE "^(added|modified|removed|renamed)${tab}CHANGELOG\.md$" <<<"$files"; then
+            {
+              echo "## Do not edit CHANGELOG.md in a feature pull request"
+              echo ""
+              echo "Add \`changelog.d/<issue>-<kind>-<slug>.md\` instead. The release pull request"
+              echo "bundles the fragments with \`make changelog-release VERSION=x.y.z\`."
+            } >>"$GITHUB_STEP_SUMMARY"
+            echo "CHANGELOG.md must not be edited outside a release/* branch." >&2
+            exit 1
+          fi
+
+          fragments=()
+          while IFS= read -r fragment; do
+            [[ -z "$fragment" ]] && continue
+            fragments+=("$fragment")
+          done < <(grep -E "^added${tab}changelog\.d/[^/]+\.md$" <<<"$files" | cut -f2 | grep -v '^changelog\.d/README\.md$' || true)
+
+          if (( ${#fragments[@]} == 0 )); then
+            {
+              echo "## Missing changelog fragment"
+              echo ""
+              echo "Add \`changelog.d/<issue>-<kind>-<slug>.md\`, or label the pull request"
+              echo "\`skip-changelog\` when no user can observe the change."
+            } >>"$GITHUB_STEP_SUMMARY"
+            echo "No changelog.d/ fragment added." >&2
+            exit 1
+          fi
+
+          pattern='^changelog\.d/[0-9]+-(breaking|feature|improvement|bugfix|security|chore)-[a-z0-9][a-z0-9-]*\.md$'
+          bad=()
+          for fragment in "${fragments[@]}"; do
+            if [[ ! "$fragment" =~ $pattern ]]; then
+              bad+=("$fragment")
+            fi
+          done
+
+          if (( ${#bad[@]} > 0 )); then
+            {
+              echo "## Malformed changelog fragment name"
+              echo ""
+              echo "Expected \`changelog.d/<issue>-<kind>-<slug>.md\`, where \`<kind>\` is one of"
+              echo "\`breaking\`, \`feature\`, \`improvement\`, \`bugfix\`, \`security\` or \`chore\`."
+              echo ""
+              echo "\`\`\`"
+              printf '%s\n' "${bad[@]}"
+              echo "\`\`\`"
+            } >>"$GITHUB_STEP_SUMMARY"
+            echo "Malformed fragment name(s):" >&2
+            printf '%s\n' "${bad[@]}" >&2
+            exit 1
+          fi
+
+          echo "Changelog fragments:"
+          printf '%s\n' "${fragments[@]}"
+
+  shared-md:
+    name: Shared Markdown Untouched
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Reject edits to shared release files
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          # shellcheck disable=SC2016
+          set -euo pipefail
+
+          if [[ "$HEAD_REF" == release/* ]]; then
+            echo "Release branch: shared files are updated by the release assembly."
+            exit 0
+          fi
+
+          labels="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '.labels[].name')"
+          if grep -qx 'shared-md' <<<"$labels"; then
+            echo "shared-md label present; a deliberate documentation change is allowed."
+            exit 0
+          fi
+
+          files="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" --paginate \
+            --jq '.[] | [.status, .filename] | @tsv')"
+
+          offenders=()
+          while IFS=$'\t' read -r _status path; do
+            [[ -z "$path" ]] && continue
+            case "$path" in
+              CHANGELOG.md|AGENTS.md|README.md|docs/index.md|templates/*)
+                offenders+=("$path")
+                ;;
+            esac
+          done <<<"$files"
+
+          if (( ${#offenders[@]} > 0 )); then
+            {
+              echo "## Shared Markdown is written by the release PR only"
+              echo ""
+              echo "This pull request edits:"
+              echo ""
+              printf -- "- \`%s\`\n" "${offenders[@]}"
+              echo ""
+              echo "These files are regenerated by the release pull request"
+              echo "(\`make generate-tables\` and \`make changelog-release\`), so editing them here"
+              echo "reintroduces the merge conflicts the fragments removed."
+              echo ""
+              echo "Use a \`changelog.d/\` fragment instead. If the change really is a"
+              echo "documentation correction, add the \`shared-md\` label."
+            } >>"$GITHUB_STEP_SUMMARY"
+            echo "Shared Markdown edited without the shared-md label." >&2
+            exit 1
+          fi
+
+          echo "No shared Markdown files edited."
+
+  tables-idempotent:
+    name: Generated Tables Are Deterministic
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: "go.mod"
+          cache: true
+
+      # The check is about determinism, not about the tables being current: a
+      # feature PR deliberately leaves AGENTS.md/README.md untouched, so the
+      # first run may produce a diff. Staging it and comparing the second run
+      # isolates the generator's own output stability.
+      - name: Run the table generator twice
+        run: |
+          set -euo pipefail
+
+          make generate-tables
+          git add -A
+          make generate-tables
+
+          if ! git diff --exit-code -- AGENTS.md README.md; then
+            {
+              echo "## The table generator is not deterministic"
+              echo ""
+              echo "Running \`make generate-tables\` twice produced different output."
+              echo "Sort or key the generated rows so that repeated runs are byte-identical."
+              echo ""
+              echo '```'
+              git --no-pager diff -- AGENTS.md README.md
+              echo '```'
+            } >>"$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          echo "The table generator is deterministic."
