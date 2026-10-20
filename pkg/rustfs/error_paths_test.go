@@ -126,9 +126,9 @@ func TestAdminClientErrorBranchesOnServerFailure(t *testing.T) {
 		{"SetUserSecretKey", func() error { return client.SetUserSecretKey("alice", "s3cret") }},
 		{"SetUserStatus", func() error { return client.SetUserStatus("alice", "disabled") }},
 		{"SiteReplicationAdd", func() error { return client.SiteReplicationAdd(SiteReplicationSite{Name: "peer"}) }},
-		{"SiteReplicationEdit", func() error { return client.SiteReplicationEdit(SiteReplicationSite{Name: "peer"}) }},
+		{"EditPeer", func() error { return client.EditPeer(SiteReplicationPeerEdit{Name: "peer"}) }},
 		{"SiteReplicationInfo", func() error { _, err := client.SiteReplicationInfo(); return err }},
-		{"SiteReplicationRemove", func() error { return client.SiteReplicationRemove([]string{"peer"}) }},
+		{"RemovePeer", func() error { return client.RemovePeer([]string{"peer"}) }},
 		{"SiteReplicationResyncOp", func() error {
 			_, err := client.SiteReplicationResyncOp("start", SiteReplicationPeer{Name: "peer"})
 			return err

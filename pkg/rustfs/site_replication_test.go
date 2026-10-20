@@ -54,7 +54,7 @@ func TestSiteReplicationAdd(t *testing.T) {
 	}
 }
 
-func TestSiteReplicationEdit(t *testing.T) {
+func TestEditPeer(t *testing.T) {
 	var gotPath, gotBody string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
@@ -64,12 +64,12 @@ func TestSiteReplicationEdit(t *testing.T) {
 	defer server.Close()
 	c := testSiteReplicationClient(server)
 
-	site := SiteReplicationSite{
+	site := SiteReplicationPeerEdit{
 		Name:          "peer",
 		Endpoint:      "http://localhost:9003",
 		SkipTLSVerify: true,
 	}
-	if err := c.SiteReplicationEdit(site); err != nil {
+	if err := c.EditPeer(site); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(gotPath, "/site-replication/edit") {
@@ -85,7 +85,7 @@ func TestSiteReplicationEdit(t *testing.T) {
 	if !strings.HasPrefix(gotBody, "{") {
 		t.Error("edit body must be a single object, not the add-only array")
 	}
-	var payload siteReplicationPeerEdit
+	var payload SiteReplicationPeerEdit
 	if err := json.Unmarshal([]byte(gotBody), &payload); err != nil {
 		t.Fatalf("edit body must be a PeerInfo object: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestSiteReplicationEdit(t *testing.T) {
 	}
 }
 
-func TestSiteReplicationRemove(t *testing.T) {
+func TestRemovePeer(t *testing.T) {
 	var gotPath, gotBody string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
@@ -107,7 +107,7 @@ func TestSiteReplicationRemove(t *testing.T) {
 	defer server.Close()
 	c := testSiteReplicationClient(server)
 
-	if err := c.SiteReplicationRemove([]string{"peer"}); err != nil {
+	if err := c.RemovePeer([]string{"peer"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(gotPath, "/site-replication/remove") {
@@ -169,6 +169,169 @@ func TestSiteReplicationResyncOp(t *testing.T) {
 	}
 	if resync.OpType != "start" || resync.Status != "success" {
 		t.Errorf("unexpected resync: %+v", resync)
+	}
+}
+
+// repairPreflightReply is the dry-run response shape: camelCase fields, a
+// site map keyed by deployment ID, and the "replication" family.
+const repairPreflightReply = `{"mode":"dry-run","status":"planned","preflightToken":"preflight-token",` +
+	`"retryEvents":2,"sites":{"dep-peer":{"deploymentId":"dep-peer","name":"peer",` +
+	`"families":{"replication":{"planned":1,"succeeded":0,"failed":0,"retryEvents":2,` +
+	`"tasks":[{"taskId":"task-1","status":"planned"}],"errors":[]}}}}}`
+
+func TestSiteReplicationRepairPreflight(t *testing.T) {
+	var gotMethod, gotPath, gotBody string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath, gotBody = r.Method, r.URL.Path, readRequestBody(r)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(repairPreflightReply))
+	}))
+	defer server.Close()
+	c := testSiteReplicationClient(server)
+
+	preflight, err := c.SiteReplicationRepairPreflight()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotMethod != http.MethodPut || !strings.Contains(gotPath, "/site-replication/repair") {
+		t.Errorf("preflight sent %s %s, want PUT /site-replication/repair", gotMethod, gotPath)
+	}
+	if gotBody != `{"mode":"dry-run"}` {
+		t.Errorf("preflight body = %s, want a dry-run request", gotBody)
+	}
+	if preflight.PreflightToken != "preflight-token" || preflight.RetryEvents != 2 {
+		t.Errorf("unexpected preflight: %+v", preflight)
+	}
+	family := preflight.Sites["dep-peer"].Families["replication"]
+	if family.Planned != 1 || family.Succeeded != 0 || family.RetryEvents != 2 {
+		t.Errorf("unexpected family progress: %+v", family)
+	}
+	if len(family.Tasks) != 1 || family.Tasks[0].TaskID != "task-1" || family.Tasks[0].Status != "planned" {
+		t.Errorf("unexpected tasks: %+v", family.Tasks)
+	}
+}
+
+func TestSiteReplicationRepairExecute(t *testing.T) {
+	var gotPath, gotBody string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotBody = r.URL.Path, readRequestBody(r)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"mode":"execute","operationId":"op-1","status":"partial",` +
+			`"sites":{"dep-peer":{"deploymentId":"dep-peer","name":"peer","families":{"replication":` +
+			`{"planned":2,"succeeded":1,"failed":1,"retryEvents":0,` +
+			`"tasks":[{"taskId":"task-1","status":"succeeded"},{"taskId":"task-2","status":"failed","error":"denied"}],` +
+			`"errors":["denied"]}}}},"createdAt":"2026-10-20T10:00:00Z","updatedAt":"2026-10-20T10:00:05Z",` +
+			`"completedAt":"2026-10-20T10:00:05Z"}`))
+	}))
+	defer server.Close()
+	c := testSiteReplicationClient(server)
+
+	operation, err := c.SiteReplicationRepairExecute("preflight-token", "op-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(gotPath, "/site-replication/repair") {
+		t.Errorf("wrong path: %s", gotPath)
+	}
+	wantBody := `{"mode":"execute","preflightToken":"preflight-token","operationId":"op-1"}`
+	if gotBody != wantBody {
+		t.Errorf("execute body = %s, want %s", gotBody, wantBody)
+	}
+	if operation.OperationID != "op-1" || operation.Status != "partial" {
+		t.Errorf("unexpected operation: %+v", operation)
+	}
+	if operation.CompletedAt != "2026-10-20T10:00:05Z" {
+		t.Errorf("completedAt = %q, want the RFC 3339 timestamp", operation.CompletedAt)
+	}
+	family := operation.Sites["dep-peer"].Families["replication"]
+	if family.Failed != 1 || len(family.Errors) != 1 || family.Errors[0] != "denied" {
+		t.Errorf("unexpected family progress: %+v", family)
+	}
+	if len(family.Tasks) != 2 || family.Tasks[1].Error != "denied" {
+		t.Errorf("unexpected tasks: %+v", family.Tasks)
+	}
+}
+
+func TestSiteReplicationRepairStatus(t *testing.T) {
+	var gotMethod, gotPath, gotQuery string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath, gotQuery = r.Method, r.URL.Path, r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"mode":"execute","operationId":"op-1","status":"success",` +
+			`"sites":{"dep-peer":{"deploymentId":"dep-peer","name":"peer","families":{"replication":` +
+			`{"planned":1,"succeeded":1,"failed":0,"retryEvents":0,"tasks":[],"errors":[]}}}}` +
+			`,"createdAt":"2026-10-20T10:00:00Z"}`))
+	}))
+	defer server.Close()
+	c := testSiteReplicationClient(server)
+
+	operation, err := c.SiteReplicationRepairStatus("op-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotMethod != http.MethodGet || !strings.Contains(gotPath, "/site-replication/repair/status") {
+		t.Errorf("status sent %s %s, want GET /site-replication/repair/status", gotMethod, gotPath)
+	}
+	if gotQuery != "operation-id=op-1" {
+		t.Errorf("status query = %q, want operation-id=op-1", gotQuery)
+	}
+	if operation.Status != "success" {
+		t.Errorf("status = %q, want success", operation.Status)
+	}
+	if operation.CompletedAt != "" {
+		t.Errorf("completedAt = %q, want empty for an absent field", operation.CompletedAt)
+	}
+}
+
+func TestSiteReplicationRepairErrors(t *testing.T) {
+	cases := []struct {
+		name   string
+		code   string
+		body   string
+		detail string
+	}{
+		{
+			name:   "site replication is not configured",
+			code:   "InvalidRequest",
+			body:   "site replication is not configured",
+			detail: "site replication is not configured",
+		},
+		{
+			name:   "stale preflight",
+			code:   "PreconditionFailed",
+			body:   "site replication repair preflight is stale",
+			detail: "preflight is stale",
+		},
+		{
+			name:   "operation id bound to another preflight",
+			code:   "ClientTokenConflict",
+			body:   "repair operation ID is already bound to a different preflight",
+			detail: "already bound to a different preflight",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/xml")
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><Error><Code>` + tc.code +
+					`</Code><Message>` + tc.body + `</Message></Error>`))
+			}))
+			defer server.Close()
+			c := testSiteReplicationClient(server)
+
+			_, err := c.SiteReplicationRepairExecute("token", "op-1")
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			if !IsAPIErrorCode(err, tc.code) {
+				t.Errorf("error code = %v, want %s", err, tc.code)
+			}
+			if !strings.Contains(err.Error(), tc.detail) {
+				t.Errorf("error = %q, want detail %q", err.Error(), tc.detail)
+			}
+		})
 	}
 }
 

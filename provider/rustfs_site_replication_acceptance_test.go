@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -77,6 +78,64 @@ func TestAccSiteReplicationResource(t *testing.T) {
 				// TLS setting only: the peer credentials cannot be read back,
 				// so the configuration supplies them again after an import.
 				ImportStateVerifyIgnore: []string{"access_key", "secret_key", "ca_cert_pem"},
+			},
+		},
+	})
+}
+
+// TestAccSiteReplicationRepairResource repairs a healthy two-site group. The
+// repair is idempotent, so on an already-consistent group the expected outcome
+// is `success`; `partial` is accepted as well because the assertion is that the
+// operation ran and its status is observable, not that this deployment has
+// nothing left to reconcile.
+func TestAccSiteReplicationRepairResource(t *testing.T) {
+	testAccPreCheck(t)
+	endpoint := siteReplicationPeerEndpoint(t)
+	providerEndpoint := os.Getenv("RUSTFS_ENDPOINT")
+	accessKey, secretKey := siteReplicationPeerCredentials(t)
+	waitForSiteReplicationPeer(t, endpoint)
+	checkSiteReplicationAvailable(t, endpoint, accessKey, secretKey)
+
+	resourceName := "rustfs_site_replication_repair.repair"
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckSiteReplicationDestroy,
+		Steps: []resource.TestStep{
+			{
+				// The interlock is enforced during plan, so a wrong value never
+				// reaches the server.
+				Config: testAccProviderConfig() + siteReplicationConfig(endpoint, accessKey, secretKey) + `
+resource "rustfs_site_replication_repair" "repair" {
+  confirm    = "repair"
+  depends_on = [rustfs_site_replication.peer]
+}
+`,
+				ExpectError: regexp.MustCompile(`Invalid site replication repair confirmation`),
+			},
+			{
+				Config: testAccProviderConfig() + siteReplicationConfig(endpoint, accessKey, secretKey) + `
+resource "rustfs_site_replication_repair" "repair" {
+  confirm    = "https://other.example.com:9000"
+  depends_on = [rustfs_site_replication.peer]
+}
+`,
+				ExpectError: regexp.MustCompile(`Invalid site replication repair confirmation`),
+			},
+			{
+				Config: testAccProviderConfig() + siteReplicationConfig(endpoint, accessKey, secretKey) + fmt.Sprintf(`
+resource "rustfs_site_replication_repair" "repair" {
+  confirm    = %q
+  depends_on = [rustfs_site_replication.peer]
+}
+`, providerEndpoint),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(resourceName, "confirm", providerEndpoint),
+					resource.TestCheckResourceAttrSet(resourceName, "operation_id"),
+					resource.TestCheckResourceAttrSet(resourceName, "id"),
+					resource.TestCheckResourceAttrSet(resourceName, "retry_events"),
+					resource.TestMatchResourceAttr(resourceName, "status", regexp.MustCompile(`^(success|partial)$`)),
+				),
 			},
 		},
 	})
@@ -156,7 +215,7 @@ func checkSiteReplicationAvailable(t *testing.T, endpoint, accessKey, secretKey 
 		SecretKey: secretKey,
 	})
 	if err == nil {
-		_ = client.SiteReplicationRemove([]string{"tf-acc-probe"})
+		_ = client.RemovePeer([]string{"tf-acc-probe"})
 		return
 	}
 	// A server without the route answers NotImplemented, and one that rejects
