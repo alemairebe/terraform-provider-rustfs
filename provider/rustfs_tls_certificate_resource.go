@@ -17,7 +17,6 @@ import (
 	"github.com/caberdo/terraform-provider-rustfs/pkg/rustfs"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
-	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
@@ -28,10 +27,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
-var (
-	_ resource.Resource                = &TLSCertificateResource{}
-	_ resource.ResourceWithImportState = &TLSCertificateResource{}
-)
+var _ resource.Resource = &TLSCertificateResource{}
 
 func NewTLSCertificateResource() resource.Resource {
 	return &TLSCertificateResource{}
@@ -71,7 +67,9 @@ func (r *TLSCertificateResource) Schema(_ context.Context, _ resource.SchemaRequ
 			"RustFS has no route that removes a published certificate. Destroying this resource " +
 			"therefore only removes it from Terraform state (with a warning); the server keeps serving " +
 			"the last published certificate until another publication replaces it or the server is " +
-			"restarted with different TLS material.",
+			"restarted with different TLS material.\n\n" +
+			"Import is not supported: the PEM pair is write-only and the server never returns it, so an " +
+			"imported resource could not describe the certificate it manages.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:    true,
@@ -252,10 +250,6 @@ func (r *TLSCertificateResource) Delete(ctx context.Context, req resource.Delete
 			"or the server is restarted with different TLS material.",
 	)
 	tflog.Trace(ctx, "removed a TLS certificate resource from state without unpublishing it")
-}
-
-func (r *TLSCertificateResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
 }
 
 // applyTLSCertificateReceipt writes a successful publication response into the

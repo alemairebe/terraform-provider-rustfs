@@ -43,8 +43,8 @@ func TestAccTLSCertificate_basic(t *testing.T) {
 	// environment private to this test.
 	t.Setenv("RUSTFS_ENDPOINT", endpoint)
 
-	certificatePEM := readTestTLSFixture(t, "renewed_cert.pem.txt")
-	keyPEM := readTestTLSFixture(t, "renewed_key.pem.txt")
+	certificatePEM := readTestTLSFixture(t, "renewed_cert.pem")
+	keyPEM := readTestTLSFixture(t, "renewed_key.pem")
 	fingerprint, ok := certificateFingerprintFromPEM(certificatePEM)
 	if !ok {
 		t.Fatal("the TLS acceptance fixture is not a parseable certificate")

@@ -485,21 +485,6 @@ func TestTLSCertificateResourceLifecyclePaths(t *testing.T) {
 		recorder.assertNoRequest(t, "tls/certificate")
 	})
 
-	t.Run("import: the publication target is the import ID", func(t *testing.T) {
-		r := NewTLSCertificateResource()
-		sch := resourceSchemaOf(t, r)
-		resp := &resource.ImportStateResponse{State: resourceState(t, sch, TLSCertificateResourceModel{})}
-
-		importer, ok := r.(resource.ResourceWithImportState)
-		if !ok {
-			t.Fatal("resource does not implement resource.ResourceWithImportState")
-		}
-		importer.ImportState(context.Background(), resource.ImportStateRequest{ID: "server-default"}, resp)
-
-		requireNoDiagnostics(t, resp.Diagnostics)
-		assertStateString(t, resp.State, path.Root("id"), "server-default")
-	})
-
 	t.Run("configure: rejects foreign provider data", func(t *testing.T) {
 		h := newCRUDHarness(t, NewTLSCertificateResource(), cannedClient(t, http.StatusOK, ""))
 

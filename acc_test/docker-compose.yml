@@ -124,12 +124,28 @@ services:
       RUSTFS_ACCESS_KEY: rustfsadmin
       RUSTFS_SECRET_KEY: rustfsadmin
 
+  # Generates the ephemeral certificate pair the TLS fixture serves, so no
+  # private key is committed to the repository. The output lands in the ignored
+  # acc_test/tls directory, which both rustfs-tls and the test process mount.
+  tls-certgen:
+    image: golang:1.27@sha256:820153096fda4de6ac1b7194d12e416b7dd8f4e9a33d17e0345b111b945162d8
+    working_dir: /workspaces/terraform-provider-rustfs/acc_test/tlscertgen
+    volumes:
+      - ..:/workspaces/terraform-provider-rustfs
+    command:
+      - go
+      - run
+      - .
+      - /workspaces/terraform-provider-rustfs/acc_test/tls
+    environment:
+      GOTOOLCHAIN: local
+
   # Native-TLS listener for rustfs_tls_certificate. RustFS only accepts
   # certificate publication on a listener it serves TLS from, and only when a
   # private publication directory is configured outside the TLS material path.
-  # The fixture certificate lives in acc_test/tls; the publication directory is
-  # a named volume because RustFS requires it to be 0700 and owned by the
-  # process, which a bind mount checked into git cannot guarantee.
+  # The publication directory is a named volume because RustFS requires it to
+  # be 0700 and owned by the process, which a bind mount checked into git cannot
+  # guarantee.
   rustfs-tls:
     image: rustfs/rustfs:${RUSTFS_VERSION:-latest}
     user: root
@@ -138,16 +154,16 @@ services:
       - -c
     command:
       - >-
-        mkdir -p /tls-src &&
-        cp /tls-fixtures/rustfs_cert.pem.txt /tls-src/rustfs_cert.pem &&
-        cp /tls-fixtures/rustfs_key.pem.txt /tls-src/rustfs_key.pem &&
         chmod 700 /tls-publish &&
         exec /entrypoint.sh rustfs
+    depends_on:
+      tls-certgen:
+        condition: service_completed_successfully
     ports:
       - "9004:9000"
       - "9005:9001"
     volumes:
-      - ./tls:/tls-fixtures:ro
+      - ./tls:/tls-src:ro
       - rustfs-tls-publish:/tls-publish
     environment:
       RUSTFS_ACCESS_KEY: rustfsadmin

@@ -150,7 +150,8 @@ its native TLS listener, so the provider needs `ssl = true` and a server started
 `RUSTFS_TLS_PUBLISH_DIR` pointing at a private directory outside the TLS material path. And because
 RustFS has no route that unpublishes a certificate, destroying the resource only removes it from
 state with a warning: the server keeps serving the last published certificate until another
-publication replaces it or the server restarts with different material.
+publication replaces it or the server restarts with different material. Import is not supported: the
+PEM pair is write-only and RustFS never returns it.
 
 Some capabilities depend on server-side sub-systems and only work once the matching RustFS
 sub-system is enabled and configured: KMS (`rustfs_kms_key`), LDAP (`rustfs_ldap_*`), storage tiers

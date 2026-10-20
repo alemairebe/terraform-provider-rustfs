@@ -5,6 +5,7 @@ description: |-
   Publish the leaf certificate the RustFS default listener serves.
   Publishing is a whole-file replacement, not a patch, so changing either PEM replaces the resource and publishes the new pair. RustFS accepts the request only on its native TLS listener (ssl = true) and only when started with RUSTFS_TLS_RELOAD_ENABLE=true and RUSTFS_TLS_PUBLISH_DIR pointing at a private directory outside RUSTFS_TLS_PATH.
   RustFS has no route that removes a published certificate. Destroying this resource therefore only removes it from Terraform state (with a warning); the server keeps serving the last published certificate until another publication replaces it or the server is restarted with different TLS material.
+  Import is not supported: the PEM pair is write-only and the server never returns it, so an imported resource could not describe the certificate it manages.
 ---
 
 # rustfs_tls_certificate Resource
@@ -14,6 +15,8 @@ Publish the leaf certificate the RustFS default listener serves.
 Publishing is a whole-file replacement, not a patch, so changing either PEM replaces the resource and publishes the new pair. RustFS accepts the request only on its native TLS listener (`ssl = true`) and only when started with `RUSTFS_TLS_RELOAD_ENABLE=true` and `RUSTFS_TLS_PUBLISH_DIR` pointing at a private directory outside `RUSTFS_TLS_PATH`.
 
 RustFS has no route that removes a published certificate. Destroying this resource therefore only removes it from Terraform state (with a warning); the server keeps serving the last published certificate until another publication replaces it or the server is restarted with different TLS material.
+
+Import is not supported: the PEM pair is write-only and the server never returns it, so an imported resource could not describe the certificate it manages.
 
 ## Example Usage
 
