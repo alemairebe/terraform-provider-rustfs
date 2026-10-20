@@ -199,6 +199,7 @@ Every resource links to its documentation on the Terraform Registry.
 | [`rustfs_notification_target`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/notification_target) | Event-notification targets (webhook, AMQP, Kafka, MQTT, NATS, Postgres, MySQL, Redis, Pulsar) |
 | [`rustfs_iam_backup_import`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/iam_backup_import) | Import IAM entities from a backup |
 | [`rustfs_bucket_metadata_backup_import`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/bucket_metadata_backup_import) | Import bucket metadata from a backup |
+| [`rustfs_pool_decommission`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/pool_decommission) | Drain and retire a storage pool |
 
 `rustfs_iam_backup_import`, `rustfs_bucket_metadata_backup_import` and `rustfs_rebalance` are
 action-style resources and deliberately do not support import.

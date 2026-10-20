@@ -40,6 +40,7 @@ var goldenResourceTypeNames = []string{
 	"rustfs_module_switch",
 	"rustfs_notification_target",
 	"rustfs_policy",
+	"rustfs_pool_decommission",
 	"rustfs_quota",
 	"rustfs_rebalance",
 	"rustfs_remote_target",
