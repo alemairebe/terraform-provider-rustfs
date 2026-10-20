@@ -76,6 +76,7 @@ migration below only moves Go files and identifiers.
 main.go                       # providerserver entry point, version set via goreleaser ldflags
 provider/                     # flat package `provider`
 ├── provider.go               # provider schema, Configure, Resources(), DataSources()
+├── registry.go               # registerResource/registerDataSource, sorted by type name
 ├── all_client.go             # AllClient{S3 *s3.Client, RustClient rustfs.RustfsAdmin}
 ├── helper.go                 # envOrDefault, secret_key/access_secret resolution
 ├── rustfs_<name>_resource.go # resource
@@ -205,14 +206,56 @@ or drop a schema change silently — an attribute that cannot be updated in plac
 
 - [ ] API methods in `pkg/rustfs/<name>.go` (admin) and/or via `client.S3` (S3)
 - [ ] `provider/rustfs_<name>_resource.go` implementing `resource.Resource` and
-      `resource.ResourceWithImportState`
-- [ ] Registered in `provider/provider.go` `Resources()`
+      `resource.ResourceWithImportState`, plus `func init() { registerResource(New<Name>Resource) }`
+      in that same file
+- [ ] Its type name appended to the golden list in `provider/registry_test.go`
 - [ ] Schema attributes described, sensitive fields marked, enums validated
 - [ ] Unit tests: schema + metadata (no server needed)
 - [ ] Acceptance test `TestAcc<Name>...` using `testAccProtoV6ProviderFactories` and
       `testAccPreCheck`
 - [ ] Example in `examples/resources/rustfs_<name>/resource.tf`
 - [ ] `make generate` to refresh `docs/resources/<name>.md`
+
+### Working on several issues at once
+
+Parallel feature branches must not touch the same shared files. Type registration is
+self-service: `provider/registry.go` exposes `registerResource` / `registerDataSource`, and each
+resource and data source calls one of them from `init()` in its own file. `provider.go` merely
+returns the registry, so it is never part of a feature diff. Server capabilities work the same way:
+`registerFeature(FeatureX, featureSpec{...})` from `init()` in the `pkg/rustfs` file that owns the
+feature, never a `featureSpecs` entry in `server_version.go`.
+
+Rules for a feature PR:
+
+- **One new type, one new file.** Add the resource/data source (or `pkg/rustfs` API file) with its
+  `init()` registration. Do not edit `provider/provider.go` or `pkg/rustfs/server_version.go`.
+- **Registry test stays in sync.** `provider/registry_test.go` holds the only golden list of type
+  names; add the new name there in the same PR. A dropped registration fails CI.
+- **Table rows are append-only.** Add a row at the end of the matching table. Do not reorder,
+  reword or reformat existing rows.
+- **No `CHANGELOG.md` edits.** Release notes are written when a release is cut, not by feature PRs.
+- **Coverage floor belongs to coverage issues.** Do not edit `.github/coverage-baseline.txt` or the
+  README coverage badge in a feature PR.
+- **Lifecycle tests live beside the resource.** Add `Test<Name>ResourceLifecyclePaths` to the
+  resource's own `_test.go`; do not extend `lifecycle_test_harness_test.go` for one type.
+- **Rebase, then regenerate.** Rebase onto `main` and run `make generate` before pushing. Never
+  hand-edit `docs/` or resolve its conflicts manually — regenerate instead.
+
+Copy these row formats verbatim:
+
+```md
+<!-- AGENTS.md, resources table -->
+| `rustfs_<name>` | `provider/rustfs_<name>_resource.go` | <what it manages> |
+
+<!-- AGENTS.md, data sources table -->
+| `rustfs_<name>` | `provider/rustfs_<name>_datasource.go` | <what it returns> |
+
+<!-- README.md, Resources table -->
+| [`rustfs_<name>`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/<name>) | <what it manages> |
+
+<!-- README.md, Data sources table -->
+| [`rustfs_<name>`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/data-sources/<name>) | <what it returns> |
+```
 
 ### Commands
 

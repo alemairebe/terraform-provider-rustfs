@@ -288,3 +288,7 @@ func buildPutBucketVersioningInput(plan BucketVersioningResourceModel) *s3.PutBu
 	}
 	return input
 }
+
+func init() {
+	registerResource(NewBucketVersioningResource)
+}

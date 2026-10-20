@@ -109,3 +109,7 @@ func (r *BucketMetadataBackupImportResource) Update(ctx context.Context, req res
 
 func (r *BucketMetadataBackupImportResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
 }
+
+func init() {
+	registerResource(NewBucketMetadataBackupImportResource)
+}

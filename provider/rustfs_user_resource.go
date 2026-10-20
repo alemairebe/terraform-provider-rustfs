@@ -233,3 +233,7 @@ func (r *RustfsUserResource) Delete(ctx context.Context, req resource.DeleteRequ
 func (r *RustfsUserResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	resource.ImportStatePassthroughID(ctx, path.Root("access_key"), req, resp)
 }
+
+func init() {
+	registerResource(NewUserResource)
+}

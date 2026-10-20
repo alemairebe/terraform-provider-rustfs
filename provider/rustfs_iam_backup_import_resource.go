@@ -124,3 +124,7 @@ func (r *IamBackupImportResource) Update(ctx context.Context, req resource.Updat
 
 func (r *IamBackupImportResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
 }
+
+func init() {
+	registerResource(NewIamBackupImportResource)
+}

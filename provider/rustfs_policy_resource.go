@@ -342,3 +342,7 @@ func policyStatementModelsFromAPI(statements []rustfs.PolicyStatement) []policyS
 	}
 	return out
 }
+
+func init() {
+	registerResource(NewPolicyResource)
+}

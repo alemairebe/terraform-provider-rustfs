@@ -188,3 +188,7 @@ func (r *bucketPolicyResource) Delete(ctx context.Context, req resource.DeleteRe
 func (r *bucketPolicyResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	resource.ImportStatePassthroughID(ctx, path.Root("bucket"), req, resp)
 }
+
+func init() {
+	registerResource(NewBucketPolicyResource)
+}

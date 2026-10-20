@@ -88,3 +88,7 @@ func (d *MetricsDataSource) Read(ctx context.Context, _ datasource.ReadRequest, 
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
+
+func init() {
+	registerDataSource(NewMetricsDataSource)
+}

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // Version is a parsed RustFS server version.
@@ -141,26 +142,53 @@ type featureSpec struct {
 	minVersion *Version
 }
 
-// featureSpecs is the capability matrix the provider reasons about. Add an
-// entry only for a capability the provider actually uses.
-var featureSpecs = map[Feature]featureSpec{
-	FeatureMetrics: {
-		route: "GET /rustfs/admin/v3/metrics",
-		// No release implements the route yet: RustFS registers it and answers
-		// 501 NotImplemented (observed on 1.0.1, 1.0.2 and 1.0.3).
-	},
-	FeatureTableBucket: {
-		route: "DELETE /iceberg/v1/buckets/{bucket}",
-		// Probed live: 1.0.1 answers 501 NotImplemented for the disable route,
-		// while 1.0.2 and 1.0.3 disable the catalog. Enable and read work on
-		// all three.
-		minVersion: &Version{Major: 1, Minor: 0, Patch: 2, Raw: "1.0.2"},
-	},
+// featureSpecs is the capability matrix the provider reasons about. It is
+// populated by registerFeature from the file that owns each feature, so a
+// feature branch adds one file instead of editing a shared literal.
+var (
+	featureMu    sync.RWMutex
+	featureSpecs = make(map[Feature]featureSpec)
+)
+
+// registerFeature records what a feature needs from the server. Call it from
+// init in the file that owns the feature.
+func registerFeature(feature Feature, spec featureSpec) {
+	featureMu.Lock()
+	defer featureMu.Unlock()
+
+	if _, exists := featureSpecs[feature]; exists {
+		panic("rustfs: feature " + string(feature) + " is registered twice")
+	}
+	featureSpecs[feature] = spec
 }
 
-// Route returns the admin API route that serves the feature.
+// featureSpecFor returns the spec registered for a feature. An unregistered
+// feature is a programming error: silently returning the zero spec would hide a
+// missing registration.
+func featureSpecFor(feature Feature) featureSpec {
+	spec, ok := lookupFeatureSpec(feature)
+	if !ok {
+		panic("rustfs: feature " + string(feature) + " is not registered; add registerFeature to the file that owns it")
+	}
+	return spec
+}
+
+// lookupFeatureSpec returns the registered spec and whether one exists. Unlike
+// featureSpecFor it is safe on unregistered features and is used where a panic
+// would be inappropriate, such as error formatting.
+func lookupFeatureSpec(feature Feature) (featureSpec, bool) {
+	featureMu.RLock()
+	defer featureMu.RUnlock()
+
+	spec, ok := featureSpecs[feature]
+	return spec, ok
+}
+
+// Route returns the admin API route that serves the feature. It panics when
+// the feature was never registered, because that is a programming error rather
+// than an absent capability.
 func (f Feature) Route() string {
-	return featureSpecs[f].route
+	return featureSpecFor(f).route
 }
 
 // UnsupportedFeatureError reports that the server does not implement the route
@@ -189,7 +217,9 @@ func (e *UnsupportedFeatureError) Error() string {
 
 	route := e.Route
 	if route == "" {
-		route = e.Feature.Route()
+		if spec, ok := lookupFeatureSpec(e.Feature); ok {
+			route = spec.route
+		}
 	}
 	if route == "" {
 		route = string(e.Feature)
@@ -264,7 +294,7 @@ func (c *RustfsAdmin) featureError(err error, feature Feature) error {
 	unsupported := &UnsupportedFeatureError{
 		Feature:    feature,
 		Route:      feature.Route(),
-		MinVersion: featureSpecs[feature].minVersion,
+		MinVersion: featureSpecFor(feature).minVersion,
 		Err:        err,
 	}
 	if _, raw, _ := c.ServerVersion(); raw != "" {

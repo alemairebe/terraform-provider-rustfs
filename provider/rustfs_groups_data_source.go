@@ -79,3 +79,7 @@ func (d *GroupsDataSource) Read(ctx context.Context, _ datasource.ReadRequest, r
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
+
+func init() {
+	registerDataSource(NewGroupsDataSource)
+}

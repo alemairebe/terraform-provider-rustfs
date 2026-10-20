@@ -355,3 +355,7 @@ func buildPutObjectLockConfigurationInput(plan BucketObjectLockResourceModel) (*
 	}
 	return input, nil
 }
+
+func init() {
+	registerResource(NewBucketObjectLockResource)
+}

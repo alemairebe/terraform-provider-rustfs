@@ -807,3 +807,7 @@ func flattenReplicationTimeValue(v *s3types.ReplicationTimeValue) *bucketReplica
 	}
 	return m
 }
+
+func init() {
+	registerResource(NewBucketReplicationResource)
+}

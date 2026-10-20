@@ -114,3 +114,7 @@ func kmsConfigModelFromConfig(kmsConfig *rustfs.KmsConfig) (KmsConfigDataSourceM
 	config.DefaultKeyID = stringFromPtr(kmsConfig.DefaultKeyID)
 	return config, nil
 }
+
+func init() {
+	registerDataSource(NewKmsConfigDataSource)
+}

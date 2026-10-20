@@ -152,3 +152,7 @@ func applyModuleSwitchState(model *ModuleSwitchResourceModel, state *rustfs.Modu
 	model.NotifyEnabled = types.BoolValue(state.NotifyEnabled)
 	model.AuditEnabled = types.BoolValue(state.AuditEnabled)
 }
+
+func init() {
+	registerResource(NewModuleSwitchResource)
+}

@@ -188,3 +188,7 @@ func modelToSite(plan SiteReplicationResourceModel) rustfs.SiteReplicationSite {
 		CACertPEM:     plan.CACertPEM.ValueString(),
 	}
 }
+
+func init() {
+	registerResource(NewSiteReplicationResource)
+}

@@ -79,3 +79,7 @@ func (d *IamBackupDataSource) Read(ctx context.Context, req datasource.ReadReque
 	config.ContentBase64 = types.StringValue(base64.StdEncoding.EncodeToString(data))
 	resp.Diagnostics.Append(resp.State.Set(ctx, &config)...)
 }
+
+func init() {
+	registerDataSource(NewIamBackupDataSource)
+}

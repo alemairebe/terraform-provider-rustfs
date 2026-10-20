@@ -98,3 +98,7 @@ func (d *quotaDataSource) Read(ctx context.Context, req datasource.ReadRequest, 
 	config.QuotaType = types.StringValue(quota.Quota_Type)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &config)...)
 }
+
+func init() {
+	registerDataSource(NewQuotaDataSource)
+}

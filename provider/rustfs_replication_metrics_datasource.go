@@ -355,3 +355,7 @@ func replicationTargetsValue(stats map[string]rustfs.ReplicationTargetMetric) ty
 	}
 	return types.ListValueMust(types.ObjectType{AttrTypes: replicationTargetMetricAttrTypes}, values)
 }
+
+func init() {
+	registerDataSource(NewReplicationMetricsDataSource)
+}

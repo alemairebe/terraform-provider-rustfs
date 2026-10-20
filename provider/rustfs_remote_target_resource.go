@@ -289,3 +289,7 @@ func (r *RemoteTargetResource) targetFromModel(plan RemoteTargetResourceModel) r
 		},
 	}
 }
+
+func init() {
+	registerResource(NewRemoteTargetResource)
+}

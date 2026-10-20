@@ -252,3 +252,7 @@ func (r *UserPolicyAttachmentResource) ImportState(ctx context.Context, req reso
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("user"), parts[0])...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("policy"), parts[1])...)
 }
+
+func init() {
+	registerResource(NewUserPolicyAttachmentResource)
+}

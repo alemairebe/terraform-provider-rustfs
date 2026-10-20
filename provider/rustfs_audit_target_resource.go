@@ -491,3 +491,7 @@ func (r *auditTargetResource) ImportState(ctx context.Context, req resource.Impo
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("target_type"), parts[0])...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("target_name"), parts[1])...)
 }
+
+func init() {
+	registerResource(NewAuditTargetResource)
+}

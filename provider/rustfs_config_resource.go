@@ -235,3 +235,7 @@ func (r *ConfigResource) Delete(ctx context.Context, req resource.DeleteRequest,
 func (r *ConfigResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	resource.ImportStatePassthroughID(ctx, path.Root("sub_system"), req, resp)
 }
+
+func init() {
+	registerResource(NewConfigResource)
+}

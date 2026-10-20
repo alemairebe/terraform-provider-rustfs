@@ -369,3 +369,7 @@ func (r *notificationTargetResource) ImportState(ctx context.Context, req resour
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("target_type"), parts[0])...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("target_name"), parts[1])...)
 }
+
+func init() {
+	registerResource(NewNotificationTargetResource)
+}

@@ -885,3 +885,7 @@ func datePointer(v types.String) (*time.Time, error) {
 	t = t.UTC()
 	return &t, nil
 }
+
+func init() {
+	registerResource(NewBucketLifecycleConfigurationResource)
+}

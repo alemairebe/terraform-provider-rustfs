@@ -47,7 +47,7 @@ type RustfsProviderModel struct {
 }
 
 func (p *RustfsProvider) Metadata(ctx context.Context, req provider.MetadataRequest, resp *provider.MetadataResponse) {
-	resp.TypeName = "rustfs"
+	resp.TypeName = providerTypeName
 	resp.Version = p.version
 }
 
@@ -187,63 +187,11 @@ func newHTTPTransport(secure, insecure bool) *http.Transport {
 }
 
 func (p *RustfsProvider) Resources(ctx context.Context) []func() resource.Resource {
-	return []func() resource.Resource{
-		NewUserResource,
-		NewPolicyResource,
-		NewServiceAccountResource,
-		NewLDAPServiceAccountResource,
-		NewBucketResource,
-		NewquotaResource,
-		NewUserPolicyAttachmentResource,
-		NewBucketPolicyResource,
-		NewIamBackupImportResource,
-		NewBucketMetadataBackupImportResource,
-		NewGroupResource,
-		NewGroupPolicyAttachmentResource,
-		NewBucketLifecycleConfigurationResource,
-		NewTierResource,
-		NewBucketObjectLockResource,
-		NewBucketNotificationResource,
-		NewRebalanceResource,
-		NewBucketReplicationResource,
-		NewBucketEncryptionResource,
-		NewBucketVersioningResource,
-		NewAuditTargetResource,
-		NewNotificationTargetResource,
-		NewModuleSwitchResource,
-		NewKmsKeyResource,
-		NewConfigResource,
-		NewBucketDurabilityResource,
-		NewTableBucketResource,
-		NewSiteReplicationResource,
-		NewRemoteTargetResource,
-		NewBucketPublicAccessBlockResource,
-		NewBucketTagsResource,
-		NewBucketCorsResource,
-		NewLDAPPolicyAttachmentResource,
-	}
+	return registeredResources()
 }
 
 func (p *RustfsProvider) DataSources(ctx context.Context) []func() datasource.DataSource {
-	return []func() datasource.DataSource{
-		NewPoolsDataSource,
-		NewIamBackupDataSource,
-		NewBucketMetadataBackupDataSource,
-		NewUsersDataSource,
-		NewUserMfaDataSource,
-		NewIAMPoliciesDataSource,
-		NewIAMPolicyDataSource,
-		NewKmsStatusDataSource,
-		NewKmsConfigDataSource,
-		NewQuotaDataSource,
-		NewGroupsDataSource,
-		NewMetricsDataSource,
-		NewHealthInfoDataSource,
-		NewStorageInfoDataSource,
-		NewServerInfoDataSource,
-		NewReplicationMetricsDataSource,
-		NewIlmTierStatsDataSource,
-	}
+	return registeredDataSources()
 }
 
 func New(version string) func() provider.Provider {

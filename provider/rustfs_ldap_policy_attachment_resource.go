@@ -214,3 +214,7 @@ func (r *LDAPPolicyAttachmentResource) ImportState(ctx context.Context, req reso
 		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("is_group"), parts[isGroupIdx] == "true")...)
 	}
 }
+
+func init() {
+	registerResource(NewLDAPPolicyAttachmentResource)
+}

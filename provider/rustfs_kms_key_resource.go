@@ -282,3 +282,7 @@ func (r *kmsKeyResource) Delete(ctx context.Context, req resource.DeleteRequest,
 func (r *kmsKeyResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	resource.ImportStatePassthroughID(ctx, path.Root("name"), req, resp)
 }
+
+func init() {
+	registerResource(NewKmsKeyResource)
+}
