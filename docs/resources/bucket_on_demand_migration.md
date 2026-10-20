@@ -6,7 +6,7 @@ description: |-
   Create probes the source
   Every create and update first sends the configuration with ?dry-run=true: RustFS validates the configuration, probes the source (HeadBucket plus a one-key listing) and writes nothing. Only after that succeeds does the provider save the configuration, so an unreachable source or a wrong key never reaches bucket metadata.
   Secrets
-  The configuration read is redacted: secret_key, session_token, the Azure account_key/sas_token and the GCS service-account JSON come back as REDACTED. The provider keeps the configured values in state while the server reports them redacted, so a refresh produces no diff.
+  The configuration read is redacted: secret_key, session_token, the Azure account_key/sas_token and the GCS service-account JSON come back as REDACTED. The provider keeps the configured values in state while the server reports them redacted, so a refresh produces no diff. Import sets only the bucket, so an imported resource has no source secret in state until the next apply supplies it; the server never returns the value.
   Prerequisites
   The RUSTFS_ON_DEMAND_MIGRATION_ENABLED module switch must be on on every node, and the deployment needs a RustFS license that covers on-demand migration. A gcs_native source additionally needs a server built with the gcs feature. The admin routes exist in every supported release (1.0.1+).
   Write-back needs namespace locking enabled and exactly one pool with one erasure set. Other topologies can still read through the source, but a pull is refused as unsupported; the provider does not retry it.
@@ -24,7 +24,7 @@ Every create and update first sends the configuration with `?dry-run=true`: Rust
 
 ### Secrets
 
-The configuration read is redacted: `secret_key`, `session_token`, the Azure `account_key`/`sas_token` and the GCS service-account JSON come back as `REDACTED`. The provider keeps the configured values in state while the server reports them redacted, so a refresh produces no diff.
+The configuration read is redacted: `secret_key`, `session_token`, the Azure `account_key`/`sas_token` and the GCS service-account JSON come back as `REDACTED`. The provider keeps the configured values in state while the server reports them redacted, so a refresh produces no diff. Import sets only the bucket, so an imported resource has no source secret in state until the next apply supplies it; the server never returns the value.
 
 ### Prerequisites
 
@@ -142,7 +142,7 @@ Optional:
 
 Required:
 
-- `access_key` (String) Source access key id.
+- `access_key` (String, Sensitive) Source access key id.
 - `secret_key` (String, Sensitive) Source secret access key. The server returns it redacted; the configured value stays in state.
 
 Optional:

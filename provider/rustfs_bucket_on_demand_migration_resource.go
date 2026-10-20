@@ -153,7 +153,9 @@ func (r *bucketOnDemandMigrationResource) Schema(_ context.Context, _ resource.S
 			"### Secrets\n\n" +
 			"The configuration read is redacted: `secret_key`, `session_token`, the Azure `account_key`/`sas_token` " +
 			"and the GCS service-account JSON come back as `REDACTED`. The provider keeps the configured values in " +
-			"state while the server reports them redacted, so a refresh produces no diff.\n\n" +
+			"state while the server reports them redacted, so a refresh produces no diff. Import sets only the " +
+			"bucket, so an imported resource has no source secret in state until the next apply supplies it; the " +
+			"server never returns the value.\n\n" +
 			"### Prerequisites\n\n" +
 			"The `RUSTFS_ON_DEMAND_MIGRATION_ENABLED` module switch must be on on every node, and the deployment " +
 			"needs a RustFS license that covers on-demand migration. A `gcs_native` source additionally needs a " +
@@ -239,6 +241,7 @@ func (r *bucketOnDemandMigrationResource) Schema(_ context.Context, _ resource.S
 						Attributes: map[string]schema.Attribute{
 							"access_key": schema.StringAttribute{
 								Required:    true,
+								Sensitive:   true,
 								Description: "Source access key id.",
 								Validators: []validator.String{
 									stringvalidator.LengthAtLeast(1),

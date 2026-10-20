@@ -60,6 +60,10 @@ func TestBucketOnDemandMigrationResourceSchema(t *testing.T) {
 	if !ok {
 		t.Fatalf("credentials is %T", source.Attributes["credentials"])
 	}
+	accessKey, ok := credentials.Attributes["access_key"].(schema.StringAttribute)
+	if !ok || !accessKey.Sensitive || !accessKey.Required {
+		t.Error("credentials.access_key must be required and sensitive")
+	}
 	secretKey, ok := credentials.Attributes["secret_key"].(schema.StringAttribute)
 	if !ok || !secretKey.Sensitive || !secretKey.Required {
 		t.Error("credentials.secret_key must be required and sensitive")
@@ -522,6 +526,37 @@ func TestBucketOnDemandMigrationResourceRead(t *testing.T) {
 			assertStatePresent(t, resp.State)
 		})
 	}
+}
+
+// Import supplies only the bucket, and the server never returns the source
+// secret, so the first refresh after import must leave it unset instead of
+// failing or writing a placeholder.
+func TestBucketOnDemandMigrationResourceReadAfterImport(t *testing.T) {
+	client := cannedClient(t, http.StatusOK,
+		`{"bucket":"photos","config":`+odmConfigJSON(true)+`,"updated_at":"2026-10-20T10:00:00Z"}`)
+	h := newCRUDHarness(t, NewBucketOnDemandMigrationResource(), client)
+
+	resp := h.read(&bucketOnDemandMigrationResourceModel{
+		ID:     types.StringNull(),
+		Bucket: types.StringValue("photos"),
+	})
+
+	requireNoDiagnostics(t, resp.Diagnostics)
+	assertStatePresent(t, resp.State)
+
+	var state bucketOnDemandMigrationResourceModel
+	requireNoDiagnostics(t, resp.State.Get(context.Background(), &state))
+	if state.Source == nil || state.Source.Credentials == nil {
+		t.Fatal("read did not populate the source credentials")
+	}
+	if got := state.Source.Credentials.AccessKey.ValueString(); got != "source-access" {
+		t.Errorf("access_key = %q, want source-access", got)
+	}
+	if !state.Source.Credentials.SecretKey.IsNull() {
+		t.Errorf("secret_key = %q, want null: the server redacts it and import supplied none",
+			state.Source.Credentials.SecretKey.ValueString())
+	}
+	assertStateString(t, resp.State, path.Root("id"), "photos")
 }
 
 func TestBucketOnDemandMigrationResourceUpdate(t *testing.T) {

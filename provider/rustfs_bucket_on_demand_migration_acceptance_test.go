@@ -135,7 +135,7 @@ resource "rustfs_bucket_on_demand_migration" "test" {
 				ResourceName:            resourceName,
 				ImportState:             true,
 				ImportStateId:           targetBucket,
-				ImportStateVerify:       false,
+				ImportStateVerify:       true,
 				ImportStateVerifyIgnore: []string{"source.credentials.secret_key"},
 			},
 		},
