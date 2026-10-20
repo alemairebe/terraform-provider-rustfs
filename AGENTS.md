@@ -227,9 +227,12 @@ or drop a schema change silently — an attribute that cannot be updated in plac
       in that same file
 - [ ] Its type name appended to the golden list in `provider/registry_test.go`
 - [ ] Schema attributes described, sensitive fields marked, enums validated
-- [ ] Unit tests: schema + metadata (no server needed)
+- [ ] Unit tests: schema + metadata (no server needed), plus the success and error path of every
+      new `pkg/rustfs` method
 - [ ] Acceptance test `TestAcc<Name>...` using `testAccProtoV6ProviderFactories` and
       `testAccPreCheck`
+- [ ] `make coverage` leaves the `pkg/rustfs` and `provider` rows at or above
+      `.github/coverage-baseline.txt`
 - [ ] Example in `examples/resources/rustfs_<name>/resource.tf`
 - [ ] `make generate` to refresh `docs/resources/<name>.md`
 - [ ] `changelog.d/<issue>-<kind>-<slug>.md` with the release-note entry
@@ -252,8 +255,15 @@ Rules for a feature PR:
 - **No shared Markdown edits.** A feature PR does not edit `CHANGELOG.md`, `AGENTS.md`,
   `README.md`, `docs/index.md` or `templates/`; add a `changelog.d/<issue>-<kind>-<slug>.md`
   fragment instead. `make generate-tables` refreshes the tables and counts in the release PR.
+- **Coverage ships with the feature.** Add unit tests for every new branch in `pkg/rustfs`
+  (success and error paths) in the same PR, then run `make coverage` before pushing. Acceptance
+  coverage does not substitute: the gate merges both profiles, but a skipped acceptance test
+  leaves the new client code uncovered and can fail the `pkg/rustfs` floor. A defensive
+  `json.Marshal` guard that no test can reach is a sign the branch belongs in a shared helper,
+  not in every method.
 - **Coverage floor belongs to coverage issues.** Do not edit `.github/coverage-baseline.txt` or the
-  README coverage badge in a feature PR.
+  README coverage badge in a feature PR. Raising the floor is a separate change with its own
+  measurement.
 - **Lifecycle tests live beside the resource.** Add `Test<Name>ResourceLifecyclePaths` to the
   resource's own `_test.go`; do not extend `lifecycle_test_harness_test.go` for one type.
 - **Rebase, then regenerate.** Rebase onto `main` and run `make generate` before pushing. Never
