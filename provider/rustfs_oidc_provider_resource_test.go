@@ -223,12 +223,13 @@ func TestOIDCProviderResourceLifecyclePaths(t *testing.T) {
 	t.Parallel()
 
 	readCases := []struct {
-		name        string
-		routes      []requestRoute
-		wantRemoved bool
-		wantSecret  types.String
-		wantSummary string
-		wantDetail  string
+		name            string
+		routes          []requestRoute
+		wantRemoved     bool
+		wantSecret      types.String
+		wantDisplayName string
+		wantSummary     string
+		wantDetail      string
 	}{
 		{
 			// The server never returns the secret. The configured value must
@@ -241,6 +242,14 @@ func TestOIDCProviderResourceLifecyclePaths(t *testing.T) {
 			name:       "secret removed on the server clears state",
 			routes:     []requestRoute{{method: http.MethodGet, pathContains: "/oidc/config", status: http.StatusOK, body: oidcProviderBody(false)}},
 			wantSecret: types.StringNull(),
+		},
+		{
+			// The plan defaults display_name to the id. A server that stores an
+			// empty value must not make the post-apply state disagree.
+			name:            "empty server display name falls back to the provider id",
+			routes:          []requestRoute{{method: http.MethodGet, pathContains: "/oidc/config", status: http.StatusOK, body: replaceOnce(oidcProviderBody(true), `"display_name":"Keycloak"`, `"display_name":""`)}},
+			wantSecret:      types.StringValue("s3cr3t"),
+			wantDisplayName: "keycloak",
 		},
 		{
 			name:        "provider deleted out of band is removed from state",
@@ -279,7 +288,11 @@ func TestOIDCProviderResourceLifecyclePaths(t *testing.T) {
 			if tc.wantSummary == "" {
 				requireNoDiagnostics(t, resp.Diagnostics)
 				assertStatePresent(t, resp.State)
-				assertStateString(t, resp.State, path.Root("display_name"), "Keycloak")
+				wantDisplayName := tc.wantDisplayName
+				if wantDisplayName == "" {
+					wantDisplayName = "Keycloak"
+				}
+				assertStateString(t, resp.State, path.Root("display_name"), wantDisplayName)
 				if tc.wantSecret.IsNull() {
 					assertOIDCStateStringNull(t, resp.State, path.Root("client_secret"))
 				} else {

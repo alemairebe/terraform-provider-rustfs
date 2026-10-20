@@ -526,7 +526,14 @@ func findOIDCProvider(config rustfs.OIDCConfig, id string) (rustfs.OIDCProvider,
 func applyOIDCProvider(model *OIDCProviderResourceModel, provider rustfs.OIDCProvider, secret types.String) {
 	model.ID = types.StringValue(provider.ProviderID)
 	model.Enabled = types.BoolValue(provider.Enabled)
-	model.DisplayName = types.StringValue(provider.DisplayName)
+	// The plan fills an omitted display_name with the provider id. Mirror that
+	// here so an older server that stores an empty value cannot produce an
+	// inconsistent post-apply result.
+	displayName := provider.DisplayName
+	if strings.TrimSpace(displayName) == "" {
+		displayName = provider.ProviderID
+	}
+	model.DisplayName = types.StringValue(displayName)
 	model.ConfigURL = types.StringValue(provider.ConfigURL)
 	model.Issuer = stringFromPtr(provider.Issuer)
 	model.ClientID = types.StringValue(provider.ClientID)
