@@ -14,6 +14,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/plancheck"
+	"github.com/hashicorp/terraform-plugin-testing/terraform"
 )
 
 // TestAccBucketRecovery_refusesLiveVolume exercises the real recovery route
@@ -43,7 +44,7 @@ func TestAccBucketRecovery_refusesLiveVolume(t *testing.T) {
 	// refuse it on the volume check, not on the identity.
 	incarnationID := uuid.NewString()
 
-	resource.ParallelTest(t, resource.TestCase{
+	resource.Test(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		CheckDestroy:             testAccCheckBucketDestroy,
@@ -65,6 +66,50 @@ func TestAccBucketRecovery_refusesLiveVolume(t *testing.T) {
 				ConfigPlanChecks: resource.ConfigPlanChecks{
 					PostApplyPreRefresh: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
 				},
+			},
+			{
+				// Import is the only live path that exercises ImportState and
+				// Read for this resource: a successful Create needs a real
+				// orphan, which CI cannot produce. The record is persisted so
+				// the next step can verify a second import against it.
+				Config:             testAccBucketRecoveryLiveVolumeConfig(bucketName, incarnationID),
+				ResourceName:       "rustfs_bucket_recovery.test",
+				ImportState:        true,
+				ImportStateId:      bucketName + "/" + incarnationID,
+				ImportStatePersist: true,
+				ImportStateCheck: func(states []*terraform.InstanceState) error {
+					var imported *terraform.InstanceState
+					for _, state := range states {
+						if state.Ephemeral.Type == "rustfs_bucket_recovery" {
+							if imported != nil {
+								return fmt.Errorf("expected one imported recovery state, got more than one")
+							}
+							imported = state
+						}
+					}
+					if imported == nil {
+						return fmt.Errorf("no rustfs_bucket_recovery state was imported")
+					}
+					attrs := imported.Attributes
+					for attr, want := range map[string]string{
+						"bucket":                 bucketName,
+						"incarnation_id":         incarnationID,
+						"retired_incarnation_id": incarnationID,
+						"id":                     incarnationID,
+					} {
+						if got := attrs[attr]; got != want {
+							return fmt.Errorf("imported %s = %q, want %q", attr, got, want)
+						}
+					}
+					return nil
+				},
+			},
+			{
+				Config:            testAccBucketRecoveryLiveVolumeConfig(bucketName, incarnationID),
+				ResourceName:      "rustfs_bucket_recovery.test",
+				ImportState:       true,
+				ImportStateId:     bucketName + "/" + incarnationID,
+				ImportStateVerify: true,
 			},
 		},
 	})
