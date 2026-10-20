@@ -22,34 +22,34 @@ import (
 
 // Ensure the implementation satisfies the expected interfaces.
 var (
-	_ resource.Resource                = &UserPolicyAttachmentRessource{}
-	_ resource.ResourceWithImportState = &UserPolicyAttachmentRessource{}
+	_ resource.Resource                = &UserPolicyAttachmentResource{}
+	_ resource.ResourceWithImportState = &UserPolicyAttachmentResource{}
 )
 
-// UserPolicyAttachmentRessource attaches one canned IAM policy to a user on
+// UserPolicyAttachmentResource attaches one canned IAM policy to a user on
 // top of the user's primary policy, so a user can hold more than one policy.
-type UserPolicyAttachmentRessource struct {
+type UserPolicyAttachmentResource struct {
 	client *AllClient
 }
 
-type UserPolicyAttachmentRessourceModel struct {
+type UserPolicyAttachmentResourceModel struct {
 	User   types.String `tfsdk:"user"`
 	Policy types.String `tfsdk:"policy"`
 	ID     types.String `tfsdk:"id"`
 }
 
-// NewUserPolicyAttachmentRessource is a helper function to simplify the provider implementation.
-func NewUserPolicyAttachmentRessource() resource.Resource {
-	return &UserPolicyAttachmentRessource{}
+// NewUserPolicyAttachmentResource is a helper function to simplify the provider implementation.
+func NewUserPolicyAttachmentResource() resource.Resource {
+	return &UserPolicyAttachmentResource{}
 }
 
 // Metadata returns the resource type name.
-func (r *UserPolicyAttachmentRessource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
+func (r *UserPolicyAttachmentResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
 	resp.TypeName = req.ProviderTypeName + "_user_policy_attachment"
 }
 
 // Schema defines the schema for the resource.
-func (r *UserPolicyAttachmentRessource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
+func (r *UserPolicyAttachmentResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		Description:         "Attach a canned IAM policy to a user",
 		MarkdownDescription: "Attach a canned IAM policy to a user and detach it on destroy",
@@ -79,7 +79,7 @@ func (r *UserPolicyAttachmentRessource) Schema(_ context.Context, _ resource.Sch
 	}
 }
 
-func (r *UserPolicyAttachmentRessource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
+func (r *UserPolicyAttachmentResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	if req.ProviderData == nil {
 		return
 	}
@@ -95,8 +95,8 @@ func (r *UserPolicyAttachmentRessource) Configure(_ context.Context, req resourc
 }
 
 // Create attaches the policy to the user and sets the initial Terraform state.
-func (r *UserPolicyAttachmentRessource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
-	var plan UserPolicyAttachmentRessourceModel
+func (r *UserPolicyAttachmentResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+	var plan UserPolicyAttachmentResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -122,8 +122,8 @@ func (r *UserPolicyAttachmentRessource) Create(ctx context.Context, req resource
 // RustFS console splits to render a user's policies), so a policy missing from
 // that list was detached outside Terraform and the attachment is dropped from
 // state.
-func (r *UserPolicyAttachmentRessource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
-	var state UserPolicyAttachmentRessourceModel
+func (r *UserPolicyAttachmentResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+	var state UserPolicyAttachmentResourceModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -162,8 +162,8 @@ func (r *UserPolicyAttachmentRessource) Read(ctx context.Context, req resource.R
 // Update re-attaches the policy. All attributes are RequiresReplace, so
 // Terraform normally plans a replacement; re-attaching keeps this method
 // correct if it is invoked.
-func (r *UserPolicyAttachmentRessource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var plan UserPolicyAttachmentRessourceModel
+func (r *UserPolicyAttachmentResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	var plan UserPolicyAttachmentResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -183,8 +183,8 @@ func (r *UserPolicyAttachmentRessource) Update(ctx context.Context, req resource
 }
 
 // Delete detaches the policy from the user and removes the Terraform state on success.
-func (r *UserPolicyAttachmentRessource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
-	var data UserPolicyAttachmentRessourceModel
+func (r *UserPolicyAttachmentResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+	var data UserPolicyAttachmentResourceModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -240,7 +240,7 @@ func splitPolicyNames(policies string) []string {
 
 // ImportState supports importing an attachment using the composite
 // <user>/<policy> identifier.
-func (r *UserPolicyAttachmentRessource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+func (r *UserPolicyAttachmentResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	parts := strings.Split(req.ID, "/")
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		resp.Diagnostics.AddError(

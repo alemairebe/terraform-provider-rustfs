@@ -16,8 +16,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
-func TestSiteReplicationRessourceSchema(t *testing.T) {
-	r := NewSiteReplicationRessource()
+func TestSiteReplicationResourceSchema(t *testing.T) {
+	r := NewSiteReplicationResource()
 	resp := &frameworkresource.SchemaResponse{}
 	r.Schema(context.Background(), frameworkresource.SchemaRequest{}, resp)
 	if resp.Diagnostics.HasError() {
@@ -64,8 +64,8 @@ const siteReplicationInfoReply = `{"enabled":true,"name":"local","sites":[` +
 const siteReplicationInfoNoPeerReply = `{"enabled":true,"name":"local","sites":[` +
 	`{"name":"local","endpoint":"http://rustfs:9000","deploymentID":"dep-local"}]}`
 
-func siteReplicationPlan(endpoint, secretKey string, skipTLSVerify types.Bool) SiteReplicationRessourceModel {
-	return SiteReplicationRessourceModel{
+func siteReplicationPlan(endpoint, secretKey string, skipTLSVerify types.Bool) SiteReplicationResourceModel {
+	return SiteReplicationResourceModel{
 		Name:          types.StringValue("tf-acc-peer"),
 		Endpoint:      types.StringValue(endpoint),
 		AccessKey:     types.StringValue(siteReplicationAccessKey),
@@ -77,7 +77,7 @@ func siteReplicationPlan(endpoint, secretKey string, skipTLSVerify types.Bool) S
 
 // assertSiteReplicationModelEqual reports the fields that differ, without
 // printing the peer credentials.
-func assertSiteReplicationModelEqual(t *testing.T, what string, got, want SiteReplicationRessourceModel) {
+func assertSiteReplicationModelEqual(t *testing.T, what string, got, want SiteReplicationResourceModel) {
 	t.Helper()
 	if got.Name != want.Name {
 		t.Errorf("%s: name = %q, want %q", what, got.Name.ValueString(), want.Name.ValueString())
@@ -98,18 +98,18 @@ func assertSiteReplicationModelEqual(t *testing.T, what string, got, want SiteRe
 
 func TestSiteReplicationResourceCreate(t *testing.T) {
 	ctx := context.Background()
-	r := NewSiteReplicationRessource().(*SiteReplicationRessource)
+	r := NewSiteReplicationResource().(*SiteReplicationResource)
 	sch := resourceSchemaOf(t, r)
 	srv, recorder := newRecorderServer(t, http.StatusOK, "")
 	r.client = newUnitAllClient(srv)
 
 	// A trailing slash in the configuration must not reach the wire.
 	plan := siteReplicationPlan(mockSiteReplicationPeerEndpoint+"/", siteReplicationSecret, types.BoolValue(false))
-	resp := &frameworkresource.CreateResponse{State: resourceState(t, sch, SiteReplicationRessourceModel{})}
+	resp := &frameworkresource.CreateResponse{State: resourceState(t, sch, SiteReplicationResourceModel{})}
 	r.Create(ctx, frameworkresource.CreateRequest{Plan: resourcePlan(t, sch, plan)}, resp)
 	requireNoDiagnostics(t, resp.Diagnostics)
 
-	var created SiteReplicationRessourceModel
+	var created SiteReplicationResourceModel
 	requireNoDiagnostics(t, resp.State.Get(ctx, &created))
 	assertSiteReplicationModelEqual(t, "create state", created, plan)
 
@@ -134,20 +134,20 @@ func TestSiteReplicationResourceCreate(t *testing.T) {
 }
 
 func TestSiteReplicationResourceCreateError(t *testing.T) {
-	r := NewSiteReplicationRessource().(*SiteReplicationRessource)
+	r := NewSiteReplicationResource().(*SiteReplicationResource)
 	sch := resourceSchemaOf(t, r)
 	srv, _ := newRecorderServer(t, http.StatusInternalServerError, internalErrorBody)
 	r.client = newUnitAllClient(srv)
 
 	plan := siteReplicationPlan(mockSiteReplicationPeerEndpoint, siteReplicationSecret, types.BoolValue(false))
-	resp := &frameworkresource.CreateResponse{State: resourceState(t, sch, SiteReplicationRessourceModel{})}
+	resp := &frameworkresource.CreateResponse{State: resourceState(t, sch, SiteReplicationResourceModel{})}
 	r.Create(context.Background(), frameworkresource.CreateRequest{Plan: resourcePlan(t, sch, plan)}, resp)
 	assertDiagnosticSummary(t, resp.Diagnostics, "Error creating site replication")
 }
 
 func TestSiteReplicationResourceRead(t *testing.T) {
 	ctx := context.Background()
-	r := NewSiteReplicationRessource().(*SiteReplicationRessource)
+	r := NewSiteReplicationResource().(*SiteReplicationResource)
 	sch := resourceSchemaOf(t, r)
 	srv, recorder := newRecorderServer(t, http.StatusOK, siteReplicationInfoReply)
 	r.client = newUnitAllClient(srv)
@@ -157,7 +157,7 @@ func TestSiteReplicationResourceRead(t *testing.T) {
 	r.Read(ctx, frameworkresource.ReadRequest{State: resourceState(t, sch, state)}, resp)
 	requireNoDiagnostics(t, resp.Diagnostics)
 
-	var read SiteReplicationRessourceModel
+	var read SiteReplicationResourceModel
 	requireNoDiagnostics(t, resp.State.Get(ctx, &read))
 	if read.Endpoint.ValueString() != mockSiteReplicationPeerEndpoint {
 		t.Errorf("read endpoint = %q, want %q", read.Endpoint.ValueString(), mockSiteReplicationPeerEndpoint)
@@ -176,7 +176,7 @@ func TestSiteReplicationResourceRead(t *testing.T) {
 
 func TestSiteReplicationResourceReadDropsMissingPeer(t *testing.T) {
 	ctx := context.Background()
-	r := NewSiteReplicationRessource().(*SiteReplicationRessource)
+	r := NewSiteReplicationResource().(*SiteReplicationResource)
 	sch := resourceSchemaOf(t, r)
 	srv, _ := newRecorderServer(t, http.StatusOK, siteReplicationInfoNoPeerReply)
 	r.client = newUnitAllClient(srv)
@@ -192,7 +192,7 @@ func TestSiteReplicationResourceReadDropsMissingPeer(t *testing.T) {
 }
 
 func TestSiteReplicationResourceReadError(t *testing.T) {
-	r := NewSiteReplicationRessource().(*SiteReplicationRessource)
+	r := NewSiteReplicationResource().(*SiteReplicationResource)
 	sch := resourceSchemaOf(t, r)
 	srv, _ := newRecorderServer(t, http.StatusInternalServerError, internalErrorBody)
 	r.client = newUnitAllClient(srv)
@@ -205,7 +205,7 @@ func TestSiteReplicationResourceReadError(t *testing.T) {
 
 func TestSiteReplicationResourceUpdate(t *testing.T) {
 	ctx := context.Background()
-	r := NewSiteReplicationRessource().(*SiteReplicationRessource)
+	r := NewSiteReplicationResource().(*SiteReplicationResource)
 	sch := resourceSchemaOf(t, r)
 	srv, recorder := newRecorderServer(t, http.StatusOK, "")
 	r.client = newUnitAllClient(srv)
@@ -220,7 +220,7 @@ func TestSiteReplicationResourceUpdate(t *testing.T) {
 	}, resp)
 	requireNoDiagnostics(t, resp.Diagnostics)
 
-	var afterUpdate SiteReplicationRessourceModel
+	var afterUpdate SiteReplicationResourceModel
 	requireNoDiagnostics(t, resp.State.Get(ctx, &afterUpdate))
 	assertSiteReplicationModelEqual(t, "update state", afterUpdate, plan)
 
@@ -250,7 +250,7 @@ func TestSiteReplicationResourceUpdate(t *testing.T) {
 }
 
 func TestSiteReplicationResourceUpdateError(t *testing.T) {
-	r := NewSiteReplicationRessource().(*SiteReplicationRessource)
+	r := NewSiteReplicationResource().(*SiteReplicationResource)
 	sch := resourceSchemaOf(t, r)
 	srv, _ := newRecorderServer(t, http.StatusInternalServerError, internalErrorBody)
 	r.client = newUnitAllClient(srv)
@@ -266,7 +266,7 @@ func TestSiteReplicationResourceUpdateError(t *testing.T) {
 
 func TestSiteReplicationResourceDelete(t *testing.T) {
 	ctx := context.Background()
-	r := NewSiteReplicationRessource().(*SiteReplicationRessource)
+	r := NewSiteReplicationResource().(*SiteReplicationResource)
 	sch := resourceSchemaOf(t, r)
 	srv, recorder := newRecorderServer(t, http.StatusOK, "")
 	r.client = newUnitAllClient(srv)
@@ -292,7 +292,7 @@ func TestSiteReplicationResourceDelete(t *testing.T) {
 }
 
 func TestSiteReplicationResourceDeleteError(t *testing.T) {
-	r := NewSiteReplicationRessource().(*SiteReplicationRessource)
+	r := NewSiteReplicationResource().(*SiteReplicationResource)
 	sch := resourceSchemaOf(t, r)
 	srv, _ := newRecorderServer(t, http.StatusInternalServerError, internalErrorBody)
 	r.client = newUnitAllClient(srv)
@@ -305,10 +305,10 @@ func TestSiteReplicationResourceDeleteError(t *testing.T) {
 
 func TestSiteReplicationResourceImportState(t *testing.T) {
 	ctx := context.Background()
-	r := NewSiteReplicationRessource().(*SiteReplicationRessource)
+	r := NewSiteReplicationResource().(*SiteReplicationResource)
 	sch := resourceSchemaOf(t, r)
 
-	resp := &frameworkresource.ImportStateResponse{State: resourceState(t, sch, SiteReplicationRessourceModel{})}
+	resp := &frameworkresource.ImportStateResponse{State: resourceState(t, sch, SiteReplicationResourceModel{})}
 	r.ImportState(ctx, frameworkresource.ImportStateRequest{ID: "tf-acc-peer"}, resp)
 	requireNoDiagnostics(t, resp.Diagnostics)
 
@@ -319,8 +319,8 @@ func TestSiteReplicationResourceImportState(t *testing.T) {
 	}
 }
 
-func siteReplicationLifecycleModel() *SiteReplicationRessourceModel {
-	return &SiteReplicationRessourceModel{
+func siteReplicationLifecycleModel() *SiteReplicationResourceModel {
+	return &SiteReplicationResourceModel{
 		Name:          types.StringValue("peer"),
 		Endpoint:      types.StringValue("https://peer.invalid:9000/"),
 		AccessKey:     types.StringValue(siteReplicationAccessKey),
@@ -330,7 +330,7 @@ func siteReplicationLifecycleModel() *SiteReplicationRessourceModel {
 	}
 }
 
-// TestSiteReplicationRessourceLifecyclePaths covers the paths the acceptance
+// TestSiteReplicationResourceLifecyclePaths covers the paths the acceptance
 // suite cannot reach with a live server: a peer that disappeared behind
 // Terraform's back, a delete that arrives after the peer is already removed,
 // and every failing API call in Create, Read and Delete.
@@ -338,7 +338,7 @@ func siteReplicationLifecycleModel() *SiteReplicationRessourceModel {
 // site-replication/info answers 200 on an empty cluster (probed live:
 // {"enabled":false,"name":"127.0.0.1","sites":[]}), so Read decides a peer is
 // gone from the site list it gets back, not from an error.
-func TestSiteReplicationRessourceLifecyclePaths(t *testing.T) {
+func TestSiteReplicationResourceLifecyclePaths(t *testing.T) {
 	t.Parallel()
 
 	readCases := []struct {
@@ -370,7 +370,7 @@ func TestSiteReplicationRessourceLifecyclePaths(t *testing.T) {
 	for _, tc := range readCases {
 		t.Run("read: "+tc.name, func(t *testing.T) {
 			client, _ := routedClient(t, tc.routes...)
-			h := newCRUDHarness(t, NewSiteReplicationRessource(), client)
+			h := newCRUDHarness(t, NewSiteReplicationResource(), client)
 
 			resp := h.read(siteReplicationLifecycleModel())
 
@@ -423,7 +423,7 @@ func TestSiteReplicationRessourceLifecyclePaths(t *testing.T) {
 	for _, tc := range deleteCases {
 		t.Run("delete: "+tc.name, func(t *testing.T) {
 			client, _ := routedClient(t, tc.routes...)
-			h := newCRUDHarness(t, NewSiteReplicationRessource(), client)
+			h := newCRUDHarness(t, NewSiteReplicationResource(), client)
 
 			resp := h.delete(siteReplicationLifecycleModel())
 
@@ -458,7 +458,7 @@ func TestSiteReplicationRessourceLifecyclePaths(t *testing.T) {
 	for _, tc := range createCases {
 		t.Run("create: "+tc.name, func(t *testing.T) {
 			client, _ := routedClient(t, tc.routes...)
-			h := newCRUDHarness(t, NewSiteReplicationRessource(), client)
+			h := newCRUDHarness(t, NewSiteReplicationResource(), client)
 			plan := siteReplicationLifecycleModel()
 
 			resp := h.create(plan)
@@ -470,7 +470,7 @@ func TestSiteReplicationRessourceLifecyclePaths(t *testing.T) {
 
 	t.Run("create: accepted peer writes state", func(t *testing.T) {
 		client, _ := routedClient(t, requestRoute{status: http.StatusOK, body: `{"status":"success"}`})
-		h := newCRUDHarness(t, NewSiteReplicationRessource(), client)
+		h := newCRUDHarness(t, NewSiteReplicationResource(), client)
 		plan := siteReplicationLifecycleModel()
 
 		resp := h.create(plan)
@@ -481,7 +481,7 @@ func TestSiteReplicationRessourceLifecyclePaths(t *testing.T) {
 
 	t.Run("update: rejected edit reports a diagnostic and keeps the prior state", func(t *testing.T) {
 		client, _ := routedClient(t, requestRoute{status: http.StatusBadRequest, body: s3ErrorXML("InvalidRequest", "edit exploded")})
-		h := newCRUDHarness(t, NewSiteReplicationRessource(), client)
+		h := newCRUDHarness(t, NewSiteReplicationResource(), client)
 
 		plan := siteReplicationLifecycleModel()
 		plan.Endpoint = types.StringValue("https://new.invalid:9000/")
@@ -495,7 +495,7 @@ func TestSiteReplicationRessourceLifecyclePaths(t *testing.T) {
 	})
 
 	t.Run("configure: rejects foreign provider data", func(t *testing.T) {
-		h := newCRUDHarness(t, NewSiteReplicationRessource(), cannedClient(t, http.StatusOK, ""))
+		h := newCRUDHarness(t, NewSiteReplicationResource(), cannedClient(t, http.StatusOK, ""))
 
 		resp := h.configure("not-a-client")
 

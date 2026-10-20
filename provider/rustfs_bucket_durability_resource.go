@@ -20,28 +20,28 @@ import (
 )
 
 var (
-	_ resource.Resource                = &BucketDurabilityRessource{}
-	_ resource.ResourceWithImportState = &BucketDurabilityRessource{}
+	_ resource.Resource                = &BucketDurabilityResource{}
+	_ resource.ResourceWithImportState = &BucketDurabilityResource{}
 )
 
-func NewBucketDurabilityRessource() resource.Resource {
-	return &BucketDurabilityRessource{}
+func NewBucketDurabilityResource() resource.Resource {
+	return &BucketDurabilityResource{}
 }
 
-type BucketDurabilityRessource struct {
+type BucketDurabilityResource struct {
 	client *AllClient
 }
 
-type BucketDurabilityRessourceModel struct {
+type BucketDurabilityResourceModel struct {
 	Bucket types.String `tfsdk:"bucket"`
 	Mode   types.String `tfsdk:"mode"`
 }
 
-func (r *BucketDurabilityRessource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
+func (r *BucketDurabilityResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
 	resp.TypeName = req.ProviderTypeName + "_bucket_durability"
 }
 
-func (r *BucketDurabilityRessource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
+func (r *BucketDurabilityResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		Description:         "Manage per-bucket durability settings in rustfs",
 		MarkdownDescription: "Manage the per-bucket durability override in rustfs",
@@ -64,7 +64,7 @@ func (r *BucketDurabilityRessource) Schema(_ context.Context, _ resource.SchemaR
 	}
 }
 
-func (r *BucketDurabilityRessource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
+func (r *BucketDurabilityResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	if req.ProviderData == nil {
 		return
 	}
@@ -79,8 +79,8 @@ func (r *BucketDurabilityRessource) Configure(_ context.Context, req resource.Co
 	r.client = client
 }
 
-func (r *BucketDurabilityRessource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
-	var plan BucketDurabilityRessourceModel
+func (r *BucketDurabilityResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+	var plan BucketDurabilityResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -98,8 +98,8 @@ func (r *BucketDurabilityRessource) Create(ctx context.Context, req resource.Cre
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
-func (r *BucketDurabilityRessource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
-	var state BucketDurabilityRessourceModel
+func (r *BucketDurabilityResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+	var state BucketDurabilityResourceModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -126,8 +126,8 @@ func (r *BucketDurabilityRessource) Read(ctx context.Context, req resource.ReadR
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
-func (r *BucketDurabilityRessource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var plan BucketDurabilityRessourceModel
+func (r *BucketDurabilityResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	var plan BucketDurabilityResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -145,8 +145,8 @@ func (r *BucketDurabilityRessource) Update(ctx context.Context, req resource.Upd
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
-func (r *BucketDurabilityRessource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
-	var data BucketDurabilityRessourceModel
+func (r *BucketDurabilityResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+	var data BucketDurabilityResourceModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -168,6 +168,6 @@ func (r *BucketDurabilityRessource) Delete(ctx context.Context, req resource.Del
 	}
 }
 
-func (r *BucketDurabilityRessource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+func (r *BucketDurabilityResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	resource.ImportStatePassthroughID(ctx, path.Root("bucket"), req, resp)
 }

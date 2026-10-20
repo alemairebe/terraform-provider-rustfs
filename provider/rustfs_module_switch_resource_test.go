@@ -199,7 +199,7 @@ resource "rustfs_module_switch" "test" {
 }
 
 func TestModuleSwitchResourceSchema(t *testing.T) {
-	r := NewModuleSwitchRessource()
+	r := NewModuleSwitchResource()
 	resp := &fwresource.SchemaResponse{}
 	r.Schema(context.TODO(), fwresource.SchemaRequest{}, resp)
 
@@ -216,7 +216,7 @@ func TestModuleSwitchResourceSchema(t *testing.T) {
 }
 
 func TestModuleSwitchUpdateFromModel(t *testing.T) {
-	update := moduleSwitchUpdateFromModel(ModuleSwitchRessourceModel{
+	update := moduleSwitchUpdateFromModel(ModuleSwitchResourceModel{
 		NotifyEnabled: types.BoolValue(true),
 		AuditEnabled:  types.BoolValue(false),
 	})
@@ -225,14 +225,14 @@ func TestModuleSwitchUpdateFromModel(t *testing.T) {
 	}
 }
 
-// TestModuleSwitchRessourceLifecyclePaths covers the paths the acceptance suite
+// TestModuleSwitchResourceLifecyclePaths covers the paths the acceptance suite
 // cannot reach with a live server: every failing API call in Create, Read and
 // Update, and the destroy that must not depend on the server at all.
 //
 // The switches are a cluster-wide singleton: GET module-switches always answers
 // 200 with at least the defaults (probed against RustFS latest), and the admin
 // API has no endpoint that removes them, so there is no "gone" read to cover.
-func TestModuleSwitchRessourceLifecyclePaths(t *testing.T) {
+func TestModuleSwitchResourceLifecyclePaths(t *testing.T) {
 	t.Parallel()
 
 	readCases := []struct {
@@ -260,9 +260,9 @@ func TestModuleSwitchRessourceLifecyclePaths(t *testing.T) {
 	for _, tc := range readCases {
 		t.Run("read: "+tc.name, func(t *testing.T) {
 			client, _ := routedClient(t, tc.routes...)
-			h := newCRUDHarness(t, NewModuleSwitchRessource(), client)
+			h := newCRUDHarness(t, NewModuleSwitchResource(), client)
 
-			resp := h.read(&ModuleSwitchRessourceModel{
+			resp := h.read(&ModuleSwitchResourceModel{
 				ID:            types.StringValue("module-switches"),
 				NotifyEnabled: types.BoolValue(false),
 				AuditEnabled:  types.BoolValue(true),
@@ -297,9 +297,9 @@ func TestModuleSwitchRessourceLifecyclePaths(t *testing.T) {
 		// The admin API exposes no reset endpoint, so Delete never talks to
 		// the server and cannot fail when the switches are already gone.
 		client, rec := routedClient(t)
-		h := newCRUDHarness(t, NewModuleSwitchRessource(), client)
+		h := newCRUDHarness(t, NewModuleSwitchResource(), client)
 
-		resp := h.delete(&ModuleSwitchRessourceModel{
+		resp := h.delete(&ModuleSwitchResourceModel{
 			ID:            types.StringValue("module-switches"),
 			NotifyEnabled: types.BoolValue(true),
 			AuditEnabled:  types.BoolValue(false),
@@ -326,8 +326,8 @@ func TestModuleSwitchRessourceLifecyclePaths(t *testing.T) {
 	for _, tc := range createCases {
 		t.Run("create: "+tc.name, func(t *testing.T) {
 			client, _ := routedClient(t, tc.routes...)
-			h := newCRUDHarness(t, NewModuleSwitchRessource(), client)
-			plan := &ModuleSwitchRessourceModel{NotifyEnabled: types.BoolValue(true), AuditEnabled: types.BoolValue(true)}
+			h := newCRUDHarness(t, NewModuleSwitchResource(), client)
+			plan := &ModuleSwitchResourceModel{NotifyEnabled: types.BoolValue(true), AuditEnabled: types.BoolValue(true)}
 
 			resp := h.create(plan)
 
@@ -353,8 +353,8 @@ func TestModuleSwitchRessourceLifecyclePaths(t *testing.T) {
 	for _, tc := range updateCases {
 		t.Run("update: "+tc.name, func(t *testing.T) {
 			client, _ := routedClient(t, tc.routes...)
-			h := newCRUDHarness(t, NewModuleSwitchRessource(), client)
-			plan := &ModuleSwitchRessourceModel{NotifyEnabled: types.BoolValue(true), AuditEnabled: types.BoolValue(false)}
+			h := newCRUDHarness(t, NewModuleSwitchResource(), client)
+			plan := &ModuleSwitchResourceModel{NotifyEnabled: types.BoolValue(true), AuditEnabled: types.BoolValue(false)}
 
 			resp := h.update(plan, plan)
 
@@ -363,7 +363,7 @@ func TestModuleSwitchRessourceLifecyclePaths(t *testing.T) {
 	}
 
 	t.Run("configure: rejects foreign provider data", func(t *testing.T) {
-		h := newCRUDHarness(t, NewModuleSwitchRessource(), cannedClient(t, http.StatusOK, ""))
+		h := newCRUDHarness(t, NewModuleSwitchResource(), cannedClient(t, http.StatusOK, ""))
 
 		resp := h.configure("not-a-client")
 

@@ -45,8 +45,8 @@ func TestBuildPublicAccessBlock(t *testing.T) {
 	}
 }
 
-func TestBucketPublicAccessBlockRessourceSchema(t *testing.T) {
-	r := NewBucketPublicAccessBlockRessource()
+func TestBucketPublicAccessBlockResourceSchema(t *testing.T) {
+	r := NewBucketPublicAccessBlockResource()
 	resp := &resource.SchemaResponse{}
 	r.Schema(context.TODO(), resource.SchemaRequest{}, resp)
 
@@ -62,8 +62,8 @@ func TestBucketPublicAccessBlockRessourceSchema(t *testing.T) {
 	}
 }
 
-func TestBucketPublicAccessBlockRessourceMetadata(t *testing.T) {
-	r := NewBucketPublicAccessBlockRessource()
+func TestBucketPublicAccessBlockResourceMetadata(t *testing.T) {
+	r := NewBucketPublicAccessBlockResource()
 	resp := &resource.MetadataResponse{}
 	r.Metadata(context.TODO(), resource.MetadataRequest{ProviderTypeName: "rustfs"}, resp)
 
@@ -363,7 +363,7 @@ func publicAccessBlockModel() *bucketPublicAccessBlockModel {
 		RestrictPublicBuckets: types.BoolValue(false),
 	}
 }
-func TestBucketPublicAccessBlockRessourceLifecyclePaths(t *testing.T) {
+func TestBucketPublicAccessBlockResourceLifecyclePaths(t *testing.T) {
 	t.Parallel()
 
 	readCases := []struct {
@@ -396,7 +396,7 @@ func TestBucketPublicAccessBlockRessourceLifecyclePaths(t *testing.T) {
 	for _, tc := range readCases {
 		t.Run("read: "+tc.name, func(t *testing.T) {
 			client, _ := routedClient(t, tc.routes...)
-			h := newCRUDHarness(t, NewBucketPublicAccessBlockRessource(), client)
+			h := newCRUDHarness(t, NewBucketPublicAccessBlockResource(), client)
 
 			resp := h.read(publicAccessBlockModel())
 
@@ -435,7 +435,7 @@ func TestBucketPublicAccessBlockRessourceLifecyclePaths(t *testing.T) {
 	for _, tc := range deleteCases {
 		t.Run("delete: "+tc.name, func(t *testing.T) {
 			client, _ := routedClient(t, tc.routes...)
-			h := newCRUDHarness(t, NewBucketPublicAccessBlockRessource(), client)
+			h := newCRUDHarness(t, NewBucketPublicAccessBlockResource(), client)
 
 			resp := h.delete(publicAccessBlockModel())
 
@@ -481,7 +481,7 @@ func TestBucketPublicAccessBlockRessourceLifecyclePaths(t *testing.T) {
 	for _, tc := range createCases {
 		t.Run("create: "+tc.name, func(t *testing.T) {
 			client, _ := routedClient(t, tc.routes...)
-			h := newCRUDHarness(t, NewBucketPublicAccessBlockRessource(), client)
+			h := newCRUDHarness(t, NewBucketPublicAccessBlockResource(), client)
 			plan := publicAccessBlockModel()
 
 			resp := h.create(plan)
@@ -517,7 +517,7 @@ func TestBucketPublicAccessBlockRessourceLifecyclePaths(t *testing.T) {
 	for _, tc := range updateCases {
 		t.Run("update: "+tc.name, func(t *testing.T) {
 			client, _ := routedClient(t, tc.routes...)
-			h := newCRUDHarness(t, NewBucketPublicAccessBlockRessource(), client)
+			h := newCRUDHarness(t, NewBucketPublicAccessBlockResource(), client)
 
 			resp := h.update(publicAccessBlockModel(), publicAccessBlockModel())
 
@@ -526,7 +526,7 @@ func TestBucketPublicAccessBlockRessourceLifecyclePaths(t *testing.T) {
 	}
 
 	t.Run("configure: rejects foreign provider data", func(t *testing.T) {
-		h := newCRUDHarness(t, NewBucketPublicAccessBlockRessource(), cannedClient(t, http.StatusOK, ""))
+		h := newCRUDHarness(t, NewBucketPublicAccessBlockResource(), cannedClient(t, http.StatusOK, ""))
 
 		resp := h.configure("not-a-client")
 

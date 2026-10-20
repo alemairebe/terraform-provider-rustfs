@@ -107,8 +107,8 @@ func TestFlattenCorsRules(t *testing.T) {
 	}
 }
 
-func TestBucketCorsRessourceSchema(t *testing.T) {
-	r := NewBucketCorsRessource()
+func TestBucketCorsResourceSchema(t *testing.T) {
+	r := NewBucketCorsResource()
 	resp := &frameworkresource.SchemaResponse{}
 	r.Schema(context.Background(), frameworkresource.SchemaRequest{}, resp)
 
@@ -136,8 +136,8 @@ func TestBucketCorsRessourceSchema(t *testing.T) {
 	}
 }
 
-func TestBucketCorsRessourceMetadata(t *testing.T) {
-	r := NewBucketCorsRessource()
+func TestBucketCorsResourceMetadata(t *testing.T) {
+	r := NewBucketCorsResource()
 	resp := &frameworkresource.MetadataResponse{}
 	r.Metadata(context.Background(), frameworkresource.MetadataRequest{ProviderTypeName: "rustfs"}, resp)
 
@@ -395,7 +395,7 @@ resource "rustfs_bucket_cors" "test" {
 }
 
 // Migrated from main's read/delete/create error-path work.
-func TestBucketCorsRessourceLifecyclePaths(t *testing.T) {
+func TestBucketCorsResourceLifecyclePaths(t *testing.T) {
 	t.Parallel()
 
 	plan := func() *bucketCorsModel {
@@ -443,7 +443,7 @@ func TestBucketCorsRessourceLifecyclePaths(t *testing.T) {
 	for _, tc := range readCases {
 		t.Run("read: "+tc.name, func(t *testing.T) {
 			client, _ := routedClient(t, tc.routes...)
-			h := newCRUDHarness(t, NewBucketCorsRessource(), client)
+			h := newCRUDHarness(t, NewBucketCorsResource(), client)
 
 			resp := h.read(&bucketCorsModel{Bucket: types.StringValue("tf-test")})
 
@@ -482,7 +482,7 @@ func TestBucketCorsRessourceLifecyclePaths(t *testing.T) {
 	for _, tc := range deleteCases {
 		t.Run("delete: "+tc.name, func(t *testing.T) {
 			client, _ := routedClient(t, tc.routes...)
-			h := newCRUDHarness(t, NewBucketCorsRessource(), client)
+			h := newCRUDHarness(t, NewBucketCorsResource(), client)
 
 			resp := h.delete(&bucketCorsModel{Bucket: types.StringValue("tf-test")})
 
@@ -517,7 +517,7 @@ func TestBucketCorsRessourceLifecyclePaths(t *testing.T) {
 	for _, tc := range createCases {
 		t.Run("create: "+tc.name, func(t *testing.T) {
 			client, _ := routedClient(t, tc.routes...)
-			h := newCRUDHarness(t, NewBucketCorsRessource(), client)
+			h := newCRUDHarness(t, NewBucketCorsResource(), client)
 
 			p := plan()
 			resp := h.create(p)
@@ -544,7 +544,7 @@ func TestBucketCorsRessourceLifecyclePaths(t *testing.T) {
 	for _, tc := range updateCases {
 		t.Run("update: "+tc.name, func(t *testing.T) {
 			client, _ := routedClient(t, tc.routes...)
-			h := newCRUDHarness(t, NewBucketCorsRessource(), client)
+			h := newCRUDHarness(t, NewBucketCorsResource(), client)
 
 			resp := h.update(plan(), &bucketCorsModel{Bucket: types.StringValue("tf-test")})
 
@@ -553,7 +553,7 @@ func TestBucketCorsRessourceLifecyclePaths(t *testing.T) {
 	}
 
 	t.Run("configure: rejects foreign provider data", func(t *testing.T) {
-		h := newCRUDHarness(t, NewBucketCorsRessource(), cannedClient(t, http.StatusOK, ""))
+		h := newCRUDHarness(t, NewBucketCorsResource(), cannedClient(t, http.StatusOK, ""))
 
 		resp := h.configure("not-a-client")
 

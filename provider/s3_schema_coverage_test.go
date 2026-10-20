@@ -62,22 +62,22 @@ func TestS3ResourceSchemaCoverage(t *testing.T) {
 		},
 		{
 			name:  "rustfs_bucket_cors",
-			r:     NewBucketCorsRessource(),
+			r:     NewBucketCorsResource(),
 			attrs: []string{"bucket", "id", "rule"},
 		},
 		{
 			name:  "rustfs_bucket_tags",
-			r:     NewBucketTagsRessource(),
+			r:     NewBucketTagsResource(),
 			attrs: []string{"bucket", "id", "tags"},
 		},
 		{
 			name:  "rustfs_bucket_policy",
-			r:     NewBucketPolicyRessource(),
+			r:     NewBucketPolicyResource(),
 			attrs: []string{"bucket", "id", "policy"},
 		},
 		{
 			name:  "rustfs_bucket_public_access_block",
-			r:     NewBucketPublicAccessBlockRessource(),
+			r:     NewBucketPublicAccessBlockResource(),
 			attrs: []string{"bucket", "id", "block_public_acls", "ignore_public_acls", "block_public_policy", "restrict_public_buckets"},
 		},
 	}

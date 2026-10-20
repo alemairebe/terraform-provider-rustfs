@@ -406,7 +406,7 @@ func TestAccUserPolicyAttachmentResource_updateReattaches(t *testing.T) {
 		}
 	})
 
-	attachment := &UserPolicyAttachmentRessource{client: &AllClient{RustClient: client}}
+	attachment := &UserPolicyAttachmentResource{client: &AllClient{RustClient: client}}
 
 	var schemaResponse fwresource.SchemaResponse
 	attachment.Schema(ctx, fwresource.SchemaRequest{}, &schemaResponse)
@@ -432,7 +432,7 @@ func TestAccUserPolicyAttachmentResource_updateReattaches(t *testing.T) {
 		t.Fatalf("Update reported diagnostics: %v", updateResponse.Diagnostics)
 	}
 
-	var state UserPolicyAttachmentRessourceModel
+	var state UserPolicyAttachmentResourceModel
 	if diags := updateResponse.State.Get(ctx, &state); diags.HasError() {
 		t.Fatalf("failed to read the state Update recorded: %v", diags)
 	}
@@ -469,7 +469,7 @@ func testAccCheckUserPolicyAttachmentDestroy(s *terraform.State) error {
 }
 
 // Migrated from main's read/delete/create error-path work.
-func TestUserPolicyAttachmentRessourceLifecyclePaths(t *testing.T) {
+func TestUserPolicyAttachmentResourceLifecyclePaths(t *testing.T) {
 	t.Parallel()
 
 	readCases := []struct {
@@ -519,9 +519,9 @@ func TestUserPolicyAttachmentRessourceLifecyclePaths(t *testing.T) {
 	for _, tc := range readCases {
 		t.Run("read: "+tc.name, func(t *testing.T) {
 			client, _ := routedClient(t, tc.routes...)
-			h := newCRUDHarness(t, NewUserPolicyAttachmentRessource(), client)
+			h := newCRUDHarness(t, NewUserPolicyAttachmentResource(), client)
 
-			resp := h.read(&UserPolicyAttachmentRessourceModel{
+			resp := h.read(&UserPolicyAttachmentResourceModel{
 				User:   types.StringValue(lifecycleAttachmentUser),
 				Policy: types.StringValue("tf-test-policy"),
 				ID:     types.StringValue("tf-test/tf-test-policy"),
@@ -581,9 +581,9 @@ func TestUserPolicyAttachmentRessourceLifecyclePaths(t *testing.T) {
 	for _, tc := range deleteCases {
 		t.Run("delete: "+tc.name, func(t *testing.T) {
 			client, rec := routedClient(t, tc.routes...)
-			h := newCRUDHarness(t, NewUserPolicyAttachmentRessource(), client)
+			h := newCRUDHarness(t, NewUserPolicyAttachmentResource(), client)
 
-			resp := h.delete(&UserPolicyAttachmentRessourceModel{
+			resp := h.delete(&UserPolicyAttachmentResourceModel{
 				User:   types.StringValue(lifecycleAttachmentUser),
 				Policy: types.StringValue("tf-test-policy"),
 				ID:     types.StringValue("tf-test/tf-test-policy"),
@@ -601,7 +601,7 @@ func TestUserPolicyAttachmentRessourceLifecyclePaths(t *testing.T) {
 	createCases := []struct {
 		name        string
 		routes      []requestRoute
-		plan        *UserPolicyAttachmentRessourceModel
+		plan        *UserPolicyAttachmentResourceModel
 		wantSummary string
 		wantDetail  string
 	}{
@@ -611,7 +611,7 @@ func TestUserPolicyAttachmentRessourceLifecyclePaths(t *testing.T) {
 				method: http.MethodPost, pathContains: "policy/attach",
 				status: http.StatusBadRequest, body: s3ErrorXML("InvalidArgument", "user not exist"),
 			}},
-			plan: &UserPolicyAttachmentRessourceModel{
+			plan: &UserPolicyAttachmentResourceModel{
 				User:   types.StringValue(lifecycleAttachmentUser),
 				Policy: types.StringValue("tf-test-policy"),
 				ID:     types.StringNull(),
@@ -624,7 +624,7 @@ func TestUserPolicyAttachmentRessourceLifecyclePaths(t *testing.T) {
 	for _, tc := range createCases {
 		t.Run("create: "+tc.name, func(t *testing.T) {
 			client, rec := routedClient(t, tc.routes...)
-			h := newCRUDHarness(t, NewUserPolicyAttachmentRessource(), client)
+			h := newCRUDHarness(t, NewUserPolicyAttachmentResource(), client)
 
 			resp := h.create(tc.plan)
 
@@ -635,7 +635,7 @@ func TestUserPolicyAttachmentRessourceLifecyclePaths(t *testing.T) {
 	}
 
 	t.Run("configure: rejects foreign provider data", func(t *testing.T) {
-		h := newCRUDHarness(t, NewUserPolicyAttachmentRessource(), cannedClient(t, http.StatusOK, ""))
+		h := newCRUDHarness(t, NewUserPolicyAttachmentResource(), cannedClient(t, http.StatusOK, ""))
 
 		resp := h.configure("not-a-client")
 

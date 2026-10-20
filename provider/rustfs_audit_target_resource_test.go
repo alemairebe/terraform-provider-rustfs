@@ -26,7 +26,7 @@ import (
 const auditTargetResourceName = "rustfs_audit_target.test"
 
 func TestAuditTargetSchema(t *testing.T) {
-	r := NewAuditTargetRessource()
+	r := NewAuditTargetResource()
 	resp := &frameworkresource.SchemaResponse{}
 	r.Schema(context.Background(), frameworkresource.SchemaRequest{}, resp)
 
@@ -84,8 +84,8 @@ func TestAuditTargetSchema(t *testing.T) {
 }
 
 func TestAuditTargetKeyValuesLegacy(t *testing.T) {
-	r := &auditTargetRessource{}
-	model := auditTargetRessourceModel{
+	r := &auditTargetResource{}
+	model := auditTargetResourceModel{
 		TargetType:    types.StringValue("audit_webhook"),
 		TargetName:    types.StringValue("legacy"),
 		Enable:        types.BoolValue(true),
@@ -131,8 +131,8 @@ func TestAuditTargetKeyValuesLegacy(t *testing.T) {
 }
 
 func TestAuditTargetKeyValuesTyped(t *testing.T) {
-	r := &auditTargetRessource{}
-	model := auditTargetRessourceModel{
+	r := &auditTargetResource{}
+	model := auditTargetResourceModel{
 		TargetType: types.StringValue("audit_redis"),
 		TargetName: types.StringValue("typed"),
 		Enable:     types.BoolValue(true),
@@ -168,12 +168,12 @@ func TestAuditTargetKeyValuesTyped(t *testing.T) {
 func TestAuditTargetValidate(t *testing.T) {
 	tests := []struct {
 		name    string
-		model   auditTargetRessourceModel
+		model   auditTargetResourceModel
 		wantErr string
 	}{
 		{
 			name: "block for wrong type",
-			model: auditTargetRessourceModel{
+			model: auditTargetResourceModel{
 				TargetType: types.StringValue("audit_amqp"),
 				Redis: &targetRedisConfigModel{
 					URL: types.StringValue("redis://127.0.0.1:6379/"),
@@ -183,28 +183,28 @@ func TestAuditTargetValidate(t *testing.T) {
 		},
 		{
 			name: "no block with non-webhook type",
-			model: auditTargetRessourceModel{
+			model: auditTargetResourceModel{
 				TargetType: types.StringValue("audit_amqp"),
 			},
 			wantErr: `target type "audit_amqp" requires the amqp_config block`,
 		},
 		{
 			name: "no block with webhook type is ok",
-			model: auditTargetRessourceModel{
+			model: auditTargetResourceModel{
 				TargetType: types.StringValue("audit_webhook"),
 				Endpoint:   types.StringValue("https://hooks.example.com/webhook/x"),
 			},
 		},
 		{
 			name: "omitted target_type with flat webhook attributes is ok",
-			model: auditTargetRessourceModel{
+			model: auditTargetResourceModel{
 				TargetType: types.StringNull(),
 				Endpoint:   types.StringValue("https://hooks.example.com/webhook/x"),
 			},
 		},
 		{
 			name: "omitted target_type with non-webhook block errors",
-			model: auditTargetRessourceModel{
+			model: auditTargetResourceModel{
 				TargetType: types.StringNull(),
 				Redis: &targetRedisConfigModel{
 					URL: types.StringValue("redis://127.0.0.1:6379/"),
@@ -214,7 +214,7 @@ func TestAuditTargetValidate(t *testing.T) {
 		},
 		{
 			name: "unknown target_type with matching block is ok",
-			model: auditTargetRessourceModel{
+			model: auditTargetResourceModel{
 				TargetType: types.StringUnknown(),
 				Redis: &targetRedisConfigModel{
 					URL: types.StringValue("redis://127.0.0.1:6379/"),
@@ -223,7 +223,7 @@ func TestAuditTargetValidate(t *testing.T) {
 		},
 		{
 			name: "flat webhook attributes combined with block",
-			model: auditTargetRessourceModel{
+			model: auditTargetResourceModel{
 				TargetType: types.StringValue("audit_webhook"),
 				Endpoint:   types.StringValue("https://hooks.example.com/webhook/x"),
 				Webhook: &targetWebhookConfigModel{
@@ -548,7 +548,7 @@ func testAccCheckAuditTargetDestroy(s *terraform.State) error {
 }
 
 // Migrated from main's read/delete/create error-path work.
-func TestAuditTargetRessourceLifecyclePaths(t *testing.T) {
+func TestAuditTargetResourceLifecyclePaths(t *testing.T) {
 	t.Parallel()
 
 	readCases := []struct {
@@ -590,9 +590,9 @@ func TestAuditTargetRessourceLifecyclePaths(t *testing.T) {
 	for _, tc := range readCases {
 		t.Run("read: "+tc.name, func(t *testing.T) {
 			client, _ := routedClient(t, tc.routes...)
-			h := newCRUDHarness(t, NewAuditTargetRessource(), client)
+			h := newCRUDHarness(t, NewAuditTargetResource(), client)
 
-			resp := h.read(&auditTargetRessourceModel{
+			resp := h.read(&auditTargetResourceModel{
 				TargetType: types.StringValue("audit_webhook"),
 				TargetName: types.StringValue("tf-test"),
 			})
@@ -643,9 +643,9 @@ func TestAuditTargetRessourceLifecyclePaths(t *testing.T) {
 	for _, tc := range deleteCases {
 		t.Run("delete: "+tc.name, func(t *testing.T) {
 			client, _ := routedClient(t, tc.routes...)
-			h := newCRUDHarness(t, NewAuditTargetRessource(), client)
+			h := newCRUDHarness(t, NewAuditTargetResource(), client)
 
-			resp := h.delete(&auditTargetRessourceModel{
+			resp := h.delete(&auditTargetResourceModel{
 				TargetType: types.StringValue("audit_webhook"),
 				TargetName: types.StringValue("tf-test"),
 			})
@@ -662,7 +662,7 @@ func TestAuditTargetRessourceLifecyclePaths(t *testing.T) {
 	createCases := []struct {
 		name        string
 		routes      []requestRoute
-		plan        *auditTargetRessourceModel
+		plan        *auditTargetResourceModel
 		wantSummary string
 		wantDetail  string
 	}{
@@ -670,7 +670,7 @@ func TestAuditTargetRessourceLifecyclePaths(t *testing.T) {
 			// A block that does not match target_type is rejected before any
 			// API call, so the server never sees a half-built target.
 			name: "mismatched configuration block writes no state",
-			plan: &auditTargetRessourceModel{
+			plan: &auditTargetResourceModel{
 				TargetType: types.StringValue("audit_webhook"),
 				TargetName: types.StringValue("tf-test"),
 				Kafka: &targetKafkaConfigModel{
@@ -687,7 +687,7 @@ func TestAuditTargetRessourceLifecyclePaths(t *testing.T) {
 				method: http.MethodPut, pathContains: "audit/target/audit_bogus", status: http.StatusBadRequest,
 				body: s3ErrorXML("InvalidArgument", "unsupported audit target type: 'audit_bogus'"),
 			}},
-			plan: &auditTargetRessourceModel{
+			plan: &auditTargetResourceModel{
 				TargetType: types.StringValue("audit_bogus"),
 				TargetName: types.StringValue("tf-test"),
 			},
@@ -702,7 +702,7 @@ func TestAuditTargetRessourceLifecyclePaths(t *testing.T) {
 				method: http.MethodPut, pathContains: "audit/target/audit_webhook", status: http.StatusBadRequest,
 				body: s3ErrorXML("InvalidArgument", "invalid key values: endpoint is required"),
 			}},
-			plan: &auditTargetRessourceModel{
+			plan: &auditTargetResourceModel{
 				TargetType: types.StringValue("audit_webhook"),
 				TargetName: types.StringValue("tf-test"),
 			},
@@ -714,7 +714,7 @@ func TestAuditTargetRessourceLifecyclePaths(t *testing.T) {
 	for _, tc := range createCases {
 		t.Run("create: "+tc.name, func(t *testing.T) {
 			client, rec := routedClient(t, tc.routes...)
-			h := newCRUDHarness(t, NewAuditTargetRessource(), client)
+			h := newCRUDHarness(t, NewAuditTargetResource(), client)
 
 			resp := h.create(tc.plan)
 
@@ -726,9 +726,9 @@ func TestAuditTargetRessourceLifecyclePaths(t *testing.T) {
 	}
 
 	t.Run("validate config: mismatched block is rejected before planning", func(t *testing.T) {
-		h := newCRUDHarness(t, NewAuditTargetRessource(), cannedClient(t, http.StatusOK, ""))
+		h := newCRUDHarness(t, NewAuditTargetResource(), cannedClient(t, http.StatusOK, ""))
 
-		resp := h.validateConfig(&auditTargetRessourceModel{
+		resp := h.validateConfig(&auditTargetResourceModel{
 			TargetType: types.StringValue("audit_kafka"),
 			TargetName: types.StringValue("tf-test"),
 		})
@@ -738,7 +738,7 @@ func TestAuditTargetRessourceLifecyclePaths(t *testing.T) {
 	})
 
 	t.Run("configure: rejects foreign provider data", func(t *testing.T) {
-		h := newCRUDHarness(t, NewAuditTargetRessource(), cannedClient(t, http.StatusOK, ""))
+		h := newCRUDHarness(t, NewAuditTargetResource(), cannedClient(t, http.StatusOK, ""))
 
 		resp := h.configure("not-a-client")
 

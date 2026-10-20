@@ -26,22 +26,22 @@ import (
 
 // Ensure the implementation satisfies the expected interfaces.
 var (
-	_ resource.Resource                   = &auditTargetRessource{}
-	_ resource.ResourceWithImportState    = &auditTargetRessource{}
-	_ resource.ResourceWithValidateConfig = &auditTargetRessource{}
+	_ resource.Resource                   = &auditTargetResource{}
+	_ resource.ResourceWithImportState    = &auditTargetResource{}
+	_ resource.ResourceWithValidateConfig = &auditTargetResource{}
 )
 
-// NewAuditTargetRessource is a helper function to simplify the provider implementation.
-func NewAuditTargetRessource() resource.Resource {
-	return &auditTargetRessource{}
+// NewAuditTargetResource is a helper function to simplify the provider implementation.
+func NewAuditTargetResource() resource.Resource {
+	return &auditTargetResource{}
 }
 
-// auditTargetRessource is the resource implementation.
-type auditTargetRessource struct {
+// auditTargetResource is the resource implementation.
+type auditTargetResource struct {
 	client *AllClient
 }
 
-type auditTargetRessourceModel struct {
+type auditTargetResourceModel struct {
 	TargetType    types.String `tfsdk:"target_type"`
 	TargetName    types.String `tfsdk:"target_name"`
 	Enable        types.Bool   `tfsdk:"enable"`
@@ -71,7 +71,7 @@ type auditTargetRessourceModel struct {
 
 // configBlocks assembles the per-type configuration blocks held on the model
 // into the shared targetConfigBlocks container.
-func (m *auditTargetRessourceModel) configBlocks() targetConfigBlocks {
+func (m *auditTargetResourceModel) configBlocks() targetConfigBlocks {
 	return targetConfigBlocks{
 		Webhook:  m.Webhook,
 		Amqp:     m.Amqp,
@@ -86,12 +86,12 @@ func (m *auditTargetRessourceModel) configBlocks() targetConfigBlocks {
 }
 
 // Metadata returns the resource type name.
-func (r *auditTargetRessource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
+func (r *auditTargetResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
 	resp.TypeName = req.ProviderTypeName + "_audit_target"
 }
 
 // Schema defines the schema for the resource.
-func (r *auditTargetRessource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
+func (r *auditTargetResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	attributes := map[string]schema.Attribute{
 		"target_type": schema.StringAttribute{
 			Optional:    true,
@@ -188,7 +188,7 @@ func (r *auditTargetRessource) Schema(_ context.Context, _ resource.SchemaReques
 	}
 }
 
-func (r *auditTargetRessource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
+func (r *auditTargetResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	if req.ProviderData == nil {
 		return
 	}
@@ -207,8 +207,8 @@ func (r *auditTargetRessource) Configure(_ context.Context, req resource.Configu
 // express: when a typed block is set it must be the single matching block and
 // the flat webhook attributes must be absent; when no block is set the target
 // type must be audit_webhook (the legacy flat path).
-func (r *auditTargetRessource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
-	var model auditTargetRessourceModel
+func (r *auditTargetResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
+	var model auditTargetResourceModel
 	resp.Diagnostics.Append(req.Config.Get(ctx, &model)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -224,7 +224,7 @@ func (r *auditTargetRessource) ValidateConfig(ctx context.Context, req resource.
 
 // validateConfig enforces the audit target's two-path configuration rules and
 // returns a diagnostic-ready error when they are violated.
-func (m *auditTargetRessourceModel) validateConfig() error {
+func (m *auditTargetResourceModel) validateConfig() error {
 	// target_type is Optional+Computed with a default of "audit_webhook". An
 	// unknown value cannot be resolved during config validation, so skip the
 	// two-path comparison rather than normalizing "" to "audit_webhook" and
@@ -263,7 +263,7 @@ func (m *auditTargetRessourceModel) validateConfig() error {
 
 // flatWebhookAttributesSet reports whether any of the legacy flat webhook
 // attributes are set on the model.
-func flatWebhookAttributesSet(m *auditTargetRessourceModel) bool {
+func flatWebhookAttributesSet(m *auditTargetResourceModel) bool {
 	for _, v := range []types.String{m.Endpoint, m.AuthToken, m.QueueDir, m.ClientCert, m.ClientKey, m.ClientCA} {
 		if !v.IsNull() && !v.IsUnknown() {
 			return true
@@ -283,7 +283,7 @@ func flatWebhookAttributesSet(m *auditTargetRessourceModel) bool {
 // When no typed block is set it produces the legacy flat webhook output, with
 // the trailing enable pair appended last. When a block is set it delegates to
 // the shared per-type mapping.
-func (r *auditTargetRessource) auditTargetKeyValues(model *auditTargetRessourceModel) ([]rustfs.TargetKeyValue, error) {
+func (r *auditTargetResource) auditTargetKeyValues(model *auditTargetResourceModel) ([]rustfs.TargetKeyValue, error) {
 	if len(model.configBlocks().setBlocks()) > 0 {
 		return model.configBlocks().keyValues(model.TargetType.ValueString(), model.Enable.ValueBool(), model.Comment.ValueString())
 	}
@@ -317,8 +317,8 @@ func (r *auditTargetRessource) auditTargetKeyValues(model *auditTargetRessourceM
 }
 
 // Create adds the audit target and sets the initial Terraform state.
-func (r *auditTargetRessource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
-	var plan auditTargetRessourceModel
+func (r *auditTargetResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+	var plan auditTargetResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -357,7 +357,7 @@ func (r *auditTargetRessource) Create(ctx context.Context, req resource.CreateRe
 
 // refreshHealth lists the audit targets and populates the computed health
 // metadata on the model when the target is present.
-func (r *auditTargetRessource) refreshHealth(model *auditTargetRessourceModel) error {
+func (r *auditTargetResource) refreshHealth(model *auditTargetResourceModel) error {
 	targets, err := r.client.RustClient.ListAuditTargets()
 	if err != nil {
 		return err
@@ -381,8 +381,8 @@ func (r *auditTargetRessource) refreshHealth(model *auditTargetRessourceModel) e
 // endpoint does not echo the target configuration (endpoint, auth token, ...),
 // only identity and health metadata, so the config fields are preserved from
 // the prior state and only the health/computed metadata is refreshed.
-func (r *auditTargetRessource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
-	var state auditTargetRessourceModel
+func (r *auditTargetResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+	var state auditTargetResourceModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -421,8 +421,8 @@ func (r *auditTargetRessource) Read(ctx context.Context, req resource.ReadReques
 }
 
 // Update edits the audit target and updates the Terraform state on success.
-func (r *auditTargetRessource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var plan auditTargetRessourceModel
+func (r *auditTargetResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	var plan auditTargetResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -461,8 +461,8 @@ func (r *auditTargetRessource) Update(ctx context.Context, req resource.UpdateRe
 // Delete resets the audit target to its default configuration and removes the
 // Terraform state. The admin API exposes no plain delete for targets, so
 // destroy goes through the reset endpoint.
-func (r *auditTargetRessource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
-	var state auditTargetRessourceModel
+func (r *auditTargetResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+	var state auditTargetResourceModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -479,7 +479,7 @@ func (r *auditTargetRessource) Delete(ctx context.Context, req resource.DeleteRe
 	}
 }
 
-func (r *auditTargetRessource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+func (r *auditTargetResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	parts := strings.Split(req.ID, "/")
 	if len(parts) != 2 {
 		resp.Diagnostics.AddError(

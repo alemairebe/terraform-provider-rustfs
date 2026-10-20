@@ -50,7 +50,7 @@ provider_installation {
 main.go                        # provider entry point, //go:generate tfplugindocs
 provider/                      # the provider package: schema, resources, data sources, tests
   provider.go                  # provider definition, Configure, Resources()/DataSources()
-  rustfs_*_resource.go         # resource CRUD implementations (legacy spelling: _ressource.go)
+  rustfs_*_resource.go         # resource CRUD implementations
   rustfs_*_datasource.go       # data source implementations (legacy: _data_source.go)
   *_test.go                    # schema/metadata unit tests + TestAcc* acceptance tests
 pkg/rustfs/                    # RustFS admin API client (SigV4-signed HTTP)

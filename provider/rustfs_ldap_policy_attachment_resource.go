@@ -21,30 +21,30 @@ import (
 )
 
 var (
-	_ resource.Resource                = &LDAPPolicyAttachmentRessource{}
-	_ resource.ResourceWithImportState = &LDAPPolicyAttachmentRessource{}
+	_ resource.Resource                = &LDAPPolicyAttachmentResource{}
+	_ resource.ResourceWithImportState = &LDAPPolicyAttachmentResource{}
 )
 
-type LDAPPolicyAttachmentRessource struct {
+type LDAPPolicyAttachmentResource struct {
 	client *AllClient
 }
 
-type LDAPPolicyAttachmentRessourceModel struct {
+type LDAPPolicyAttachmentResourceModel struct {
 	UserOrGroup types.String `tfsdk:"user_or_group"`
 	Policy      types.String `tfsdk:"policy"`
 	IsGroup     types.Bool   `tfsdk:"is_group"`
 	ID          types.String `tfsdk:"id"`
 }
 
-func NewLDAPPolicyAttachmentRessource() resource.Resource {
-	return &LDAPPolicyAttachmentRessource{}
+func NewLDAPPolicyAttachmentResource() resource.Resource {
+	return &LDAPPolicyAttachmentResource{}
 }
 
-func (r *LDAPPolicyAttachmentRessource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
+func (r *LDAPPolicyAttachmentResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
 	resp.TypeName = req.ProviderTypeName + "_ldap_policy_attachment"
 }
 
-func (r *LDAPPolicyAttachmentRessource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
+func (r *LDAPPolicyAttachmentResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		Description:         "Attach a canned policy to an LDAP user or group",
 		MarkdownDescription: "Attach a canned policy to an LDAP user or group and detach it on destroy",
@@ -80,7 +80,7 @@ func (r *LDAPPolicyAttachmentRessource) Schema(_ context.Context, _ resource.Sch
 	}
 }
 
-func (r *LDAPPolicyAttachmentRessource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
+func (r *LDAPPolicyAttachmentResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	if req.ProviderData == nil {
 		return
 	}
@@ -95,8 +95,8 @@ func (r *LDAPPolicyAttachmentRessource) Configure(_ context.Context, req resourc
 	r.client = client
 }
 
-func (r *LDAPPolicyAttachmentRessource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
-	var plan LDAPPolicyAttachmentRessourceModel
+func (r *LDAPPolicyAttachmentResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+	var plan LDAPPolicyAttachmentResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -120,8 +120,8 @@ func (r *LDAPPolicyAttachmentRessource) Create(ctx context.Context, req resource
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
-func (r *LDAPPolicyAttachmentRessource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
-	var state LDAPPolicyAttachmentRessourceModel
+func (r *LDAPPolicyAttachmentResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+	var state LDAPPolicyAttachmentResourceModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -137,8 +137,8 @@ func (r *LDAPPolicyAttachmentRessource) Read(ctx context.Context, req resource.R
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
-func (r *LDAPPolicyAttachmentRessource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var plan LDAPPolicyAttachmentRessourceModel
+func (r *LDAPPolicyAttachmentResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	var plan LDAPPolicyAttachmentResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -161,8 +161,8 @@ func (r *LDAPPolicyAttachmentRessource) Update(ctx context.Context, req resource
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
-func (r *LDAPPolicyAttachmentRessource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
-	var data LDAPPolicyAttachmentRessourceModel
+func (r *LDAPPolicyAttachmentResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+	var data LDAPPolicyAttachmentResourceModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -189,7 +189,7 @@ func (r *LDAPPolicyAttachmentRessource) Delete(ctx context.Context, req resource
 	}
 }
 
-func (r *LDAPPolicyAttachmentRessource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+func (r *LDAPPolicyAttachmentResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	// Accepts "<user_or_group>/<policy>" and optionally
 	// "<user_or_group>/<policy>/<is_group>". The optional is_group flag is the
 	// last element and the policy sits directly before it, so distinguished

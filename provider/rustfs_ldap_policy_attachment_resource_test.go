@@ -154,8 +154,8 @@ type ldapPolicyBody struct {
 	Group    string   `json:"group"`
 }
 
-func ldapPolicyPlan(target, policy string, isGroup types.Bool) LDAPPolicyAttachmentRessourceModel {
-	return LDAPPolicyAttachmentRessourceModel{
+func ldapPolicyPlan(target, policy string, isGroup types.Bool) LDAPPolicyAttachmentResourceModel {
+	return LDAPPolicyAttachmentResourceModel{
 		UserOrGroup: types.StringValue(target),
 		Policy:      types.StringValue(policy),
 		IsGroup:     isGroup,
@@ -175,17 +175,17 @@ func ldapPolicyAttachBody(t *testing.T, request adminRequest) ldapPolicyBody {
 
 func TestLDAPPolicyAttachmentResourceCreate(t *testing.T) {
 	ctx := context.Background()
-	r := &LDAPPolicyAttachmentRessource{}
+	r := &LDAPPolicyAttachmentResource{}
 	sch := resourceSchemaOf(t, r)
 	srv, recorder := newRecorderServer(t, http.StatusOK, "")
 	r.client = newUnitAllClient(srv)
 
 	plan := ldapPolicyPlan(ldapSAUserDN, "readwrite", types.BoolValue(false))
-	resp := &frameworkresource.CreateResponse{State: resourceState(t, sch, LDAPPolicyAttachmentRessourceModel{})}
+	resp := &frameworkresource.CreateResponse{State: resourceState(t, sch, LDAPPolicyAttachmentResourceModel{})}
 	r.Create(ctx, frameworkresource.CreateRequest{Plan: resourcePlan(t, sch, plan)}, resp)
 	requireNoDiagnostics(t, resp.Diagnostics)
 
-	var created LDAPPolicyAttachmentRessourceModel
+	var created LDAPPolicyAttachmentResourceModel
 	requireNoDiagnostics(t, resp.State.Get(ctx, &created))
 	if got, want := created.ID.ValueString(), ldapSAUserDN+"/readwrite"; got != want {
 		t.Errorf("create id = %q, want %q", got, want)
@@ -211,14 +211,14 @@ func TestLDAPPolicyAttachmentResourceCreate(t *testing.T) {
 
 func TestLDAPPolicyAttachmentResourceCreateGroupTarget(t *testing.T) {
 	ctx := context.Background()
-	r := &LDAPPolicyAttachmentRessource{}
+	r := &LDAPPolicyAttachmentResource{}
 	sch := resourceSchemaOf(t, r)
 	srv, recorder := newRecorderServer(t, http.StatusOK, "")
 	r.client = newUnitAllClient(srv)
 
 	const group = "cn=terraform-acc-test,ou=groups,dc=example,dc=com"
 	plan := ldapPolicyPlan(group, "readonly", types.BoolValue(true))
-	resp := &frameworkresource.CreateResponse{State: resourceState(t, sch, LDAPPolicyAttachmentRessourceModel{})}
+	resp := &frameworkresource.CreateResponse{State: resourceState(t, sch, LDAPPolicyAttachmentResourceModel{})}
 	r.Create(ctx, frameworkresource.CreateRequest{Plan: resourcePlan(t, sch, plan)}, resp)
 	requireNoDiagnostics(t, resp.Diagnostics)
 
@@ -233,13 +233,13 @@ func TestLDAPPolicyAttachmentResourceCreateGroupTarget(t *testing.T) {
 // attachment.
 func TestLDAPPolicyAttachmentResourceCreateDefaultsToUser(t *testing.T) {
 	ctx := context.Background()
-	r := &LDAPPolicyAttachmentRessource{}
+	r := &LDAPPolicyAttachmentResource{}
 	sch := resourceSchemaOf(t, r)
 	srv, recorder := newRecorderServer(t, http.StatusOK, "")
 	r.client = newUnitAllClient(srv)
 
 	plan := ldapPolicyPlan(ldapSAUserDN, "readwrite", types.BoolNull())
-	resp := &frameworkresource.CreateResponse{State: resourceState(t, sch, LDAPPolicyAttachmentRessourceModel{})}
+	resp := &frameworkresource.CreateResponse{State: resourceState(t, sch, LDAPPolicyAttachmentResourceModel{})}
 	r.Create(ctx, frameworkresource.CreateRequest{Plan: resourcePlan(t, sch, plan)}, resp)
 	requireNoDiagnostics(t, resp.Diagnostics)
 
@@ -250,13 +250,13 @@ func TestLDAPPolicyAttachmentResourceCreateDefaultsToUser(t *testing.T) {
 }
 
 func TestLDAPPolicyAttachmentResourceCreateError(t *testing.T) {
-	r := &LDAPPolicyAttachmentRessource{}
+	r := &LDAPPolicyAttachmentResource{}
 	sch := resourceSchemaOf(t, r)
 	srv, _ := newRecorderServer(t, http.StatusBadRequest, `<Error><Code>InvalidArgument</Code><Message>user not exist</Message></Error>`)
 	r.client = newUnitAllClient(srv)
 
 	plan := ldapPolicyPlan(ldapSAUserDN, "readwrite", types.BoolValue(false))
-	resp := &frameworkresource.CreateResponse{State: resourceState(t, sch, LDAPPolicyAttachmentRessourceModel{})}
+	resp := &frameworkresource.CreateResponse{State: resourceState(t, sch, LDAPPolicyAttachmentResourceModel{})}
 	r.Create(context.Background(), frameworkresource.CreateRequest{Plan: resourcePlan(t, sch, plan)}, resp)
 	assertDiagnosticSummary(t, resp.Diagnostics, "Error attaching policy to LDAP entity")
 }
@@ -266,7 +266,7 @@ func TestLDAPPolicyAttachmentResourceCreateError(t *testing.T) {
 // server.
 func TestLDAPPolicyAttachmentResourceRead(t *testing.T) {
 	ctx := context.Background()
-	r := &LDAPPolicyAttachmentRessource{}
+	r := &LDAPPolicyAttachmentResource{}
 	sch := resourceSchemaOf(t, r)
 	srv, recorder := newRecorderServer(t, http.StatusOK, "")
 	r.client = newUnitAllClient(srv)
@@ -276,7 +276,7 @@ func TestLDAPPolicyAttachmentResourceRead(t *testing.T) {
 	r.Read(ctx, frameworkresource.ReadRequest{State: resourceState(t, sch, state)}, resp)
 	requireNoDiagnostics(t, resp.Diagnostics)
 
-	var read LDAPPolicyAttachmentRessourceModel
+	var read LDAPPolicyAttachmentResourceModel
 	requireNoDiagnostics(t, resp.State.Get(ctx, &read))
 	if read.IsGroup.IsNull() || read.IsGroup.ValueBool() {
 		t.Errorf("read is_group = %v, want false", read.IsGroup)
@@ -293,7 +293,7 @@ func TestLDAPPolicyAttachmentResourceRead(t *testing.T) {
 // Terraform ever calls it: it re-attaches and recomputes the identifier.
 func TestLDAPPolicyAttachmentResourceUpdate(t *testing.T) {
 	ctx := context.Background()
-	r := &LDAPPolicyAttachmentRessource{}
+	r := &LDAPPolicyAttachmentResource{}
 	sch := resourceSchemaOf(t, r)
 	srv, recorder := newRecorderServer(t, http.StatusOK, "")
 	r.client = newUnitAllClient(srv)
@@ -307,7 +307,7 @@ func TestLDAPPolicyAttachmentResourceUpdate(t *testing.T) {
 	}, resp)
 	requireNoDiagnostics(t, resp.Diagnostics)
 
-	var afterUpdate LDAPPolicyAttachmentRessourceModel
+	var afterUpdate LDAPPolicyAttachmentResourceModel
 	requireNoDiagnostics(t, resp.State.Get(ctx, &afterUpdate))
 	if got := afterUpdate.ID.ValueString(); got != ldapSAUserDN+"/readwrite" {
 		t.Errorf("update id = %q", got)
@@ -319,7 +319,7 @@ func TestLDAPPolicyAttachmentResourceUpdate(t *testing.T) {
 }
 
 func TestLDAPPolicyAttachmentResourceUpdateError(t *testing.T) {
-	r := &LDAPPolicyAttachmentRessource{}
+	r := &LDAPPolicyAttachmentResource{}
 	sch := resourceSchemaOf(t, r)
 	srv, _ := newRecorderServer(t, http.StatusBadRequest, `<Error><Code>InvalidArgument</Code><Message>user not exist</Message></Error>`)
 	r.client = newUnitAllClient(srv)
@@ -335,7 +335,7 @@ func TestLDAPPolicyAttachmentResourceUpdateError(t *testing.T) {
 
 func TestLDAPPolicyAttachmentResourceDelete(t *testing.T) {
 	ctx := context.Background()
-	r := &LDAPPolicyAttachmentRessource{}
+	r := &LDAPPolicyAttachmentResource{}
 	sch := resourceSchemaOf(t, r)
 	srv, recorder := newRecorderServer(t, http.StatusOK, "")
 	r.client = newUnitAllClient(srv)
@@ -356,11 +356,11 @@ func TestLDAPPolicyAttachmentResourceDelete(t *testing.T) {
 }
 
 func TestLDAPPolicyAttachmentResourceDeleteError(t *testing.T) {
-	r := &LDAPPolicyAttachmentRessource{}
+	r := &LDAPPolicyAttachmentResource{}
 	sch := resourceSchemaOf(t, r)
 	// A real failure: `400 InvalidArgument "user not exist"` is no longer an
 	// error here — an LDAP entity that is gone cannot still carry the policy,
-	// so the detach is already satisfied (see TestLdapPolicyAttachmentRessourceLifecyclePaths,
+	// so the detach is already satisfied (see TestLdapPolicyAttachmentResourceLifecyclePaths,
 	// which pins that case alongside the unrelated-message one).
 	srv, _ := newRecorderServer(t, http.StatusForbidden, `<Error><Code>AccessDenied</Code><Message>nope</Message></Error>`)
 	r.client = newUnitAllClient(srv)
@@ -417,9 +417,9 @@ func TestLDAPPolicyAttachmentResourceImportState(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			r := &LDAPPolicyAttachmentRessource{}
+			r := &LDAPPolicyAttachmentResource{}
 			sch := resourceSchemaOf(t, r)
-			resp := &frameworkresource.ImportStateResponse{State: resourceState(t, sch, LDAPPolicyAttachmentRessourceModel{})}
+			resp := &frameworkresource.ImportStateResponse{State: resourceState(t, sch, LDAPPolicyAttachmentResourceModel{})}
 			r.ImportState(ctx, frameworkresource.ImportStateRequest{ID: tc.id}, resp)
 			if tc.wantErr != "" {
 				assertDiagnosticSummary(t, resp.Diagnostics, tc.wantErr)
@@ -445,20 +445,20 @@ func TestLDAPPolicyAttachmentResourceImportState(t *testing.T) {
 	}
 }
 
-// TestLdapPolicyAttachmentRessourceLifecyclePaths covers the paths the
+// TestLdapPolicyAttachmentResourceLifecyclePaths covers the paths the
 // acceptance suite cannot reach with a live server: the idempotent delete of
 // an LDAP entity that is already gone, and every failing API call in Create
 // and Delete. The admin API exposes no per-target read-back for LDAP policy
 // attachments, so Read cannot observe a missing entity and is covered for the
 // state it does preserve.
-func TestLdapPolicyAttachmentRessourceLifecyclePaths(t *testing.T) {
+func TestLdapPolicyAttachmentResourceLifecyclePaths(t *testing.T) {
 	t.Parallel()
 
 	t.Run("read: preserves state because no read-back endpoint exists", func(t *testing.T) {
 		client, rec := routedClient(t)
-		h := newCRUDHarness(t, NewLDAPPolicyAttachmentRessource(), client)
+		h := newCRUDHarness(t, NewLDAPPolicyAttachmentResource(), client)
 
-		resp := h.read(&LDAPPolicyAttachmentRessourceModel{
+		resp := h.read(&LDAPPolicyAttachmentResourceModel{
 			UserOrGroup: types.StringValue("uid=tf-test,ou=people,dc=example,dc=com"),
 			Policy:      types.StringValue("tf-test-policy"),
 			IsGroup:     types.BoolValue(false),
@@ -522,9 +522,9 @@ func TestLdapPolicyAttachmentRessourceLifecyclePaths(t *testing.T) {
 	for _, tc := range deleteCases {
 		t.Run("delete: "+tc.name, func(t *testing.T) {
 			client, rec := routedClient(t, tc.routes...)
-			h := newCRUDHarness(t, NewLDAPPolicyAttachmentRessource(), client)
+			h := newCRUDHarness(t, NewLDAPPolicyAttachmentResource(), client)
 
-			resp := h.delete(&LDAPPolicyAttachmentRessourceModel{
+			resp := h.delete(&LDAPPolicyAttachmentResourceModel{
 				UserOrGroup: types.StringValue("uid=tf-test,ou=people,dc=example,dc=com"),
 				Policy:      types.StringValue("tf-test-policy"),
 				IsGroup:     types.BoolValue(tc.isGroup),
@@ -543,7 +543,7 @@ func TestLdapPolicyAttachmentRessourceLifecyclePaths(t *testing.T) {
 	createCases := []struct {
 		name        string
 		routes      []requestRoute
-		plan        *LDAPPolicyAttachmentRessourceModel
+		plan        *LDAPPolicyAttachmentResourceModel
 		wantSummary string
 		wantDetail  string
 	}{
@@ -553,7 +553,7 @@ func TestLdapPolicyAttachmentRessourceLifecyclePaths(t *testing.T) {
 				method: http.MethodPost, pathContains: "policy/attach",
 				status: http.StatusBadRequest, body: s3ErrorXML("InvalidArgument", "user not exist"),
 			}},
-			plan: &LDAPPolicyAttachmentRessourceModel{
+			plan: &LDAPPolicyAttachmentResourceModel{
 				UserOrGroup: types.StringValue("uid=tf-test,ou=people,dc=example,dc=com"),
 				Policy:      types.StringValue("tf-test-policy"),
 				IsGroup:     types.BoolValue(false),
@@ -567,7 +567,7 @@ func TestLdapPolicyAttachmentRessourceLifecyclePaths(t *testing.T) {
 	for _, tc := range createCases {
 		t.Run("create: "+tc.name, func(t *testing.T) {
 			client, rec := routedClient(t, tc.routes...)
-			h := newCRUDHarness(t, NewLDAPPolicyAttachmentRessource(), client)
+			h := newCRUDHarness(t, NewLDAPPolicyAttachmentResource(), client)
 
 			resp := h.create(tc.plan)
 
@@ -578,7 +578,7 @@ func TestLdapPolicyAttachmentRessourceLifecyclePaths(t *testing.T) {
 	}
 
 	t.Run("configure: rejects foreign provider data", func(t *testing.T) {
-		h := newCRUDHarness(t, NewLDAPPolicyAttachmentRessource(), cannedClient(t, http.StatusOK, ""))
+		h := newCRUDHarness(t, NewLDAPPolicyAttachmentResource(), cannedClient(t, http.StatusOK, ""))
 
 		resp := h.configure("not-a-client")
 

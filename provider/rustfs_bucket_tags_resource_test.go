@@ -24,8 +24,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
 )
 
-func TestBucketTagsRessourceSchema(t *testing.T) {
-	r := NewBucketTagsRessource()
+func TestBucketTagsResourceSchema(t *testing.T) {
+	r := NewBucketTagsResource()
 	req := fwresource.SchemaRequest{}
 	resp := fwresource.SchemaResponse{}
 	r.Schema(context.Background(), req, &resp)
@@ -161,7 +161,7 @@ func TestAccBucketTags_updateError(t *testing.T) {
 		t.Fatalf("failed to build S3 client: %v", err)
 	}
 
-	r := &bucketTagsRessource{client: &AllClient{S3: s3Client}}
+	r := &bucketTagsResource{client: &AllClient{S3: s3Client}}
 
 	var schemaResp fwresource.SchemaResponse
 	r.Schema(ctx, fwresource.SchemaRequest{}, &schemaResp)
@@ -303,7 +303,7 @@ func tagsModel() *bucketTagsModel {
 		}),
 	}
 }
-func TestBucketTagsRessourceLifecyclePaths(t *testing.T) {
+func TestBucketTagsResourceLifecyclePaths(t *testing.T) {
 	t.Parallel()
 
 	readCases := []struct {
@@ -336,7 +336,7 @@ func TestBucketTagsRessourceLifecyclePaths(t *testing.T) {
 	for _, tc := range readCases {
 		t.Run("read: "+tc.name, func(t *testing.T) {
 			client, _ := routedClient(t, tc.routes...)
-			h := newCRUDHarness(t, NewBucketTagsRessource(), client)
+			h := newCRUDHarness(t, NewBucketTagsResource(), client)
 
 			resp := h.read(tagsModel())
 
@@ -375,7 +375,7 @@ func TestBucketTagsRessourceLifecyclePaths(t *testing.T) {
 	for _, tc := range deleteCases {
 		t.Run("delete: "+tc.name, func(t *testing.T) {
 			client, _ := routedClient(t, tc.routes...)
-			h := newCRUDHarness(t, NewBucketTagsRessource(), client)
+			h := newCRUDHarness(t, NewBucketTagsResource(), client)
 
 			resp := h.delete(tagsModel())
 
@@ -410,7 +410,7 @@ func TestBucketTagsRessourceLifecyclePaths(t *testing.T) {
 	for _, tc := range createCases {
 		t.Run("create: "+tc.name, func(t *testing.T) {
 			client, _ := routedClient(t, tc.routes...)
-			h := newCRUDHarness(t, NewBucketTagsRessource(), client)
+			h := newCRUDHarness(t, NewBucketTagsResource(), client)
 			plan := tagsModel()
 
 			resp := h.create(plan)
@@ -423,7 +423,7 @@ func TestBucketTagsRessourceLifecyclePaths(t *testing.T) {
 
 	t.Run("update: rejected tag set reports the server error", func(t *testing.T) {
 		client, _ := routedClient(t, requestRoute{method: http.MethodPut, status: http.StatusBadRequest, body: s3ErrorXML("InvalidTag", "The TagKey you have provided is invalid")})
-		h := newCRUDHarness(t, NewBucketTagsRessource(), client)
+		h := newCRUDHarness(t, NewBucketTagsResource(), client)
 
 		resp := h.update(tagsModel(), tagsModel())
 
@@ -431,7 +431,7 @@ func TestBucketTagsRessourceLifecyclePaths(t *testing.T) {
 	})
 
 	t.Run("configure: rejects foreign provider data", func(t *testing.T) {
-		h := newCRUDHarness(t, NewBucketTagsRessource(), cannedClient(t, http.StatusOK, ""))
+		h := newCRUDHarness(t, NewBucketTagsResource(), cannedClient(t, http.StatusOK, ""))
 
 		resp := h.configure("not-a-client")
 

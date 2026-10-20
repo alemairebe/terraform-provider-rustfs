@@ -20,17 +20,17 @@ import (
 )
 
 var (
-	_ resource.Resource                = &RemoteTargetRessource{}
-	_ resource.ResourceWithImportState = &RemoteTargetRessource{}
+	_ resource.Resource                = &RemoteTargetResource{}
+	_ resource.ResourceWithImportState = &RemoteTargetResource{}
 )
 
-// RemoteTargetRessource manages remote targets used as replication destinations
+// RemoteTargetResource manages remote targets used as replication destinations
 // or notification ARNs in rustfs.
-type RemoteTargetRessource struct {
+type RemoteTargetResource struct {
 	client *AllClient
 }
 
-type RemoteTargetRessourceModel struct {
+type RemoteTargetResourceModel struct {
 	Arn          types.String `tfsdk:"arn"`
 	Type         types.String `tfsdk:"type"`
 	Endpoint     types.String `tfsdk:"endpoint"`
@@ -43,16 +43,16 @@ type RemoteTargetRessourceModel struct {
 	TargetBucket types.String `tfsdk:"target_bucket"`
 }
 
-// NewRemoteTargetRessource returns a new RemoteTargetRessource.
-func NewRemoteTargetRessource() resource.Resource {
-	return &RemoteTargetRessource{}
+// NewRemoteTargetResource returns a new RemoteTargetResource.
+func NewRemoteTargetResource() resource.Resource {
+	return &RemoteTargetResource{}
 }
 
-func (r *RemoteTargetRessource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
+func (r *RemoteTargetResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
 	resp.TypeName = req.ProviderTypeName + "_remote_target"
 }
 
-func (r *RemoteTargetRessource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
+func (r *RemoteTargetResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		Description:         "Manage remote targets used as replication destinations or notification ARNs in rustfs",
 		MarkdownDescription: "Manage remote targets used as replication destinations or notification ARNs in rustfs",
@@ -130,7 +130,7 @@ func (r *RemoteTargetRessource) Schema(_ context.Context, _ resource.SchemaReque
 	}
 }
 
-func (r *RemoteTargetRessource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
+func (r *RemoteTargetResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	if req.ProviderData == nil {
 		return
 	}
@@ -145,8 +145,8 @@ func (r *RemoteTargetRessource) Configure(_ context.Context, req resource.Config
 	r.client = client
 }
 
-func (r *RemoteTargetRessource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
-	var plan RemoteTargetRessourceModel
+func (r *RemoteTargetResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+	var plan RemoteTargetResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -161,8 +161,8 @@ func (r *RemoteTargetRessource) Create(ctx context.Context, req resource.CreateR
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
-func (r *RemoteTargetRessource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
-	var state RemoteTargetRessourceModel
+func (r *RemoteTargetResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+	var state RemoteTargetResourceModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -213,8 +213,8 @@ func (r *RemoteTargetRessource) Read(ctx context.Context, req resource.ReadReque
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
-func (r *RemoteTargetRessource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var plan, state RemoteTargetRessourceModel
+func (r *RemoteTargetResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	var plan, state RemoteTargetResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
@@ -231,8 +231,8 @@ func (r *RemoteTargetRessource) Update(ctx context.Context, req resource.UpdateR
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
-func (r *RemoteTargetRessource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
-	var data RemoteTargetRessourceModel
+func (r *RemoteTargetResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+	var data RemoteTargetResourceModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -260,7 +260,7 @@ func isRemoteTargetNotFound(err error) bool {
 		strings.Contains(err.Error(), "BucketRemoteTargetNotFound")
 }
 
-func (r *RemoteTargetRessource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+func (r *RemoteTargetResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	// Import ID is the composite "<source-bucket>:<arn>".
 	id := req.ID
 	parts := strings.SplitN(id, ":", 2)
@@ -275,7 +275,7 @@ func (r *RemoteTargetRessource) ImportState(ctx context.Context, req resource.Im
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("arn"), parts[1])...)
 }
 
-func (r *RemoteTargetRessource) targetFromModel(plan RemoteTargetRessourceModel) rustfs.RemoteTarget {
+func (r *RemoteTargetResource) targetFromModel(plan RemoteTargetResourceModel) rustfs.RemoteTarget {
 	return rustfs.RemoteTarget{
 		Type:         plan.Type.ValueString(),
 		Endpoint:     plan.Endpoint.ValueString(),
