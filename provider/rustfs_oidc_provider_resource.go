@@ -113,6 +113,9 @@ func (r *OIDCProviderResource) Schema(_ context.Context, _ resource.SchemaReques
 				Optional:    true,
 				Computed:    true,
 				Description: "Name shown on the Console login page. Defaults to the provider id.",
+				PlanModifiers: []planmodifier.String{
+					oidcDisplayNameDefault{},
+				},
 				Validators: []validator.String{
 					stringvalidator.LengthAtLeast(1),
 				},
@@ -126,7 +129,11 @@ func (r *OIDCProviderResource) Schema(_ context.Context, _ resource.SchemaReques
 			},
 			"issuer": schema.StringAttribute{
 				Optional:    true,
+				Computed:    true,
 				Description: "Issuer expected in the discovery document. Null lets the server derive and verify it from `config_url`.",
+				Validators: []validator.String{
+					stringvalidator.LengthAtLeast(1),
+				},
 			},
 			"client_id": schema.StringAttribute{
 				Required:    true,
@@ -167,7 +174,11 @@ func (r *OIDCProviderResource) Schema(_ context.Context, _ resource.SchemaReques
 			},
 			"redirect_uri": schema.StringAttribute{
 				Optional:    true,
+				Computed:    true,
 				Description: "Callback URL registered with the identity provider. Required when `redirect_uri_dynamic` is `false`.",
+				Validators: []validator.String{
+					stringvalidator.LengthAtLeast(1),
+				},
 			},
 			"redirect_uri_dynamic": schema.BoolAttribute{
 				Optional:    true,
@@ -470,6 +481,32 @@ func oidcProviderInputFromModel(ctx context.Context, model *OIDCProviderResource
 		UsernameClaim:      oidcString(model.UsernameClaim),
 		HideFromUI:         oidcBool(model.HideFromUI, false),
 	}, diags
+}
+
+// oidcDisplayNameDefault fills an omitted display_name with the provider id.
+// The server applies the same default, but doing it during planning keeps the
+// documented default visible and avoids an unknown value after apply.
+type oidcDisplayNameDefault struct{}
+
+func (oidcDisplayNameDefault) Description(context.Context) string {
+	return "defaults to the provider id"
+}
+
+func (oidcDisplayNameDefault) MarkdownDescription(context.Context) string {
+	return "defaults to the provider id"
+}
+
+func (oidcDisplayNameDefault) PlanModifyString(ctx context.Context, req planmodifier.StringRequest, resp *planmodifier.StringResponse) {
+	if !req.ConfigValue.IsNull() && !req.ConfigValue.IsUnknown() {
+		return
+	}
+
+	var id types.String
+	resp.Diagnostics.Append(req.Plan.GetAttribute(ctx, path.Root("id"), &id)...)
+	if resp.Diagnostics.HasError() || id.IsNull() || id.IsUnknown() {
+		return
+	}
+	resp.PlanValue = id
 }
 
 // findOIDCProvider returns the provider with the given id from an effective

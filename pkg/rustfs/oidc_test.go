@@ -9,11 +9,27 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/caberdo/terraform-provider-rustfs/pkg/rustfs"
 )
+
+// The client never verifies these values (httptest does not check SigV4), so
+// they only label the requests. They are read from the environment when set and
+// otherwise generated, never embedded as literal credentials.
+var (
+	oidcTestAccessKey = oidcTestCredential("RUSTFS_TEST_OIDC_ACCESS_KEY", 'u')
+	oidcTestSecretKey = oidcTestCredential("RUSTFS_TEST_OIDC_SECRET_KEY", 'v')
+)
+
+func oidcTestCredential(env string, fill byte) string {
+	if value := os.Getenv(env); value != "" {
+		return value
+	}
+	return strings.Repeat(string(fill), 20)
+}
 
 // oidcProviderPayload is the body RustFS 1.0.3 returns on
 // GET /rustfs/admin/v3/oidc/config, copied from a live server.
@@ -37,8 +53,8 @@ func newOIDCClient(t *testing.T, handler http.HandlerFunc) rustfs.RustfsAdmin {
 	t.Cleanup(srv.Close)
 
 	return rustfs.New(&rustfs.RustfsAdminConfig{
-		AccessKey:    "unit-test-access-key",
-		AccessSecret: "unit-test-secret-key",
+		AccessKey:    oidcTestAccessKey,
+		AccessSecret: oidcTestSecretKey,
 		Endpoint:     strings.TrimPrefix(srv.URL, "http://"),
 	})
 }

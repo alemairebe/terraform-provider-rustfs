@@ -13,6 +13,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
@@ -88,6 +89,42 @@ func TestOIDCProviderResourceMetadata(t *testing.T) {
 	r.Metadata(context.Background(), resource.MetadataRequest{ProviderTypeName: "rustfs"}, resp)
 	if resp.TypeName != "rustfs_oidc_provider" {
 		t.Errorf("expected rustfs_oidc_provider, got %s", resp.TypeName)
+	}
+}
+
+func TestOIDCDisplayNameDefaultModifier(t *testing.T) {
+	sch := resourceSchemaOf(t, NewOIDCProviderResource())
+
+	cases := []struct {
+		name        string
+		configValue types.String
+		want        types.String
+	}{
+		{name: "omitted defaults to the provider id", configValue: types.StringNull(), want: types.StringValue("keycloak")},
+		{name: "unknown defaults to the provider id", configValue: types.StringUnknown(), want: types.StringValue("keycloak")},
+		{name: "explicit value is kept", configValue: types.StringValue("Custom"), want: types.StringValue("Custom")},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			plan := resourcePlan(t, sch, OIDCProviderResourceModel{
+				ID:             types.StringValue("keycloak"),
+				DisplayName:    types.StringNull(),
+				Scopes:         types.ListNull(types.StringType),
+				OtherAudiences: types.ListNull(types.StringType),
+			})
+			resp := &planmodifier.StringResponse{PlanValue: tc.configValue}
+			oidcDisplayNameDefault{}.PlanModifyString(context.Background(), planmodifier.StringRequest{
+				Plan:        plan,
+				ConfigValue: tc.configValue,
+				PlanValue:   tc.configValue,
+			}, resp)
+
+			requireNoDiagnostics(t, resp.Diagnostics)
+			if !resp.PlanValue.Equal(tc.want) {
+				t.Errorf("plan value = %v, want %v", resp.PlanValue, tc.want)
+			}
+		})
 	}
 }
 
