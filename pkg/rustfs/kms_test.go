@@ -5,6 +5,7 @@ package rustfs
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -634,4 +635,140 @@ func TestKmsCapabilityError(t *testing.T) {
 			t.Fatalf("expected the raw error, got %v", err)
 		}
 	})
+}
+
+func TestStartKmsRekey(t *testing.T) {
+	client := newKmsTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+		if r.URL.Path != "/rustfs/admin/v3/kms/keys/rekey" {
+			t.Errorf("wrong path: %s", r.URL.Path)
+		}
+		var req struct {
+			Buckets []string `json:"buckets"`
+			Prefix  string   `json:"prefix"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("invalid body: %v", err)
+		}
+		if len(req.Buckets) != 1 || req.Buckets[0] != "b1" || req.Prefix != "photos/" {
+			t.Errorf("unexpected body: %+v", req)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"job_id":"job-1","state":"running","buckets":["b1"],"current_bucket":"b1","scanned":10,"rewrapped":7,"already_current":1,"not_applicable":1,"failed":1}`))
+	})
+
+	status, err := client.StartKmsRekey([]string{"b1"}, "photos/")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status.JobID != "job-1" || status.State != "running" {
+		t.Errorf("unexpected status: %+v", status)
+	}
+	if status.Scanned != 10 || status.Rewrapped != 7 || status.AlreadyCurrent != 1 || status.NotApplicable != 1 || status.Failed != 1 {
+		t.Errorf("unexpected counters: %+v", status)
+	}
+	if status.CurrentBucket == nil || *status.CurrentBucket != "b1" {
+		t.Errorf("unexpected current bucket: %v", status.CurrentBucket)
+	}
+}
+
+func TestStartKmsRekeyAllBucketsOmitsScope(t *testing.T) {
+	client := newKmsTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("invalid body: %v", err)
+		}
+		if len(req) != 0 {
+			t.Errorf("expected an empty body, got %+v", req)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"job_id":"job-1","state":"running","buckets":["b1"],"scanned":0,"rewrapped":0,"already_current":0,"not_applicable":0,"failed":0}`))
+	})
+
+	if _, err := client.StartKmsRekey(nil, ""); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestGetKmsRekeyStatus(t *testing.T) {
+	client := newKmsTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("expected GET, got %s", r.Method)
+		}
+		if r.URL.Path != "/rustfs/admin/v3/kms/keys/rekey/status" {
+			t.Errorf("wrong path: %s", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"job_id":"job-2","state":"completed","buckets":["b1","b2"],"current_bucket":null,"scanned":20,"rewrapped":18,"already_current":2,"not_applicable":0,"failed":0}`))
+	})
+
+	status, err := client.GetKmsRekeyStatus()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status.JobID != "job-2" || status.State != "completed" {
+		t.Errorf("unexpected status: %+v", status)
+	}
+	if status.CurrentBucket != nil {
+		t.Errorf("expected no current bucket, got %v", *status.CurrentBucket)
+	}
+}
+
+func TestGetKmsRekeyStatusNoSweep(t *testing.T) {
+	client := newKmsTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":"no rekey sweep has run"}`))
+	})
+
+	_, err := client.GetKmsRekeyStatus()
+	if !errors.Is(err, ErrKmsRekeyNotRun) {
+		t.Fatalf("expected ErrKmsRekeyNotRun, got %v", err)
+	}
+}
+
+func TestCancelKmsRekey(t *testing.T) {
+	client := newKmsTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+		if r.URL.Path != "/rustfs/admin/v3/kms/keys/rekey/cancel" {
+			t.Errorf("wrong path: %s", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"job_id":"job-1","state":"cancelled","buckets":["b1"],"scanned":3,"rewrapped":1,"already_current":0,"not_applicable":2,"failed":0}`))
+	})
+
+	status, err := client.CancelKmsRekey()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status.State != "cancelled" {
+		t.Errorf("unexpected state: %s", status.State)
+	}
+}
+
+func TestStartKmsRekeyUnsupportedBackend(t *testing.T) {
+	client := newKmsTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotImplemented)
+		_, _ = w.Write([]byte(`{"error":"the configured KMS backend does not support rewrapping data-key envelopes"}`))
+	})
+
+	_, err := client.StartKmsRekey(nil, "")
+	if err == nil || !strings.Contains(err.Error(), "does not support rewrapping data-key envelopes") {
+		t.Fatalf("expected a capability error, got %v", err)
+	}
+}
+
+func TestStartKmsRekeyAlreadyRunning(t *testing.T) {
+	client := newKmsTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"error":"a rekey sweep is already running","job_id":"job-1"}`))
+	})
+
+	_, err := client.StartKmsRekey(nil, "")
+	if err == nil || !strings.Contains(err.Error(), "already running") || !strings.Contains(err.Error(), "job-1") {
+		t.Fatalf("expected an already-running error naming the job, got %v", err)
+	}
 }

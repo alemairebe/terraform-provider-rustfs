@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 )
 
 // KmsCacheStats holds KMS key cache counters reported by /kms/status.
@@ -269,6 +270,84 @@ func (c *RustfsAdmin) setKmsKeyState(keyID, relPath string) error {
 		return errors.New(out.Message)
 	}
 	return nil
+}
+
+// ErrKmsRekeyNotRun reports that the server has no current or last rekey
+// sweep. RustFS keeps the sweep record in memory, so a server restart loses it.
+var ErrKmsRekeyNotRun = errors.New("no rekey sweep has run")
+
+// KmsRekeyStatus mirrors the snapshot returned by the rekey start, status and
+// cancel routes. State is one of "running", "completed" or "cancelled".
+type KmsRekeyStatus struct {
+	JobID          string   `json:"job_id"`
+	State          string   `json:"state"`
+	Buckets        []string `json:"buckets"`
+	CurrentBucket  *string  `json:"current_bucket"`
+	Scanned        uint64   `json:"scanned"`
+	Rewrapped      uint64   `json:"rewrapped"`
+	AlreadyCurrent uint64   `json:"already_current"`
+	NotApplicable  uint64   `json:"not_applicable"`
+	Failed         uint64   `json:"failed"`
+}
+
+// StartKmsRekey starts a bulk data-key-envelope rewrap sweep. An empty buckets
+// slice sweeps every bucket; an empty prefix covers the whole bucket.
+func (c *RustfsAdmin) StartKmsRekey(buckets []string, prefix string) (KmsRekeyStatus, error) {
+	body := struct {
+		Buckets []string `json:"buckets,omitempty"`
+		Prefix  string   `json:"prefix,omitempty"`
+	}{Buckets: buckets, Prefix: prefix}
+	return c.kmsRekeyCall(http.MethodPost, "kms/keys/rekey", body)
+}
+
+// GetKmsRekeyStatus returns the current or most recent sweep.
+func (c *RustfsAdmin) GetKmsRekeyStatus() (KmsRekeyStatus, error) {
+	return c.kmsRekeyCall(http.MethodGet, "kms/keys/rekey/status", nil)
+}
+
+// CancelKmsRekey asks the running sweep to stop. Cancellation is cooperative:
+// the returned snapshot may still report "running" until the current object
+// finishes.
+func (c *RustfsAdmin) CancelKmsRekey() (KmsRekeyStatus, error) {
+	return c.kmsRekeyCall(http.MethodPost, "kms/keys/rekey/cancel", nil)
+}
+
+func (c *RustfsAdmin) kmsRekeyCall(method, relPath string, body any) (KmsRekeyStatus, error) {
+	var content []byte
+	if body != nil {
+		//#nosec G117 — the sweep scope is bucket names and a prefix, not a secret
+		bytes, err := json.Marshal(body)
+		if err != nil {
+			return KmsRekeyStatus{}, err
+		}
+		content = bytes
+	}
+	reqData := RequestData{
+		Method:  method,
+		RelPath: relPath,
+		Content: content,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	resp, err := c.doRequest(ctx, reqData)
+	if err != nil {
+		var apiErr *APIError
+		if errors.As(err, &apiErr) {
+			if apiErr.StatusCode == http.StatusNotFound && strings.Contains(apiErr.Raw, "no rekey sweep has run") {
+				return KmsRekeyStatus{}, ErrKmsRekeyNotRun
+			}
+			if apiErr.StatusCode == http.StatusConflict {
+				return KmsRekeyStatus{}, fmt.Errorf("a rekey sweep is already running: %w", err)
+			}
+		}
+		return KmsRekeyStatus{}, kmsCapabilityError(err, "rewrapping data-key envelopes")
+	}
+	defer drainClose(resp)
+	var out KmsRekeyStatus
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return KmsRekeyStatus{}, err
+	}
+	return out, nil
 }
 
 // UpdateKmsKeyDescription replaces the description stored on a KMS master key.
