@@ -39,6 +39,7 @@ var goldenResourceTypeNames = []string{
 	"rustfs_group_policy_attachment",
 	"rustfs_iam_backup_import",
 	"rustfs_kms_key",
+	"rustfs_kms_rekey",
 	"rustfs_ldap_policy_attachment",
 	"rustfs_ldap_service_account",
 	"rustfs_module_switch",
