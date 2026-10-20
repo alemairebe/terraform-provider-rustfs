@@ -2,12 +2,12 @@
 page_title: "rustfs_scanner_cycle_state_reset Resource - rustfs"
 subcategory: ""
 description: |-
-  Run the scanner cycle-state reset (POST /rustfs/admin/v3/scanner/cycle-state/reset). Creating this resource clears the scanner's cycle-recovery bookkeeping and makes the next cycle scan the full namespace; it does not discard usage accounting. The action is one-shot: Read only echoes the recorded result, Delete is a no-op, and changing triggers runs the reset again. Scanner tuning stays in the scanner subsystem of rustfs_config or in the server environment.
+  Run the scanner cycle-state reset (POST /rustfs/admin/v3/scanner/cycle-state/reset). Creating this resource clears the scanner's cycle-recovery bookkeeping and makes the next cycle scan the full namespace; it does not discard usage accounting. The action is one-shot: Read only echoes the recorded result, Delete is a no-op, and changing triggers runs the reset again. The provider retries a busy scanner leader lock a few times before failing. Scanner tuning stays in the scanner subsystem of rustfs_config or in the server environment.
 ---
 
 # rustfs_scanner_cycle_state_reset Resource
 
-Run the scanner cycle-state reset (POST /rustfs/admin/v3/scanner/cycle-state/reset). Creating this resource clears the scanner's cycle-recovery bookkeeping and makes the next cycle scan the full namespace; it does not discard usage accounting. The action is one-shot: Read only echoes the recorded result, Delete is a no-op, and changing `triggers` runs the reset again. Scanner tuning stays in the `scanner` subsystem of `rustfs_config` or in the server environment.
+Run the scanner cycle-state reset (POST /rustfs/admin/v3/scanner/cycle-state/reset). Creating this resource clears the scanner's cycle-recovery bookkeeping and makes the next cycle scan the full namespace; it does not discard usage accounting. The action is one-shot: Read only echoes the recorded result, Delete is a no-op, and changing `triggers` runs the reset again. The provider retries a busy scanner leader lock a few times before failing. Scanner tuning stays in the `scanner` subsystem of `rustfs_config` or in the server environment.
 
 ## Example Usage
 

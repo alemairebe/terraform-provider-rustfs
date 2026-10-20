@@ -210,7 +210,7 @@ func TestScannerUsageStateResetResourceCreate(t *testing.T) {
 	})
 
 	t.Run("retries a busy scanner leader and records the eventual result", func(t *testing.T) {
-		restoreRetry := setUsageResetRetry(2, 0)
+		restoreRetry := setScannerResetRetry(2, 0)
 		t.Cleanup(restoreRetry)
 
 		var requests int
@@ -243,7 +243,7 @@ func TestScannerUsageStateResetResourceCreate(t *testing.T) {
 	})
 
 	t.Run("fails after the busy retries are exhausted", func(t *testing.T) {
-		restoreRetry := setUsageResetRetry(2, 0)
+		restoreRetry := setScannerResetRetry(2, 0)
 		t.Cleanup(restoreRetry)
 
 		var requests int
@@ -272,13 +272,13 @@ func TestScannerUsageStateResetResourceCreate(t *testing.T) {
 	})
 }
 
-// setUsageResetRetry overrides the busy-lock retry budget for a test and
+// setScannerResetRetry overrides the busy-lock retry budget for a test and
 // returns the function that restores the production values.
-func setUsageResetRetry(retries int, delay time.Duration) func() {
-	previousRetries, previousDelay := usageResetBusyRetries, usageResetBusyDelay
-	usageResetBusyRetries, usageResetBusyDelay = retries, delay
+func setScannerResetRetry(retries int, delay time.Duration) func() {
+	previousRetries, previousDelay := scannerResetBusyRetries, scannerResetBusyDelay
+	scannerResetBusyRetries, scannerResetBusyDelay = retries, delay
 	return func() {
-		usageResetBusyRetries, usageResetBusyDelay = previousRetries, previousDelay
+		scannerResetBusyRetries, scannerResetBusyDelay = previousRetries, previousDelay
 	}
 }
 
@@ -474,7 +474,10 @@ func testAccScannerUsageStateResetPreCheck(t *testing.T) {
 	testAccScannerStatusPreCheck(t)
 
 	client := testAccRustClient()
-	if _, err := client.ResetScannerUsageState(); err != nil {
+	_, err := resetWithScannerLeaderRetry(context.Background(), func() (rustfs.ScannerUsageStateResetResult, error) {
+		return client.ResetScannerUsageState()
+	})
+	if err != nil {
 		if rustfs.IsUnsupportedFeature(err) {
 			t.Skipf("scanner usage-state reset is not implemented by the running RustFS, skipping: %v", err)
 		}
