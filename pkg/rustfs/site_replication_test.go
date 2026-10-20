@@ -335,6 +335,62 @@ func TestSiteReplicationRepairErrors(t *testing.T) {
 	}
 }
 
+// TestSiteReplicationDeprecatedPeerWrappers keeps the deprecated client
+// methods working for callers that have not moved to EditPeer and RemovePeer.
+func TestSiteReplicationDeprecatedPeerWrappers(t *testing.T) {
+	var paths, bodies []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		bodies = append(bodies, readRequestBody(r))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	c := testSiteReplicationClient(server)
+
+	err := c.SiteReplicationEdit(SiteReplicationSite{
+		Name:      "peer",
+		Endpoint:  "http://localhost:9002",
+		AccessKey: "peeradmin",
+		SecretKey: "peersecret",
+	})
+	if err != nil {
+		t.Fatalf("deprecated edit: %v", err)
+	}
+	if err := c.SiteReplicationRemove([]string{"peer"}); err != nil {
+		t.Fatalf("deprecated remove: %v", err)
+	}
+
+	if len(paths) != 2 ||
+		!strings.Contains(paths[0], "/site-replication/edit") ||
+		!strings.Contains(paths[1], "/site-replication/remove") {
+		t.Errorf("paths = %v, want edit then remove", paths)
+	}
+	if !strings.Contains(bodies[0], `"endpoint":"http://localhost:9002"`) {
+		t.Errorf("edit body = %s, want the singular endpoint field", bodies[0])
+	}
+	if !strings.Contains(bodies[1], `"sites":["peer"]`) {
+		t.Errorf("remove body = %s, want the sites array", bodies[1])
+	}
+}
+
+// TestSiteReplicationRepairRequestErrors covers the transport failures of the
+// preflight and status calls, which the provider reports as read/create errors.
+func TestSiteReplicationRepairRequestErrors(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte("repair is busy"))
+	}))
+	defer server.Close()
+	c := testSiteReplicationClient(server)
+
+	if _, err := c.SiteReplicationRepairPreflight(); err == nil || !strings.Contains(err.Error(), "repair is busy") {
+		t.Errorf("preflight error = %v, want the server message", err)
+	}
+	if _, err := c.SiteReplicationRepairStatus("op-1"); err == nil || !strings.Contains(err.Error(), "repair is busy") {
+		t.Errorf("status error = %v, want the server message", err)
+	}
+}
+
 func testSiteReplicationClient(server *httptest.Server) RustfsAdmin {
 	c := New(&RustfsAdminConfig{
 		Endpoint:  server.Listener.Addr().String(),
