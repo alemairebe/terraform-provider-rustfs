@@ -73,11 +73,16 @@ services:
       # and records the local site from the Host header of the admin request, so
       # a host-side run against a published port cannot form the group.
       RUSTFS_SITE_REPLICATION_PEER_ENDPOINT: "http://rustfs-peer:9000"
+      # Native-TLS listener for rustfs_tls_certificate. The other instances
+      # serve plain HTTP, where RustFS refuses certificate management.
+      RUSTFS_TLS_ENDPOINT: "rustfs-tls:9001"
       TEST_FILTER: "${TEST_FILTER:-TestAcc}"
     depends_on:
       rustfs:
         condition: service_started
       rustfs-peer:
+        condition: service_started
+      rustfs-tls:
         condition: service_started
     profiles:
       - test
@@ -119,6 +124,42 @@ services:
       RUSTFS_ACCESS_KEY: rustfsadmin
       RUSTFS_SECRET_KEY: rustfsadmin
 
+  # Native-TLS listener for rustfs_tls_certificate. RustFS only accepts
+  # certificate publication on a listener it serves TLS from, and only when a
+  # private publication directory is configured outside the TLS material path.
+  # The fixture certificate lives in acc_test/tls; the publication directory is
+  # a named volume because RustFS requires it to be 0700 and owned by the
+  # process, which a bind mount checked into git cannot guarantee.
+  rustfs-tls:
+    image: rustfs/rustfs:${RUSTFS_VERSION:-latest}
+    user: root
+    entrypoint:
+      - /bin/sh
+      - -c
+    command:
+      - >-
+        mkdir -p /tls-src &&
+        cp /tls-fixtures/rustfs_cert.pem.txt /tls-src/rustfs_cert.pem &&
+        cp /tls-fixtures/rustfs_key.pem.txt /tls-src/rustfs_key.pem &&
+        chmod 700 /tls-publish &&
+        exec /entrypoint.sh rustfs
+    ports:
+      - "9004:9000"
+      - "9005:9001"
+    volumes:
+      - ./tls:/tls-fixtures:ro
+      - rustfs-tls-publish:/tls-publish
+    environment:
+      RUSTFS_ACCESS_KEY: rustfsadmin
+      RUSTFS_SECRET_KEY: rustfsadmin
+      RUSTFS_TLS_PATH: /tls-src
+      RUSTFS_TLS_PUBLISH_DIR: /tls-publish
+      RUSTFS_TLS_RELOAD_ENABLE: "true"
+      RUSTFS_TLS_RELOAD_INTERVAL: "5"
+      RUSTFS_TRUST_LEAF_CERT_AS_CA: "false"
+      RUSTFS_SERVER_MTLS_ENABLE: "false"
+
 volumes:
   go-modules:
   terraform-bin:
+  rustfs-tls-publish:

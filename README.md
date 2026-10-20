@@ -113,6 +113,8 @@ server version up front; it reports a capability gap when a route it needs is un
 | Admin metrics stream — `GET /rustfs/admin/v3/metrics` | `rustfs_metrics` data source | ❌ | ❌ | ❌ |
 | OIDC providers — `GET`/`PUT`/`DELETE /rustfs/admin/v3/oidc/config` and `POST /rustfs/admin/v3/oidc/validate` | `rustfs_oidc_provider` resource, `rustfs_oidc_config` data source | ✅ | ✅ | ✅ |
 | Orphaned bucket recovery — `POST /rustfs/admin/v3/recover-orphaned-bucket/{bucket}` | `rustfs_bucket_recovery` | ❌¹ | ✅ | ✅ |
+| TLS certificate publication — `POST /rustfs/admin/v3/tls/certificate` | `rustfs_tls_certificate` create | ❌ | ✅ | ✅ |
+| TLS certificate state — `GET /rustfs/admin/v3/tls/certificate-state` | `rustfs_tls_certificate` refresh, `rustfs_tls_certificate_state` data source | ❌ | ✅ | ✅ |
 
 ¹ The recovery route is absent on `1.0.1` (the server answers `404`), rather than registered and
 unimplemented; the resource reports the route and the required `1.0.2` version.
@@ -141,6 +143,14 @@ RustFS 1.0.3 does not implement GET /rustfs/admin/v3/metrics: metrics is not ava
 server. Upgrade RustFS to a release that implements the route, or remove the rustfs_metrics data
 source from the configuration.
 ```
+
+`rustfs_tls_certificate` is different in two ways. RustFS accepts certificate management only on
+its native TLS listener, so the provider needs `ssl = true` and a server started with
+`RUSTFS_TLS_PATH`; publication additionally needs `RUSTFS_TLS_RELOAD_ENABLE=true` and
+`RUSTFS_TLS_PUBLISH_DIR` pointing at a private directory outside the TLS material path. And because
+RustFS has no route that unpublishes a certificate, destroying the resource only removes it from
+state with a warning: the server keeps serving the last published certificate until another
+publication replaces it or the server restarts with different material.
 
 Some capabilities depend on server-side sub-systems and only work once the matching RustFS
 sub-system is enabled and configured: KMS (`rustfs_kms_key`), LDAP (`rustfs_ldap_*`), storage tiers
@@ -207,6 +217,7 @@ Every resource links to its documentation on the Terraform Registry.
 | [`rustfs_pool_decommission`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/pool_decommission) | Drain and retire a storage pool |
 | [`rustfs_oidc_provider`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/oidc_provider) | OIDC identity providers for Console SSO |
 | [`rustfs_bucket_recovery`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/bucket_recovery) | Generation-fenced recovery of an orphaned bucket |
+| [`rustfs_tls_certificate`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/tls_certificate) | Published TLS certificate served by the default listener |
 
 `rustfs_iam_backup_import`, `rustfs_bucket_metadata_backup_import` and `rustfs_rebalance` are
 action-style resources and deliberately do not support import.
@@ -233,6 +244,7 @@ action-style resources and deliberately do not support import.
 | [`rustfs_kms_config`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/data-sources/kms_config) | KMS backend configuration |
 | [`rustfs_kms_status`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/data-sources/kms_status) | KMS service status |
 | [`rustfs_oidc_config`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/data-sources/oidc_config) | Effective OIDC provider configuration |
+| [`rustfs_tls_certificate_state`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/data-sources/tls_certificate_state) | Served TLS certificate and publication state |
 
 `rustfs_quota` intentionally exists both as a resource (per-bucket limit) and as a data source
 (read it back).
