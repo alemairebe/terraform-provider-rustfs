@@ -579,6 +579,31 @@ func TestKmsKeyResourceLifecyclePaths(t *testing.T) {
 		})
 	}
 
+	t.Run("create: omitted computed fields adopt the server values", func(t *testing.T) {
+		client, _ := routedClient(t, requestRoute{status: http.StatusOK, body: kmsKeyResponse("key-1", "Enabled", "2026-01-01T00:00:00Z")})
+		h := newCRUDHarness(t, NewKmsKeyResource(), client)
+		plan := kmsKeyLifecycleModel()
+		plan.KeyID = types.StringNull()
+		plan.CreatedAt = types.StringNull()
+		// Terraform sends an omitted Optional+Computed attribute as unknown.
+		plan.Description = types.StringUnknown()
+		plan.Tags = types.MapUnknown(types.StringType)
+
+		resp := h.create(plan)
+
+		requireNoDiagnostics(t, resp.Diagnostics)
+		var got kmsKeyResourceModel
+		if diags := resp.State.Get(context.Background(), &got); diags.HasError() {
+			t.Fatalf("reading state: %v", diags)
+		}
+		if got.Description.IsUnknown() {
+			t.Error("description is still unknown after apply")
+		}
+		if got.Tags.IsUnknown() {
+			t.Error("tags are still unknown after apply")
+		}
+	})
+
 	t.Run("create: accepted key writes the server identity", func(t *testing.T) {
 		client, _ := routedClient(t, requestRoute{status: http.StatusOK, body: kmsKeyResponse("key-1", "Enabled", "2026-01-01T00:00:00Z")})
 		h := newCRUDHarness(t, NewKmsKeyResource(), client)

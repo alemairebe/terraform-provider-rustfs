@@ -214,10 +214,12 @@ func (r *kmsKeyResource) Create(ctx context.Context, req resource.CreateRequest,
 	}
 	plan.KeyID = types.StringValue(key.KeyID)
 	plan.CreatedAt = types.StringValue(key.CreationDate)
-	if plan.Description.IsNull() {
+	// An attribute omitted from configuration arrives as unknown, not null, so
+	// both mean "not configured" here: adopt what the server created.
+	if plan.Description.IsNull() || plan.Description.IsUnknown() {
 		plan.Description = stringFromPtr(key.Description)
 	}
-	if plan.Tags.IsNull() {
+	if plan.Tags.IsNull() || plan.Tags.IsUnknown() {
 		plan.Tags = kmsKeyTagsValue(key.Tags)
 	}
 
