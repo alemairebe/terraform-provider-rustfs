@@ -7,6 +7,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
 )
 
 // KmsCacheStats holds KMS key cache counters reported by /kms/status.
@@ -269,6 +271,77 @@ func (c *RustfsAdmin) setKmsKeyState(keyID, relPath string) error {
 	return nil
 }
 
+// UpdateKmsKeyDescription replaces the description stored on a KMS master key.
+// An empty description clears it.
+func (c *RustfsAdmin) UpdateKmsKeyDescription(keyID, description string) (KmsKey, error) {
+	body := struct {
+		KeyID       string `json:"key_id"`
+		Description string `json:"description"`
+	}{KeyID: keyID, Description: description}
+	return c.kmsKeyMetadataMutation("kms/keys/update-description", body)
+}
+
+// TagKmsKey adds or overwrites the given tags on a KMS master key. Tags outside
+// the map are left untouched.
+func (c *RustfsAdmin) TagKmsKey(keyID string, tags map[string]string) (KmsKey, error) {
+	body := struct {
+		KeyID string            `json:"key_id"`
+		Tags  map[string]string `json:"tags"`
+	}{KeyID: keyID, Tags: tags}
+	return c.kmsKeyMetadataMutation("kms/keys/tag", body)
+}
+
+// UntagKmsKey removes the named tags from a KMS master key. Tag keys that are
+// not set are ignored by the server.
+func (c *RustfsAdmin) UntagKmsKey(keyID string, tagKeys []string) (KmsKey, error) {
+	body := struct {
+		KeyID   string   `json:"key_id"`
+		TagKeys []string `json:"tag_keys"`
+	}{KeyID: keyID, TagKeys: tagKeys}
+	return c.kmsKeyMetadataMutation("kms/keys/untag", body)
+}
+
+func (c *RustfsAdmin) kmsKeyMetadataMutation(relPath string, body any) (KmsKey, error) {
+	//#nosec G117 — key ids, descriptions and tags are public metadata, not secrets
+	bytes, err := json.Marshal(body)
+	if err != nil {
+		return KmsKey{}, err
+	}
+	reqData := RequestData{
+		Method:  "POST",
+		RelPath: relPath,
+		Content: bytes,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	resp, err := c.doRequest(ctx, reqData)
+	if err != nil {
+		return KmsKey{}, err
+	}
+	defer drainClose(resp)
+	var out kmsLifecycleResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return KmsKey{}, err
+	}
+	if out.KeyMetadata == nil {
+		return KmsKey{}, errors.New(out.Message)
+	}
+	return *out.KeyMetadata, nil
+}
+
+// kmsCapabilityError explains a 501 from a KMS route as a limitation of the
+// configured backend rather than a missing server route. RustFS answers 501
+// for operations the backend cannot perform (rotation on Local, rekey on
+// Local/Static/AWS, backup on non-Local), so the route exists and the generic
+// "server does not implement" wording would be wrong.
+func kmsCapabilityError(err error, capability string) error {
+	var apiErr *APIError
+	if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotImplemented {
+		return fmt.Errorf("the configured KMS backend does not support %s: %w", capability, err)
+	}
+	return err
+}
+
 // RotateKmsKey rotates a KMS master key and returns the key's new metadata.
 //
 // Note that the Local development backend does not support rotation: the
@@ -292,7 +365,7 @@ func (c *RustfsAdmin) RotateKmsKey(keyID string) (KmsKey, error) {
 	defer cancel()
 	resp, err := c.doRequest(ctx, reqData)
 	if err != nil {
-		return KmsKey{}, err
+		return KmsKey{}, kmsCapabilityError(err, "key rotation")
 	}
 	defer drainClose(resp)
 	var out kmsLifecycleResponse
@@ -313,9 +386,17 @@ func (c *RustfsAdmin) RotateKmsKey(keyID string) (KmsKey, error) {
 // force_immediate/confirm_key_id are supplied; this client deliberately never
 // sends them, so callers always get the cancellable scheduled deletion.
 func (c *RustfsAdmin) DeleteKmsKey(keyID string) error {
+	return c.DeleteKmsKeyWithWindow(keyID, nil)
+}
+
+// DeleteKmsKeyWithWindow schedules deletion and asks the server to wait
+// pendingWindowDays (7 to 30) before destroying the key material. A nil window
+// leaves the server default (30 days) in place.
+func (c *RustfsAdmin) DeleteKmsKeyWithWindow(keyID string, pendingWindowDays *int64) error {
 	body := struct {
-		KeyID string `json:"key_id"`
-	}{KeyID: keyID}
+		KeyID               string `json:"key_id"`
+		PendingWindowInDays *int64 `json:"pending_window_in_days,omitempty"`
+	}{KeyID: keyID, PendingWindowInDays: pendingWindowDays}
 	//#nosec G117 — a KMS key id is a public identifier, not a secret
 	bytes, err := json.Marshal(body)
 	if err != nil {

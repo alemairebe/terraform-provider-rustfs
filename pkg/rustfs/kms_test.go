@@ -482,3 +482,156 @@ func TestDeleteKmsKey(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestUpdateKmsKeyDescription(t *testing.T) {
+	client := newKmsTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+		if r.URL.Path != "/rustfs/admin/v3/kms/keys/update-description" {
+			t.Errorf("wrong path: %s", r.URL.Path)
+		}
+		var req struct {
+			KeyID       string `json:"key_id"`
+			Description string `json:"description"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("invalid body: %v", err)
+		}
+		if req.KeyID != "k1" || req.Description != "app key" {
+			t.Errorf("unexpected body: %+v", req)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"success":true,"message":"key description updated","key_id":"k1","key_metadata":{"key_id":"k1","key_state":"Enabled","description":"app key","tags":{"name":"k1"}}}`))
+	})
+
+	key, err := client.UpdateKmsKeyDescription("k1", "app key")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if key.Description == nil || *key.Description != "app key" {
+		t.Errorf("unexpected description: %v", key.Description)
+	}
+}
+
+func TestTagKmsKey(t *testing.T) {
+	client := newKmsTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+		if r.URL.Path != "/rustfs/admin/v3/kms/keys/tag" {
+			t.Errorf("wrong path: %s", r.URL.Path)
+		}
+		var req struct {
+			KeyID string            `json:"key_id"`
+			Tags  map[string]string `json:"tags"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("invalid body: %v", err)
+		}
+		if req.KeyID != "k1" || req.Tags["environment"] != "test" {
+			t.Errorf("unexpected body: %+v", req)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"success":true,"message":"key tags updated","key_id":"k1","key_metadata":{"key_id":"k1","key_state":"Enabled","tags":{"name":"k1","environment":"test"}}}`))
+	})
+
+	key, err := client.TagKmsKey("k1", map[string]string{"environment": "test"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if key.Tags["environment"] != "test" {
+		t.Errorf("unexpected tags: %+v", key.Tags)
+	}
+}
+
+func TestUntagKmsKey(t *testing.T) {
+	client := newKmsTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+		if r.URL.Path != "/rustfs/admin/v3/kms/keys/untag" {
+			t.Errorf("wrong path: %s", r.URL.Path)
+		}
+		var req struct {
+			KeyID   string   `json:"key_id"`
+			TagKeys []string `json:"tag_keys"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("invalid body: %v", err)
+		}
+		if req.KeyID != "k1" || len(req.TagKeys) != 1 || req.TagKeys[0] != "environment" {
+			t.Errorf("unexpected body: %+v", req)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"success":true,"message":"key tags removed","key_id":"k1","key_metadata":{"key_id":"k1","key_state":"Enabled","tags":{"name":"k1"}}}`))
+	})
+
+	key, err := client.UntagKmsKey("k1", []string{"environment"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := key.Tags["environment"]; ok {
+		t.Errorf("expected the tag to be gone: %+v", key.Tags)
+	}
+}
+
+func TestDeleteKmsKeyWithWindow(t *testing.T) {
+	window := int64(7)
+	client := newKmsTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			t.Errorf("expected DELETE, got %s", r.Method)
+		}
+		if r.URL.Path != "/rustfs/admin/v3/kms/keys/delete" {
+			t.Errorf("wrong path: %s", r.URL.Path)
+		}
+		var req struct {
+			KeyID               string `json:"key_id"`
+			PendingWindowInDays *int64 `json:"pending_window_in_days"`
+			ForceImmediate      *bool  `json:"force_immediate"`
+			ConfirmKeyID        string `json:"confirm_key_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("invalid body: %v", err)
+		}
+		if req.KeyID != "k1" {
+			t.Errorf("wrong key id: %s", req.KeyID)
+		}
+		if req.PendingWindowInDays == nil || *req.PendingWindowInDays != window {
+			t.Errorf("wrong window: %v", req.PendingWindowInDays)
+		}
+		if req.ForceImmediate != nil || req.ConfirmKeyID != "" {
+			t.Errorf("scheduled deletion must not carry immediate-deletion fields: %+v", req)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"success":true,"key_id":"k1","deletion_date":"2026-10-27T00:00:00Z"}`))
+	})
+
+	if err := client.DeleteKmsKeyWithWindow("k1", &window); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestKmsCapabilityError(t *testing.T) {
+	t.Run("501 names the backend capability", func(t *testing.T) {
+		client := newKmsTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNotImplemented)
+			_, _ = w.Write([]byte(`{"error":"the configured KMS backend does not support rotation"}`))
+		})
+		_, err := client.RotateKmsKey("k1")
+		if err == nil || !strings.Contains(err.Error(), "does not support key rotation") {
+			t.Fatalf("expected a capability error, got %v", err)
+		}
+	})
+
+	t.Run("non-501 is unchanged", func(t *testing.T) {
+		client := newKmsTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`boom`))
+		})
+		_, err := client.RotateKmsKey("k1")
+		if err == nil || strings.Contains(err.Error(), "does not support") {
+			t.Fatalf("expected the raw error, got %v", err)
+		}
+	})
+}
