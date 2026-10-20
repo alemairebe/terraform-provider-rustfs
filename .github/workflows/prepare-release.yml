@@ -1,0 +1,188 @@
+# Prepares the release pull request.
+#
+# Bundles every changelog.d/ fragment into a dated CHANGELOG.md section and
+# regenerates the resource/data-source tables in AGENTS.md and README.md, then
+# pushes the result to a release/v<version> branch. It does not open the pull
+# request and it does not tag.
+#
+# Opening the pull request stays manual: GitHub Actions is not permitted to
+# create pull requests in this repository, and a pull request opened with
+# GITHUB_TOKEN would not trigger the pull_request workflows that make it safe to
+# merge. Tagging stays manual too: it is irreversible and publishes immediately.
+#
+# After the release pull request merges, dispatch Create Release Tag with the
+# same version.
+name: Prepare Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release (leave empty to calculate from release_type)"
+        required: false
+        type: string
+        default: ""
+      release_type:
+        description: "Type of release (used when version is empty)"
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+        default: "patch"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prepare-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Assemble Release Branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: "go.mod"
+          cache: true
+
+      - name: Resolve version
+        id: version
+        env:
+          MANUAL_VERSION: ${{ github.event.inputs.version }}
+          RELEASE_TYPE: ${{ github.event.inputs.release_type }}
+        run: |
+          set -euo pipefail
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          echo "Latest tag: $LATEST_TAG"
+          NEW_VERSION=$(scripts/next-version.sh "$LATEST_TAG" "$RELEASE_TYPE" "$MANUAL_VERSION")
+          echo "Preparing $NEW_VERSION from $LATEST_TAG"
+
+          echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          echo "latest=$LATEST_TAG" >> "$GITHUB_OUTPUT"
+          echo "VERSION=$NEW_VERSION" >> "$GITHUB_ENV"
+
+      - name: Refuse an already released version
+        env:
+          LATEST_TAG: ${{ steps.version.outputs.latest }}
+        run: |
+          set -euo pipefail
+          if git rev-parse --verify --quiet "v$VERSION" >/dev/null; then
+            {
+              echo "## v$VERSION is already tagged"
+              echo ""
+              echo "Pick the next version, or dispatch **Release** with \`tag: v$VERSION\` to republish that tag."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "tag v$VERSION already exists (latest is $LATEST_TAG)" >&2
+            exit 1
+          fi
+
+      - name: Bundle changelog fragments
+        run: scripts/changelog-release.sh "$VERSION"
+
+      - name: Regenerate docs and tables
+        run: |
+          set -euo pipefail
+          make generate
+          make generate-tables
+
+      # The release branch may contain nothing but the changelog and the two
+      # generated tables. Anything else means the tree on main was already
+      # stale (docs not regenerated, a fragment left behind) and must be fixed
+      # on main first, not smuggled into a release.
+      - name: Assert the diff is release assembly only
+        run: |
+          set -euo pipefail
+          git add -A
+
+          if git diff --cached --quiet; then
+            echo "nothing to release: no fragments and no table changes" >&2
+            exit 1
+          fi
+
+          unexpected=""
+          while IFS=$'\t' read -r status path; do
+            [[ -z "$status" ]] && continue
+            case "$status:$path" in
+              M:CHANGELOG.md|M:AGENTS.md|M:README.md) ;;
+              D:changelog.d/[0-9]*-*.md) ;;
+              *) unexpected+="$status $path"$'\n' ;;
+            esac
+          done < <(git diff --cached --name-status --no-renames)
+
+          fragments_removed="$(git diff --cached --name-status --no-renames \
+            | grep -c $'^D\tchangelog.d/[0-9]*-.*\\.md$' || true)"
+
+          if [[ -n "$unexpected" ]]; then
+            {
+              echo "## The release branch would contain unexpected changes"
+              echo ""
+              echo "A release branch may only change \`CHANGELOG.md\`, \`AGENTS.md\`, \`README.md\`"
+              echo 'and delete changelog fragments.'
+              echo ""
+              echo '```'
+              printf '%s' "$unexpected"
+              echo '```'
+              echo ""
+              echo "Regenerate and commit those files on main, then re-run this workflow."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "unexpected paths on the release branch:" >&2
+            printf '%s' "$unexpected" >&2
+            exit 1
+          fi
+
+          if (( fragments_removed == 0 )); then
+            echo "no changelog fragments were consumed" >&2
+            exit 1
+          fi
+
+          echo "fragments_removed=$fragments_removed" >> "$GITHUB_ENV"
+
+      - name: Commit and push the release branch
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git checkout -B "release/v$VERSION"
+          git commit -m "chore(release): prepare v$VERSION"
+          # Re-running the workflow for the same version replaces the branch:
+          # the assembly is deterministic, so this is a reset, not a merge.
+          git push --force origin "release/v$VERSION"
+
+      - name: Summary
+        if: always()
+        env:
+          BRANCH: release/v${{ steps.version.outputs.version }}
+        run: |
+          {
+            echo "## Release v${{ steps.version.outputs.version }}"
+            echo ""
+            if [[ "${{ job.status }}" == "success" ]]; then
+              echo "| Branch | \`$BRANCH\` |"
+              echo "| Base | \`main\` |"
+              echo "| Fragments consumed | ${{ env.fragments_removed }} |"
+              echo "| Tagged | no — tagging stays a separate manual dispatch |"
+              echo ""
+              echo "Next:"
+              echo ""
+              echo "1. Open the pull request: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/compare/main...$BRANCH?expand=1"
+              echo "2. Merge it once the checks pass."
+              echo "3. Dispatch **Create Release Tag** with \`version: ${{ steps.version.outputs.version }}\`."
+            else
+              echo "The release branch was not pushed. See the failing step above."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
