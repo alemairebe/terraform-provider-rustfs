@@ -772,3 +772,102 @@ func TestStartKmsRekeyAlreadyRunning(t *testing.T) {
 		t.Fatalf("expected an already-running error naming the job, got %v", err)
 	}
 }
+
+func TestGetKmsBackupStatus(t *testing.T) {
+	client := newKmsTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("expected GET, got %s", r.Method)
+		}
+		if r.URL.Path != "/rustfs/admin/v3/kms/backup" {
+			t.Errorf("wrong path: %s", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"service_status":"healthy","backend":"local","responsibility":"full-material","export_supported":true,"deployment_identity":"deploy-1","backup_root":"/var/lib/rustfs/kms-backups","backup_kek_configured":true,"backup_kek_id":"kek-1","backup_kek_version":3,"target_key_dir":"/var/lib/rustfs/kms","unavailable_reason":null}`))
+	})
+
+	status, err := client.GetKmsBackupStatus()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !status.ExportSupported || status.ServiceStatus != "healthy" {
+		t.Errorf("unexpected status: %+v", status)
+	}
+	if status.Backend == nil || *status.Backend != "local" {
+		t.Errorf("unexpected backend: %v", status.Backend)
+	}
+	if status.Responsibility == nil || *status.Responsibility != "full-material" {
+		t.Errorf("unexpected responsibility: %v", status.Responsibility)
+	}
+	if status.BackupKEKVersion == nil || *status.BackupKEKVersion != 3 {
+		t.Errorf("unexpected kek version: %v", status.BackupKEKVersion)
+	}
+	if status.UnavailableReason != nil {
+		t.Errorf("expected no unavailable reason, got %v", *status.UnavailableReason)
+	}
+}
+
+func TestGetKmsBackupStatusOptionalAbsent(t *testing.T) {
+	client := newKmsTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"service_status":"unavailable","backend":null,"responsibility":null,"export_supported":false,"deployment_identity":null,"backup_root":null,"backup_kek_configured":false,"backup_kek_id":null,"backup_kek_version":null,"target_key_dir":null,"unavailable_reason":"RUSTFS_KMS_BACKUP_DIR is not set"}`))
+	})
+
+	status, err := client.GetKmsBackupStatus()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status.ExportSupported {
+		t.Error("expected export_supported false")
+	}
+	if status.UnavailableReason == nil || *status.UnavailableReason == "" {
+		t.Error("expected the unavailable reason")
+	}
+}
+
+func TestCreateKmsBackup(t *testing.T) {
+	client := newKmsTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+		if r.URL.Path != "/rustfs/admin/v3/kms/backup" {
+			t.Errorf("wrong path: %s", r.URL.Path)
+		}
+		var req struct {
+			BackupID string `json:"backup_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("invalid body: %v", err)
+		}
+		if req.BackupID != "nightly-1" {
+			t.Errorf("wrong backup id: %s", req.BackupID)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"backup_id":"nightly-1","snapshot_generation":42,"deployment_identity":"deploy-1","artifact_count":3,"manifest_digest":"abc123","backup_kek_id":"kek-1","backup_kek_version":3,"sanitized_config_included":true}`))
+	})
+
+	bundle, err := client.CreateKmsBackup("nightly-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if bundle.BackupID != "nightly-1" || bundle.SnapshotGeneration != 42 {
+		t.Errorf("unexpected bundle: %+v", bundle)
+	}
+	if bundle.ArtifactCount != 3 || bundle.ManifestDigest != "abc123" {
+		t.Errorf("unexpected metadata: %+v", bundle)
+	}
+	if bundle.BackupKEKVersion != 3 || !bundle.SanitizedConfigIncluded {
+		t.Errorf("unexpected bundle fields: %+v", bundle)
+	}
+}
+
+func TestCreateKmsBackupUnsupportedBackend(t *testing.T) {
+	client := newKmsTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotImplemented)
+		_, _ = w.Write([]byte(`{"message":"backend aws cannot export a RustFS bundle"}`))
+	})
+
+	_, err := client.CreateKmsBackup("nightly-1")
+	if err == nil || !strings.Contains(err.Error(), "does not support KMS backup") {
+		t.Fatalf("expected a capability error, got %v", err)
+	}
+}

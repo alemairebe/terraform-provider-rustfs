@@ -350,6 +350,85 @@ func (c *RustfsAdmin) kmsRekeyCall(method, relPath string, body any) (KmsRekeySt
 	return out, nil
 }
 
+// KmsBackupStatus mirrors GET /kms/backup. It reports readiness and
+// identifiers only; it never carries key material.
+type KmsBackupStatus struct {
+	ServiceStatus       string  `json:"service_status"`
+	Backend             *string `json:"backend"`
+	Responsibility      *string `json:"responsibility"`
+	ExportSupported     bool    `json:"export_supported"`
+	DeploymentIdentity  *string `json:"deployment_identity"`
+	BackupRoot          *string `json:"backup_root"`
+	BackupKEKConfigured bool    `json:"backup_kek_configured"`
+	BackupKEKID         *string `json:"backup_kek_id"`
+	BackupKEKVersion    *int64  `json:"backup_kek_version"`
+	TargetKeyDir        *string `json:"target_key_dir"`
+	UnavailableReason   *string `json:"unavailable_reason"`
+}
+
+// KmsBackupBundle mirrors the POST /kms/backup response: identifiers and
+// metadata for one bundle. The route never returns key material.
+type KmsBackupBundle struct {
+	BackupID                string `json:"backup_id"`
+	SnapshotGeneration      uint64 `json:"snapshot_generation"`
+	DeploymentIdentity      string `json:"deployment_identity"`
+	ArtifactCount           int    `json:"artifact_count"`
+	ManifestDigest          string `json:"manifest_digest"`
+	BackupKEKID             string `json:"backup_kek_id"`
+	BackupKEKVersion        uint32 `json:"backup_kek_version"`
+	SanitizedConfigIncluded bool   `json:"sanitized_config_included"`
+}
+
+// GetKmsBackupStatus returns whether this server can export a bundle.
+func (c *RustfsAdmin) GetKmsBackupStatus() (KmsBackupStatus, error) {
+	reqData := RequestData{
+		Method:  http.MethodGet,
+		RelPath: "kms/backup",
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	resp, err := c.doRequest(ctx, reqData)
+	if err != nil {
+		return KmsBackupStatus{}, err
+	}
+	defer drainClose(resp)
+	var out KmsBackupStatus
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return KmsBackupStatus{}, err
+	}
+	return out, nil
+}
+
+// CreateKmsBackup writes one bundle under the server's configured backup root
+// and returns its metadata. backupID must be a single validated name.
+func (c *RustfsAdmin) CreateKmsBackup(backupID string) (KmsBackupBundle, error) {
+	body := struct {
+		BackupID string `json:"backup_id,omitempty"`
+	}{BackupID: backupID}
+	//#nosec G117 — a bundle name is a public identifier, not a secret
+	bytes, err := json.Marshal(body)
+	if err != nil {
+		return KmsBackupBundle{}, err
+	}
+	reqData := RequestData{
+		Method:  http.MethodPost,
+		RelPath: "kms/backup",
+		Content: bytes,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	resp, err := c.doRequest(ctx, reqData)
+	if err != nil {
+		return KmsBackupBundle{}, kmsCapabilityError(err, "KMS backup")
+	}
+	defer drainClose(resp)
+	var out KmsBackupBundle
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return KmsBackupBundle{}, err
+	}
+	return out, nil
+}
+
 // UpdateKmsKeyDescription replaces the description stored on a KMS master key.
 // An empty description clears it.
 func (c *RustfsAdmin) UpdateKmsKeyDescription(keyID, description string) (KmsKey, error) {
