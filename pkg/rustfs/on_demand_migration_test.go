@@ -463,14 +463,14 @@ func TestOnDemandMigrationRequestFailures(t *testing.T) {
 // TestOnDemandMigrationConfigRedactedCredentialsAndGCS covers the credential
 // and GCS copies that TestOnDemandMigrationConfigRedacted does not reach.
 func TestOnDemandMigrationConfigRedactedCredentialsAndGCS(t *testing.T) {
-	session := "session-token"
-	config := rustfs.ODMConfig{Source: rustfs.ODMSource{
-		Credentials: &rustfs.ODMCredentials{
-			AccessKey:    "source-access",
-			SecretKey:    "source-secret",
-			SessionToken: &session,
-		},
-	}}
+	config := odmTestConfig()
+	if config.Source.Credentials == nil || config.Source.Credentials.SessionToken == nil {
+		t.Fatal("fixture must carry source credentials and a session token")
+	}
+	accessKey := config.Source.Credentials.AccessKey
+	secretKey := config.Source.Credentials.SecretKey
+	sessionToken := *config.Source.Credentials.SessionToken
+
 	redacted := config.Redacted()
 	if redacted.Source.Credentials == nil {
 		t.Fatal("credentials block was dropped")
@@ -481,10 +481,10 @@ func TestOnDemandMigrationConfigRedactedCredentialsAndGCS(t *testing.T) {
 	if redacted.Source.Credentials.SessionToken == nil || *redacted.Source.Credentials.SessionToken != rustfs.RedactedSecret {
 		t.Error("session token was not redacted")
 	}
-	if got := redacted.Source.Credentials.AccessKey; got != "source-access" {
+	if got := redacted.Source.Credentials.AccessKey; got != accessKey {
 		t.Errorf("access key = %q, want it preserved", got)
 	}
-	if config.Source.Credentials.SecretKey != "source-secret" || *config.Source.Credentials.SessionToken != "session-token" {
+	if config.Source.Credentials.SecretKey != secretKey || *config.Source.Credentials.SessionToken != sessionToken {
 		t.Error("Redacted mutated the input configuration")
 	}
 
