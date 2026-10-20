@@ -11,20 +11,26 @@ import (
 	"strings"
 
 	"github.com/caberdo/terraform-provider-rustfs/pkg/rustfs"
+	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
+	"github.com/hashicorp/terraform-plugin-framework/attr"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64default"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 // Ensure the implementation satisfies the expected interfaces.
 var (
-	_ resource.Resource                = &kmsKeyResource{}
-	_ resource.ResourceWithImportState = &kmsKeyResource{}
+	_ resource.Resource                   = &kmsKeyResource{}
+	_ resource.ResourceWithImportState    = &kmsKeyResource{}
+	_ resource.ResourceWithValidateConfig = &kmsKeyResource{}
 )
 
 // NewKmsKeyResource is a helper function to simplify the provider implementation.
@@ -38,11 +44,15 @@ type kmsKeyResource struct {
 }
 
 type kmsKeyResourceModel struct {
-	Name        types.String `tfsdk:"name"`
-	KeyID       types.String `tfsdk:"key_id"`
-	CreatedAt   types.String `tfsdk:"created_at"`
-	Enabled     types.Bool   `tfsdk:"enabled"`
-	SkipDestroy types.Bool   `tfsdk:"skip_destroy"`
+	Name               types.String `tfsdk:"name"`
+	KeyID              types.String `tfsdk:"key_id"`
+	CreatedAt          types.String `tfsdk:"created_at"`
+	Enabled            types.Bool   `tfsdk:"enabled"`
+	SkipDestroy        types.Bool   `tfsdk:"skip_destroy"`
+	Description        types.String `tfsdk:"description"`
+	Tags               types.Map    `tfsdk:"tags"`
+	RotateTrigger      types.String `tfsdk:"rotate_trigger"`
+	DeletionWindowDays types.Int64  `tfsdk:"deletion_window_days"`
 }
 
 // Metadata returns the resource type name.
@@ -81,6 +91,29 @@ func (r *kmsKeyResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 				Default:     booldefault.StaticBool(false),
 				Description: "When `true`, destroy only removes Terraform state and leaves the irreversible server-side key deletion unexecuted. Defaults to `false`.",
 			},
+			"description": schema.StringAttribute{
+				Optional:    true,
+				Computed:    true,
+				Description: "Description stored on the key. Set it to an empty string to clear it; omitting it preserves the server value.",
+			},
+			"tags": schema.MapAttribute{
+				Optional:    true,
+				Computed:    true,
+				ElementType: types.StringType,
+				Description: "Tags stored on the key. The reserved `name` tag is managed by RustFS and is never read back into state. Removing a tag untags it on the server.",
+			},
+			"rotate_trigger": schema.StringAttribute{
+				Optional: true,
+				Description: "When this value changes to a new non-null value, the key is rotated. Removing it does not " +
+					"rotate. The server returns no rotation version or timestamp, so no computed rotation attribute exists.",
+			},
+			"deletion_window_days": schema.Int64Attribute{
+				Optional:    true,
+				Computed:    true,
+				Default:     int64default.StaticInt64(30),
+				Validators:  []validator.Int64{int64validator.Between(7, 30)},
+				Description: "Days between destroy and permanent key-material destruction (7-30). Consumed at destroy; changing it does not call the server.",
+			},
 		},
 	}
 }
@@ -98,6 +131,69 @@ func (r *kmsKeyResource) Configure(_ context.Context, req resource.ConfigureRequ
 		return
 	}
 	r.client = client
+}
+
+// ValidateConfig rejects the reserved name tag, which RustFS owns and the
+// provider therefore cannot manage through the tags map.
+func (r *kmsKeyResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
+	var config kmsKeyResourceModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	if config.Tags.IsNull() || config.Tags.IsUnknown() {
+		return
+	}
+	var tags map[string]string
+	resp.Diagnostics.Append(config.Tags.ElementsAs(ctx, &tags, false)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	if _, reserved := tags["name"]; reserved {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("tags"),
+			"Reserved KMS key tag",
+			"the `name` tag is reserved by RustFS and cannot be managed through tags; it is derived from the key name.",
+		)
+	}
+}
+
+// kmsKeyTagsFromMap decodes the tag map, treating null as no tags.
+func kmsKeyTagsFromMap(ctx context.Context, m types.Map) (map[string]string, diag.Diagnostics) {
+	if m.IsNull() || m.IsUnknown() {
+		return map[string]string{}, nil
+	}
+	var tags map[string]string
+	diags := m.ElementsAs(ctx, &tags, false)
+	if diags.HasError() {
+		return nil, diags
+	}
+	if tags == nil {
+		tags = map[string]string{}
+	}
+	return tags, nil
+}
+
+// kmsKeyTagsValue renders server tags without the reserved name tag.
+func kmsKeyTagsValue(tags map[string]string) types.Map {
+	values := make(map[string]attr.Value, len(tags))
+	for key, value := range tags {
+		if key == "name" {
+			continue
+		}
+		values[key] = types.StringValue(value)
+	}
+	return types.MapValueMust(types.StringType, values)
+}
+
+// applyKmsKey copies the server-reported key identity and metadata into model.
+// Configuration-only attributes are left untouched.
+func applyKmsKey(ctx context.Context, model *kmsKeyResourceModel, key rustfs.KmsKey) {
+	model.KeyID = types.StringValue(key.KeyID)
+	model.CreatedAt = types.StringValue(key.CreationDate)
+	model.Enabled = types.BoolValue(key.KeyState == "Enabled")
+	model.Description = stringFromPtr(key.Description)
+	model.Tags = kmsKeyTagsValue(key.Tags)
 }
 
 // Create creates the KMS key and sets the initial Terraform state.
@@ -118,6 +214,38 @@ func (r *kmsKeyResource) Create(ctx context.Context, req resource.CreateRequest,
 	}
 	plan.KeyID = types.StringValue(key.KeyID)
 	plan.CreatedAt = types.StringValue(key.CreationDate)
+	if plan.Description.IsNull() {
+		plan.Description = stringFromPtr(key.Description)
+	}
+	if plan.Tags.IsNull() {
+		plan.Tags = kmsKeyTagsValue(key.Tags)
+	}
+
+	description := plan.Description.ValueString()
+	if !plan.Description.IsNull() && description != "" {
+		if _, err := r.client.RustClient.UpdateKmsKeyDescription(key.KeyID, description); err != nil {
+			resp.Diagnostics.AddError(
+				"Error updating KMS key description",
+				"Could not update KMS key description, unexpected error: "+err.Error(),
+			)
+			return
+		}
+	}
+
+	tags, diags := kmsKeyTagsFromMap(ctx, plan.Tags)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	if len(tags) > 0 {
+		if _, err := r.client.RustClient.TagKmsKey(key.KeyID, tags); err != nil {
+			resp.Diagnostics.AddError(
+				"Error updating KMS key tags",
+				"Could not update KMS key tags, unexpected error: "+err.Error(),
+			)
+			return
+		}
+	}
 
 	if !plan.Enabled.ValueBool() {
 		if err := r.client.RustClient.DisableKmsKey(key.KeyID); err != nil {
@@ -165,8 +293,7 @@ func (r *kmsKeyResource) Read(ctx context.Context, req resource.ReadRequest, res
 		)
 		return
 	}
-	state.Enabled = types.BoolValue(key.KeyState == "Enabled")
-	state.CreatedAt = types.StringValue(key.CreationDate)
+	applyKmsKey(ctx, &state, key)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
@@ -222,11 +349,64 @@ func (r *kmsKeyResource) Update(ctx context.Context, req resource.UpdateRequest,
 		return
 	}
 
-	if !plan.Enabled.Equal(state.Enabled) {
-		keyID := plan.KeyID.ValueString()
-		if keyID == "" {
-			keyID = plan.Name.ValueString()
+	keyID := plan.KeyID.ValueString()
+	if keyID == "" {
+		keyID = plan.Name.ValueString()
+	}
+
+	if !plan.Description.Equal(state.Description) {
+		if _, err := r.client.RustClient.UpdateKmsKeyDescription(keyID, plan.Description.ValueString()); err != nil {
+			resp.Diagnostics.AddError(
+				"Error updating KMS key description",
+				"Could not update KMS key description, unexpected error: "+err.Error(),
+			)
+			return
 		}
+	}
+
+	desiredTags, diags := kmsKeyTagsFromMap(ctx, plan.Tags)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	currentTags, diags := kmsKeyTagsFromMap(ctx, state.Tags)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	additions := map[string]string{}
+	for key, value := range desiredTags {
+		if currentTags[key] != value {
+			additions[key] = value
+		}
+	}
+	removals := make([]string, 0)
+	for key := range currentTags {
+		if _, keep := desiredTags[key]; !keep {
+			removals = append(removals, key)
+		}
+	}
+	if len(additions) > 0 {
+		if _, err := r.client.RustClient.TagKmsKey(keyID, additions); err != nil {
+			resp.Diagnostics.AddError(
+				"Error updating KMS key tags",
+				"Could not update KMS key tags, unexpected error: "+err.Error(),
+			)
+			return
+		}
+	}
+	if len(removals) > 0 {
+		if _, err := r.client.RustClient.UntagKmsKey(keyID, removals); err != nil {
+			resp.Diagnostics.AddError(
+				"Error updating KMS key tags",
+				"Could not remove KMS key tags, unexpected error: "+err.Error(),
+			)
+			return
+		}
+	}
+	plan.Tags = kmsKeyTagsValue(desiredTags)
+
+	if !plan.Enabled.Equal(state.Enabled) {
 		var err error
 		if plan.Enabled.ValueBool() {
 			err = r.client.RustClient.EnableKmsKey(keyID)
@@ -241,8 +421,21 @@ func (r *kmsKeyResource) Update(ctx context.Context, req resource.UpdateRequest,
 			return
 		}
 	}
-	// Computed-only attributes are carried over from the prior state: the
-	// enable/disable switch does not change the key id or creation date.
+
+	// Rotation goes last: metadata failures before it leave the trigger unsaved,
+	// so a retry does not rotate twice.
+	if !plan.RotateTrigger.IsNull() && !plan.RotateTrigger.Equal(state.RotateTrigger) {
+		if _, err := r.client.RustClient.RotateKmsKey(keyID); err != nil {
+			resp.Diagnostics.AddError(
+				"Error rotating KMS key",
+				"Could not rotate KMS key, unexpected error: "+err.Error(),
+			)
+			return
+		}
+	}
+
+	// Computed-only attributes are carried over from the prior state: these
+	// updates do not change the key id or creation date.
 	plan.KeyID = state.KeyID
 	plan.CreatedAt = state.CreatedAt
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
@@ -265,7 +458,11 @@ func (r *kmsKeyResource) Delete(ctx context.Context, req resource.DeleteRequest,
 	if keyID == "" {
 		keyID = state.Name.ValueString()
 	}
-	if err := r.client.RustClient.DeleteKmsKey(keyID); err != nil {
+	window := int64(30)
+	if !state.DeletionWindowDays.IsNull() && !state.DeletionWindowDays.IsUnknown() && state.DeletionWindowDays.ValueInt64() > 0 {
+		window = state.DeletionWindowDays.ValueInt64()
+	}
+	if err := r.client.RustClient.DeleteKmsKeyWithWindow(keyID, &window); err != nil {
 		// A key that is already gone (deleted or scheduled for deletion) has
 		// nothing left to destroy, so the destroy is a no-op rather than a
 		// failure.
