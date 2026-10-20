@@ -6,6 +6,7 @@ description: |-
   Rekey re-wraps the stored data-key envelopes under the current key-encryption key. It does not rewrite object bodies, does not change ETags or object versions, and never destroys a superseded key version: objects that were already re-wrapped stay readable while the sweep runs and after it is cancelled.
   Creating this resource starts the sweep and returns once the server accepts it. Refreshing reads the current or most recent sweep, so state, current_bucket and the counters update while it runs. Destroying a running sweep requests cancellation; the cancel is cooperative and does not move already re-wrapped envelopes back. A completed sweep is left alone.
   RustFS answers 501 when the configured KMS backend cannot re-wrap envelopes: Local, Static and AWS cannot, while Vault KV2 and Vault Transit can. A second sweep is refused while one is running.
+  Import takes the server's job id. The configured buckets and prefix are not recoverable from the server, so set them in configuration after importing.
 ---
 
 # rustfs_kms_rekey Resource
@@ -17,6 +18,8 @@ Rekey re-wraps the stored data-key envelopes under the current key-encryption ke
 Creating this resource starts the sweep and returns once the server accepts it. Refreshing reads the current or most recent sweep, so `state`, `current_bucket` and the counters update while it runs. Destroying a running sweep requests cancellation; the cancel is cooperative and does not move already re-wrapped envelopes back. A completed sweep is left alone.
 
 RustFS answers `501` when the configured KMS backend cannot re-wrap envelopes: Local, Static and AWS cannot, while Vault KV2 and Vault Transit can. A second sweep is refused while one is running.
+
+Import takes the server's job id. The configured `buckets` and `prefix` are not recoverable from the server, so set them in configuration after importing.
 
 ## Example Usage
 

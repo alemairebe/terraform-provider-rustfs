@@ -66,7 +66,9 @@ func (r *kmsRekeyResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 			"sweep is left alone.\n\n" +
 			"RustFS answers `501` when the configured KMS backend cannot re-wrap envelopes: Local, " +
 			"Static and AWS cannot, while Vault KV2 and Vault Transit can. A second sweep is refused " +
-			"while one is running.",
+			"while one is running.\n\n" +
+			"Import takes the server's job id. The configured `buckets` and `prefix` are not " +
+			"recoverable from the server, so set them in configuration after importing.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:    true,
@@ -187,9 +189,10 @@ func (r *kmsRekeyResource) Read(ctx context.Context, req resource.ReadRequest, r
 		)
 		return
 	}
-	if status.JobID != state.JobID.ValueString() {
-		// The server keeps one record. A different job id means this resource
-		// no longer describes the sweep the server reports.
+	// An imported or older state may carry no job id yet; adopt the server's
+	// id in that case. The server keeps one record, so a different non-empty id
+	// means this resource no longer describes the sweep the server reports.
+	if state.JobID.ValueString() != "" && status.JobID != state.JobID.ValueString() {
 		tflog.Trace(ctx, "KMS rekey sweep was replaced by another job", map[string]any{"job_id": status.JobID})
 		resp.State.RemoveResource(ctx)
 		return
@@ -248,6 +251,12 @@ func (r *kmsRekeyResource) Delete(ctx context.Context, req resource.DeleteReques
 
 func (r *kmsRekeyResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	// Import takes the server's job id as the state id; Read needs job_id to
+	// tell "this sweep" from a later one.
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("job_id"), req.ID)...)
 }
 
 // applyKmsRekeyStatus copies server progress into model. The configured scope

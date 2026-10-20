@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
+	frameworkresource "github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
@@ -203,4 +204,19 @@ func TestKmsRekeyResourceLifecyclePaths(t *testing.T) {
 		requireNoDiagnostics(t, resp.Diagnostics)
 		rec.assertNoRequest(t, "kms/keys/rekey/cancel")
 	})
+}
+
+func TestKmsRekeyResourceImportState(t *testing.T) {
+	r := NewKmsRekeyResource()
+	resp := &frameworkresource.ImportStateResponse{State: resourceState(t, resourceSchemaOf(t, r), kmsRekeyLifecycleModel())}
+
+	importer, ok := r.(frameworkresource.ResourceWithImportState)
+	if !ok {
+		t.Fatal("resource does not implement resource.ResourceWithImportState")
+	}
+	importer.ImportState(context.Background(), frameworkresource.ImportStateRequest{ID: "job-9"}, resp)
+
+	requireNoDiagnostics(t, resp.Diagnostics)
+	assertStateString(t, resp.State, path.Root("id"), "job-9")
+	assertStateString(t, resp.State, path.Root("job_id"), "job-9")
 }
