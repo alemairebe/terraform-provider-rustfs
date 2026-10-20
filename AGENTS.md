@@ -46,6 +46,7 @@ Registry address: `registry.terraform.io/caberdo/rustfs`.
 | `rustfs_iam_backup_import` | `provider/rustfs_iam_backup_import_resource.go` | IAM import from backup |
 | `rustfs_bucket_metadata_backup_import` | `provider/rustfs_bucket_metadata_backup_import_resource.go` | Bucket metadata import from backup |
 | `rustfs_pool_decommission` | `provider/rustfs_pool_decommission_resource.go` | Storage pool drain and retirement |
+| `rustfs_oidc_provider` | `provider/rustfs_oidc_provider_resource.go` | OIDC identity providers for Console SSO |
 
 | Data Source | Go file | Returns |
 |---|---|---|
@@ -66,6 +67,7 @@ Registry address: `registry.terraform.io/caberdo/rustfs`.
 | `rustfs_ilm_tier_stats` | `provider/rustfs_ilm_tier_stats_datasource.go` | Per-tier ILM statistics |
 | `rustfs_kms_config` | `provider/rustfs_kms_config_datasource.go` | KMS backend configuration |
 | `rustfs_kms_status` | `provider/rustfs_kms_status_datasource.go` | KMS service status |
+| `rustfs_oidc_config` | `provider/rustfs_oidc_config_datasource.go` | Effective OIDC provider configuration |
 
 `rustfs_quota` intentionally exists as both a resource and a data source. Terraform type names
 are part of the provider's public contract — never rename one (it breaks existing state); the
