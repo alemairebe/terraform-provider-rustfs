@@ -157,7 +157,7 @@ func TestUpsertOIDCProvider(t *testing.T) {
 		t.Errorf("request = %s %s", method, requestPath)
 	}
 	if body["client_secret"] != oidcTestClientSecret {
-		t.Errorf("client_secret = %v", body["client_secret"])
+		t.Error("client_secret in the request body does not match the configured fixture")
 	}
 	if body["config_url"] != input.ConfigURL || body["client_id"] != "rustfs" {
 		t.Errorf("unexpected body: %v", body)

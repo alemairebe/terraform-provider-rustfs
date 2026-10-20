@@ -2,13 +2,13 @@
 page_title: "rustfs_oidc_config Data Source - rustfs"
 subcategory: ""
 description: |-
-  Read every effective OIDC provider RustFS reports (GET /rustfs/admin/v3/oidc/config), including providers configured through server environment variables. Set id to return only that provider.
+  Read every effective OIDC provider RustFS reports (GET /rustfs/admin/v3/oidc/config), including providers configured through server environment variables. Set provider_id to return only that provider.
   The server never returns client secrets; client_secret_configured reports whether one is stored.
 ---
 
 # rustfs_oidc_config Data Source
 
-Read every effective OIDC provider RustFS reports (`GET /rustfs/admin/v3/oidc/config`), including providers configured through server environment variables. Set `id` to return only that provider.
+Read every effective OIDC provider RustFS reports (`GET /rustfs/admin/v3/oidc/config`), including providers configured through server environment variables. Set `provider_id` to return only that provider.
 
 The server never returns client secrets; `client_secret_configured` reports whether one is stored.
 
@@ -18,7 +18,7 @@ The server never returns client secrets; `client_secret_configured` reports whet
 data "rustfs_oidc_config" "all" {}
 
 data "rustfs_oidc_config" "keycloak" {
-  id = "keycloak"
+  provider_id = "keycloak"
 }
 
 output "oidc_provider_ids" {
@@ -35,10 +35,11 @@ output "keycloak_client_secret_configured" {
 
 ### Optional
 
-- `id` (String) Only return the provider with this id. When omitted, every effective provider is returned.
+- `provider_id` (String) Only return the provider with this id. When omitted, every effective provider is returned.
 
 ### Read-Only
 
+- `id` (String) Data source identifier: `oidc-config` when unfiltered, otherwise the selected provider id.
 - `providers` (Attributes List) Effective OIDC providers. (see [below for nested schema](#nestedatt--providers))
 - `restart_required` (Boolean) Whether persisted changes differ from the configuration the running server loaded and a restart is required.
 

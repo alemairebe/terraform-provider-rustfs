@@ -22,13 +22,16 @@ func TestOIDCConfigDataSourceSchema(t *testing.T) {
 	}
 
 	attrs := resp.Schema.GetAttributes()
-	for _, name := range []string{"id", "providers", "restart_required"} {
+	for _, name := range []string{"id", "provider_id", "providers", "restart_required"} {
 		if _, ok := attrs[name]; !ok {
 			t.Errorf("missing schema attribute %q", name)
 		}
 	}
-	if !attrs["providers"].IsComputed() || !attrs["restart_required"].IsComputed() {
-		t.Error("providers and restart_required must be computed")
+	if !attrs["id"].IsComputed() {
+		t.Error("id must be computed")
+	}
+	if !attrs["provider_id"].IsOptional() {
+		t.Error("provider_id must be optional")
 	}
 }
 
@@ -59,7 +62,7 @@ func TestOIDCConfigDataSourceRead(t *testing.T) {
 		d := NewOIDCConfigDataSource().(*OIDCConfigDataSource)
 		d.client = newUnitAllClient(srv)
 
-		resp := readOIDCConfigDataSource(t, d, OIDCConfigDataSourceModel{ID: types.StringNull()})
+		resp := readOIDCConfigDataSource(t, d, OIDCConfigDataSourceModel{ProviderID: types.StringNull()})
 
 		if resp.Diagnostics.HasError() {
 			t.Fatalf("unexpected diagnostics: %v", resp.Diagnostics)
@@ -75,6 +78,9 @@ func TestOIDCConfigDataSourceRead(t *testing.T) {
 		}
 		if got.RestartRequired.IsNull() || !got.RestartRequired.ValueBool() {
 			t.Errorf("restart_required = %v, want true", got.RestartRequired)
+		}
+		if got.ID.ValueString() != "oidc-config" {
+			t.Errorf("id = %q, want oidc-config", got.ID.ValueString())
 		}
 		var providers []OIDCProviderDataSourceModel
 		if diags := got.Providers.ElementsAs(context.Background(), &providers, false); diags.HasError() {
@@ -93,7 +99,7 @@ func TestOIDCConfigDataSourceRead(t *testing.T) {
 		d := NewOIDCConfigDataSource().(*OIDCConfigDataSource)
 		d.client = newUnitAllClient(srv)
 
-		resp := readOIDCConfigDataSource(t, d, OIDCConfigDataSourceModel{ID: types.StringValue("keycloak")})
+		resp := readOIDCConfigDataSource(t, d, OIDCConfigDataSourceModel{ProviderID: types.StringValue("keycloak")})
 
 		if resp.Diagnostics.HasError() {
 			t.Fatalf("unexpected diagnostics: %v", resp.Diagnostics)
@@ -105,6 +111,9 @@ func TestOIDCConfigDataSourceRead(t *testing.T) {
 		if elements := got.Providers.Elements(); len(elements) != 1 {
 			t.Errorf("providers = %d, want 1", len(elements))
 		}
+		if got.ID.ValueString() != "keycloak" {
+			t.Errorf("id = %q, want keycloak", got.ID.ValueString())
+		}
 	})
 
 	t.Run("missing id is an error", func(t *testing.T) {
@@ -112,7 +121,7 @@ func TestOIDCConfigDataSourceRead(t *testing.T) {
 		d := NewOIDCConfigDataSource().(*OIDCConfigDataSource)
 		d.client = newUnitAllClient(srv)
 
-		resp := readOIDCConfigDataSource(t, d, OIDCConfigDataSourceModel{ID: types.StringValue("missing")})
+		resp := readOIDCConfigDataSource(t, d, OIDCConfigDataSourceModel{ProviderID: types.StringValue("missing")})
 
 		assertDiagnosticSummary(t, resp.Diagnostics, "OIDC provider not found")
 	})
@@ -122,7 +131,7 @@ func TestOIDCConfigDataSourceRead(t *testing.T) {
 		d := NewOIDCConfigDataSource().(*OIDCConfigDataSource)
 		d.client = newUnitAllClient(srv)
 
-		resp := readOIDCConfigDataSource(t, d, OIDCConfigDataSourceModel{ID: types.StringNull()})
+		resp := readOIDCConfigDataSource(t, d, OIDCConfigDataSourceModel{ProviderID: types.StringNull()})
 
 		diagnostic := assertDiagnosticSummary(t, resp.Diagnostics, "Error reading OIDC config")
 		if diagnostic.Detail() == "" {

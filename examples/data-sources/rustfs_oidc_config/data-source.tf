@@ -1,7 +1,7 @@
 data "rustfs_oidc_config" "all" {}
 
 data "rustfs_oidc_config" "keycloak" {
-  id = "keycloak"
+  provider_id = "keycloak"
 }
 
 output "oidc_provider_ids" {

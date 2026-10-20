@@ -91,7 +91,7 @@ resource "rustfs_oidc_provider" "test" {
 }
 
 data "rustfs_oidc_config" "test" {
-  id = rustfs_oidc_provider.test.id
+  provider_id = rustfs_oidc_provider.test.id
 }
 `, providerID, configURL, clientID, secretLine, displayName)
 }

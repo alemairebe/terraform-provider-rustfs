@@ -23,6 +23,7 @@ type OIDCConfigDataSource struct {
 
 type OIDCConfigDataSourceModel struct {
 	ID              types.String `tfsdk:"id"`
+	ProviderID      types.String `tfsdk:"provider_id"`
 	Providers       types.List   `tfsdk:"providers"`
 	RestartRequired types.Bool   `tfsdk:"restart_required"`
 }
@@ -64,11 +65,15 @@ func (d *OIDCConfigDataSource) Schema(_ context.Context, _ datasource.SchemaRequ
 		Description: "Read the effective RustFS OIDC provider configuration",
 		MarkdownDescription: "Read every effective OIDC provider RustFS reports " +
 			"(`GET /rustfs/admin/v3/oidc/config`), including providers configured through server " +
-			"environment variables. Set `id` to return only that provider.\n\n" +
+			"environment variables. Set `provider_id` to return only that provider.\n\n" +
 			"The server never returns client secrets; `client_secret_configured` reports whether " +
 			"one is stored.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
+				Computed:    true,
+				Description: "Data source identifier: `oidc-config` when unfiltered, otherwise the selected provider id.",
+			},
+			"provider_id": schema.StringAttribute{
 				Optional:    true,
 				Description: "Only return the provider with this id. When omitted, every effective provider is returned.",
 			},
@@ -206,8 +211,8 @@ func (d *OIDCConfigDataSource) Read(ctx context.Context, req datasource.ReadRequ
 	}
 
 	filter := ""
-	if !config.ID.IsNull() && !config.ID.IsUnknown() {
-		filter = config.ID.ValueString()
+	if !config.ProviderID.IsNull() && !config.ProviderID.IsUnknown() {
+		filter = config.ProviderID.ValueString()
 	}
 
 	providers := make([]OIDCProviderDataSourceModel, 0, len(effective.Providers))
@@ -255,6 +260,10 @@ func (d *OIDCConfigDataSource) Read(ctx context.Context, req datasource.ReadRequ
 		return
 	}
 
+	config.ID = types.StringValue("oidc-config")
+	if filter != "" {
+		config.ID = types.StringValue(filter)
+	}
 	config.Providers = providerList
 	config.RestartRequired = types.BoolValue(effective.RestartRequired)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &config)...)
