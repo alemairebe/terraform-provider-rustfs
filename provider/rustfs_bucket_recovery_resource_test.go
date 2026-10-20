@@ -202,6 +202,14 @@ func TestBucketRecoveryResourceLifecyclePaths(t *testing.T) {
 			wantSummary: "Error recovering orphaned bucket",
 			wantDetail:  []string{"Could not recover bucket orphaned-data with incarnation " + bucketRecoveryIncarnation},
 		},
+		{
+			// A 200 without retiredIncarnationId would otherwise write an empty
+			// audit trail; fail instead of inventing state.
+			name:        "success without a retired incarnation writes no state",
+			routes:      []requestRoute{{status: http.StatusOK, body: `{"bucket":"orphaned-data"}`}},
+			wantSummary: "Error recovering orphaned bucket",
+			wantDetail:  []string{"without a retiredIncarnationId", "wrote no state"},
+		},
 	}
 
 	for _, tc := range createCases {

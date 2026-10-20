@@ -198,6 +198,19 @@ func (r *BucketRecoveryResource) Create(ctx context.Context, req resource.Create
 		addBucketRecoveryFailure(&resp.Diagnostics, bucket, incarnationID, err)
 		return
 	}
+	if result.RetiredIncarnationID == "" {
+		// A 200 without the retired generation breaks the documented response
+		// contract. The request may already have retired the orphan, so do not
+		// invent an audit trail: record nothing and let the same request be
+		// retried (the server is idempotent for the same identity).
+		resp.Diagnostics.AddError(
+			"Error recovering orphaned bucket",
+			"RustFS answered the recovery request for bucket "+bucket+" without a retiredIncarnationId. "+
+				"The request may have retired the orphan, but the provider cannot record which generation was "+
+				"retired, so it wrote no state. Re-run the recovery with the same incarnation UUID.",
+		)
+		return
+	}
 
 	// The incarnation UUID is the Terraform identity: the bucket name is
 	// reusable, and the server retires the input generation.

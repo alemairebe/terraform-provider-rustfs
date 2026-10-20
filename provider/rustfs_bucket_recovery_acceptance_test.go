@@ -10,7 +10,6 @@ import (
 
 	"github.com/caberdo/terraform-provider-rustfs/pkg/rustfs"
 	"github.com/google/uuid"
-	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/plancheck"
@@ -27,11 +26,8 @@ import (
 func TestAccBucketRecovery_refusesLiveVolume(t *testing.T) {
 	testAccPreCheck(t)
 
-	client, err := testAccBucketRecoveryClient()
-	if err != nil {
-		t.Fatalf("provider configure: %v", err)
-	}
-	version, raw, err := client.RustClient.ServerVersion()
+	client := testAccAdminClient()
+	version, raw, err := client.ServerVersion()
 	if err != nil {
 		t.Skipf("cannot determine the RustFS version, skipping: %v", err)
 	}
@@ -135,32 +131,4 @@ resource "rustfs_bucket" "test" {
   name = "%s"
 }
 `, bucket)
-}
-
-// testAccBucketRecoveryClient returns the provider's own configured client. It
-// runs the same Configure path Terraform takes, so endpoint and credential
-// resolution (environment variables in the acceptance run) is not re-implemented
-// in the check helper.
-func testAccBucketRecoveryClient() (*AllClient, error) {
-	// Null attributes let Configure resolve every value from the environment,
-	// exactly like the provider block the acceptance suite declares.
-	resp, err := configureProviderValue(RustfsProviderModel{
-		Endpoint:     types.StringNull(),
-		AccessKey:    types.StringNull(),
-		SecretKey:    types.StringNull(),
-		AccessSecret: types.StringNull(),
-		Ssl:          types.BoolNull(),
-		Insecure:     types.BoolNull(),
-	})
-	if err != nil {
-		return nil, err
-	}
-	if resp.Diagnostics.HasError() {
-		return nil, fmt.Errorf("provider configure: %v", resp.Diagnostics)
-	}
-	client, ok := resp.ResourceData.(*AllClient)
-	if !ok {
-		return nil, fmt.Errorf("expected *AllClient in ResourceData, got %T", resp.ResourceData)
-	}
-	return client, nil
 }
