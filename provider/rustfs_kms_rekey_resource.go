@@ -64,9 +64,9 @@ func (r *kmsRekeyResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 			"counters update while it runs. Destroying a running sweep requests cancellation; the " +
 			"cancel is cooperative and does not move already re-wrapped envelopes back. A completed " +
 			"sweep is left alone.\n\n" +
-			"RustFS answers `501` when the configured KMS backend cannot re-wrap envelopes (Local, " +
-			"Static and AWS do; Vault KV2 and Vault Transit do). A second sweep is refused while one " +
-			"is running.",
+			"RustFS answers `501` when the configured KMS backend cannot re-wrap envelopes: Local, " +
+			"Static and AWS cannot, while Vault KV2 and Vault Transit can. A second sweep is refused " +
+			"while one is running.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:    true,

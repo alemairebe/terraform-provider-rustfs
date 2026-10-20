@@ -13,9 +13,25 @@ Manage RustFS KMS master keys. Deleting a KMS master key is **critical and irrev
 
 ```terraform
 resource "rustfs_kms_key" "app" {
-  name         = "app-master-key"
-  enabled      = true
+  name        = "app-master-key"
+  description = "Master key for the application bucket"
+  enabled     = true
+
+  tags = {
+    environment = "production"
+  }
+
+  # Days RustFS waits after destroy before permanently destroying the key
+  # material. 7-30; defaults to 30.
+  deletion_window_days = 30
+
+  # Deleting a master key makes every object encrypted under it permanently
+  # unreadable. Keep this guard on unless you really mean to destroy the key.
   skip_destroy = true
+
+  # Changing a non-null rotate_trigger rotates the key. Rotation is not
+  # supported by the Local dev backend. Removing the trigger does not rotate.
+  # rotate_trigger = "2026-10-20"
 }
 ```
 
@@ -28,8 +44,12 @@ resource "rustfs_kms_key" "app" {
 
 ### Optional
 
+- `deletion_window_days` (Number) Days between destroy and permanent key-material destruction (7-30). Consumed at destroy; changing it does not call the server.
+- `description` (String) Description stored on the key. Set it to an empty string to clear it; omitting it preserves the server value.
 - `enabled` (Boolean) Whether the KMS master key is enabled. Defaults to `true`.
+- `rotate_trigger` (String) When this value changes to a new non-null value, the key is rotated. Removing it does not rotate. The server returns no rotation version or timestamp, so no computed rotation attribute exists.
 - `skip_destroy` (Boolean) When `true`, destroy only removes Terraform state and leaves the irreversible server-side key deletion unexecuted. Defaults to `false`.
+- `tags` (Map of String) Tags stored on the key. The reserved `name` tag is managed by RustFS and is never read back into state. Removing a tag untags it on the server.
 
 ### Read-Only
 
