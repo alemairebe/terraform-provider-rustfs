@@ -11,8 +11,9 @@ actually shipped).
 A Terraform provider for [RustFS](https://github.com/rustfs/rustfs): it manages S3 API objects
 (buckets, policies, tags, CORS, versioning, lifecycle, replication, encryption) and RustFS admin API
 v3 objects (IAM users/groups/policies, service accounts, LDAP, KMS keys, quotas, storage tiers and
-ILM, audit/notification targets, cluster config and health) through Terraform state. Today: 32
-resources, 17 data sources, tested against RustFS `1.0.1`, `1.0.2`, `1.0.3` and `latest`.
+ILM, audit/notification targets, cluster config and health) through Terraform state. The complete
+resource and data source list is in the README; the provider is tested against RustFS `1.0.1`,
+`1.0.2`, `1.0.3` and `latest`.
 
 ## Now — supply-chain and process hardening
 

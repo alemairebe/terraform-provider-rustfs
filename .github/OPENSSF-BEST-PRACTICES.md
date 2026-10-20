@@ -52,8 +52,7 @@ coverage justify, instead of discovering that after submission.
    * **Project homepage URL:** `https://github.com/caberdo/terraform-provider-rustfs`
    * **Source code repository:** `https://github.com/caberdo/terraform-provider-rustfs`
    * **Project description:** what `README.md` says — a Terraform provider that manages RustFS
-     (S3-compatible object storage) as code: 32 resources and 17 data sources over the S3 API and
-     the RustFS admin API v3.
+     (S3-compatible object storage) as code, over the S3 API and the RustFS admin API v3.
    * **License:** `Apache-2.0` (the SPDX identifier; `LICENSE` and GitHub agree).
 3. Answer the questionnaire from §4. The form saves as you go; criteria answered `Met` need a
    justification and, where the table says so, a URL.

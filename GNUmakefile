@@ -95,4 +95,15 @@ validate-examples:
 generate:
 	go generate ./...
 
-.PHONY: build test coverage coverage-html coverage-merge coverage-gate coverage-readme coverage-readme-check testacc lint lint-fix fmt vet install testacc-docker testacc-live validate-examples generate fuzz
+# Regenerate the resource and data source tables in AGENTS.md and README.md
+# from the provider registry and the generated docs pages. Idempotent.
+generate-tables:
+	go run ./scripts/gen-tables.go
+
+# Turn changelog.d/*.md fragments into a dated CHANGELOG.md section and remove
+# the fragments. Refuses to reuse a version and refuses malformed filenames.
+changelog-release:
+	@case "$(VERSION)" in [0-9]*.[0-9]*.[0-9]*) ;; *) echo "usage: make changelog-release VERSION=x.y.z" >&2; exit 2 ;; esac
+	./scripts/changelog-release.sh "$(VERSION)"
+
+.PHONY: build test coverage coverage-html coverage-merge coverage-gate coverage-readme coverage-readme-check testacc lint lint-fix fmt vet install testacc-docker testacc-live validate-examples generate generate-tables changelog-release fuzz

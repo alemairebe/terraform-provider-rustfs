@@ -2,10 +2,9 @@
 page_title: "rustfs Provider"
 subcategory: ""
 description: |-
-  Terraform provider for RustFS, S3-compatible object storage: buckets, IAM users, groups and
-  policies, service accounts, KMS keys, quotas, lifecycle rules, versioning, object lock,
-  encryption, bucket and site replication, storage tiers and ILM, audit and notification targets,
-  module switches and cluster health - 32 resources and 17 data sources.
+  Terraform provider for RustFS, S3-compatible object storage: buckets, IAM,
+  encryption, replication, storage tiers, audit and notification targets, server
+  configuration and cluster health.
 ---
 
 # rustfs Provider
@@ -15,18 +14,9 @@ system. It talks to both the S3 API and the RustFS admin API v3 (`/rustfs/admin/
 identity, encryption, replication, tiering and monitoring can live in the same Terraform state as
 the rest of your infrastructure.
 
-**32 resources and 17 data sources**, including support for:
-
-- **Buckets** - buckets, policy, public-access block, tags, CORS, versioning, object lock,
-  encryption (SSE-S3/SSE-KMS), lifecycle, notifications, durability
-- **Identity** - IAM users, groups, policies, service accounts, LDAP service accounts and policy
-  attachments, plus IAM backup import
-- **Data movement** - bucket replication, site replication, remote targets, pool rebalancing
-- **Tiers and KMS** - storage tiers (S3, Azure, GCS, ...), ILM tier statistics, KMS master keys
-- **Operations** - quotas, server sub-system configuration (config-kv), feature module switches,
-  audit targets, notification targets
-- **Observability** - cluster health (OBD diagnostics), storage info, server/pool/drive info,
-  metrics, replication metrics
+The complete, always-current list of supported resources and data sources is in the
+[provider documentation](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs)
+and the [README resource and data source indexes](https://github.com/caberdo/terraform-provider-rustfs#resources).
 
 ## Quick start
 

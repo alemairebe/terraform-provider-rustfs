@@ -5,7 +5,10 @@ package provider
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
@@ -160,5 +163,42 @@ func assertUnique(t *testing.T, kind string, names []string) {
 			t.Errorf("%s %q is registered more than once", kind, name)
 		}
 		seen[name] = struct{}{}
+	}
+}
+
+func TestRegistrySnapshotMatchesRegistry(t *testing.T) {
+	snapshot := RegistrySnapshot()
+
+	var resources, dataSources []string
+	for _, entry := range snapshot {
+		switch entry.Kind {
+		case RegistryKindResource:
+			resources = append(resources, entry.TypeName)
+		case RegistryKindDataSource:
+			dataSources = append(dataSources, entry.TypeName)
+		default:
+			t.Errorf("%s has an unknown kind %q", entry.TypeName, entry.Kind)
+		}
+
+		if !strings.HasPrefix(entry.File, "provider/") || !strings.HasSuffix(entry.File, ".go") {
+			t.Errorf("%s resolves to %q, want a provider/*.go path", entry.TypeName, entry.File)
+			continue
+		}
+		if _, err := os.Stat(filepath.Join("..", entry.File)); err != nil {
+			t.Errorf("%s resolves to %q, which does not exist: %v", entry.TypeName, entry.File, err)
+		}
+	}
+
+	if !slices.Equal(resources, goldenResourceTypeNames) {
+		t.Errorf("snapshot resources = %v, want %v", resources, goldenResourceTypeNames)
+	}
+	if !slices.Equal(dataSources, goldenDataSourceTypeNames) {
+		t.Errorf("snapshot data sources = %v, want %v", dataSources, goldenDataSourceTypeNames)
+	}
+
+	if !slices.IsSortedFunc(snapshot, func(a, b RegistryEntry) int {
+		return strings.Compare(a.TypeName, b.TypeName)
+	}) {
+		t.Error("snapshot is not sorted by type name")
 	}
 }
