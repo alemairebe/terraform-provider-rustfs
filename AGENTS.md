@@ -45,6 +45,7 @@ Registry address: `registry.terraform.io/caberdo/rustfs`.
 | `rustfs_notification_target` | `provider/rustfs_notification_target_resource.go` | Event-notification targets (webhook, amqp, kafka, mqtt, nats, postgres, mysql, redis, pulsar) |
 | `rustfs_iam_backup_import` | `provider/rustfs_iam_backup_import_resource.go` | IAM import from backup |
 | `rustfs_bucket_metadata_backup_import` | `provider/rustfs_bucket_metadata_backup_import_resource.go` | Bucket metadata import from backup |
+| `rustfs_pool_decommission` | `provider/rustfs_pool_decommission_resource.go` | Storage pool drain and retirement |
 
 | Data Source | Go file | Returns |
 |---|---|---|
