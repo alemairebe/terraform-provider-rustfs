@@ -384,3 +384,122 @@ func TestOnDemandMigrationConfigRedacted(t *testing.T) {
 func s3ErrorXML(code, message string) string {
 	return `<?xml version="1.0" encoding="UTF-8"?><Error><Code>` + code + `</Code><Message>` + message + `</Message></Error>`
 }
+
+// TestOnDemandMigrationRequestFailures covers the transport and decode error
+// branches of every route: a failing request and a 2xx body that is not JSON
+// both have to surface an error instead of an empty result.
+func TestOnDemandMigrationRequestFailures(t *testing.T) {
+	handler := func(status int, body string) http.HandlerFunc {
+		return func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(status)
+			_, _ = io.WriteString(w, body)
+		}
+	}
+
+	tests := []struct {
+		name    string
+		handler http.HandlerFunc
+		call    func(rustfs.RustfsAdmin) error
+	}{
+		{
+			name:    "set request fails",
+			handler: handler(http.StatusInternalServerError, `{"code":"InternalError"}`),
+			call: func(c rustfs.RustfsAdmin) error {
+				_, err := c.SetBucketOnDemandMigration("photos", odmTestConfig(), false)
+				return err
+			},
+		},
+		{
+			name:    "set response is not json",
+			handler: handler(http.StatusOK, `{`),
+			call: func(c rustfs.RustfsAdmin) error {
+				_, err := c.SetBucketOnDemandMigration("photos", odmTestConfig(), false)
+				return err
+			},
+		},
+		{
+			name:    "get request fails",
+			handler: handler(http.StatusInternalServerError, `{"code":"InternalError"}`),
+			call: func(c rustfs.RustfsAdmin) error {
+				_, err := c.GetBucketOnDemandMigration("photos")
+				return err
+			},
+		},
+		{
+			name:    "get response is not json",
+			handler: handler(http.StatusOK, `{`),
+			call: func(c rustfs.RustfsAdmin) error {
+				_, err := c.GetBucketOnDemandMigration("photos")
+				return err
+			},
+		},
+		{
+			name:    "status request fails",
+			handler: handler(http.StatusInternalServerError, `{"code":"InternalError"}`),
+			call: func(c rustfs.RustfsAdmin) error {
+				_, err := c.GetBucketOnDemandMigrationStatus("photos")
+				return err
+			},
+		},
+		{
+			name:    "status response is not json",
+			handler: handler(http.StatusOK, `{`),
+			call: func(c rustfs.RustfsAdmin) error {
+				_, err := c.GetBucketOnDemandMigrationStatus("photos")
+				return err
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.call(newODMClient(t, tc.handler)); err == nil {
+				t.Fatal("expected an error")
+			}
+		})
+	}
+}
+
+// TestOnDemandMigrationConfigRedactedCredentialsAndGCS covers the credential
+// and GCS copies that TestOnDemandMigrationConfigRedacted does not reach.
+func TestOnDemandMigrationConfigRedactedCredentialsAndGCS(t *testing.T) {
+	session := "session-token"
+	config := rustfs.ODMConfig{Source: rustfs.ODMSource{
+		Credentials: &rustfs.ODMCredentials{
+			AccessKey:    "source-access",
+			SecretKey:    "source-secret",
+			SessionToken: &session,
+		},
+	}}
+	redacted := config.Redacted()
+	if redacted.Source.Credentials == nil {
+		t.Fatal("credentials block was dropped")
+	}
+	if got := redacted.Source.Credentials.SecretKey; got != rustfs.RedactedSecret {
+		t.Errorf("secret key = %q, want redacted", got)
+	}
+	if redacted.Source.Credentials.SessionToken == nil || *redacted.Source.Credentials.SessionToken != rustfs.RedactedSecret {
+		t.Error("session token was not redacted")
+	}
+	if got := redacted.Source.Credentials.AccessKey; got != "source-access" {
+		t.Errorf("access key = %q, want it preserved", got)
+	}
+	if config.Source.Credentials.SecretKey != "source-secret" || *config.Source.Credentials.SessionToken != "session-token" {
+		t.Error("Redacted mutated the input configuration")
+	}
+
+	serviceAccount := `{"type":"service_account"}`
+	gcsConfig := rustfs.ODMConfig{Source: rustfs.ODMSource{
+		GCS: &rustfs.ODMGCS{ServiceAccountJSON: serviceAccount},
+	}}
+	redactedGCS := gcsConfig.Redacted()
+	if redactedGCS.Source.GCS == nil {
+		t.Fatal("gcs block was dropped")
+	}
+	if got := redactedGCS.Source.GCS.ServiceAccountJSON; got != rustfs.RedactedSecret {
+		t.Errorf("service account json = %q, want redacted", got)
+	}
+	if gcsConfig.Source.GCS.ServiceAccountJSON != serviceAccount {
+		t.Error("Redacted mutated the input configuration")
+	}
+}
