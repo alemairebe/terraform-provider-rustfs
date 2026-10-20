@@ -17,29 +17,29 @@ import (
 )
 
 var (
-	_ resource.Resource                = &ModuleSwitchRessource{}
-	_ resource.ResourceWithImportState = &ModuleSwitchRessource{}
+	_ resource.Resource                = &ModuleSwitchResource{}
+	_ resource.ResourceWithImportState = &ModuleSwitchResource{}
 )
 
-type ModuleSwitchRessource struct {
+type ModuleSwitchResource struct {
 	client *AllClient
 }
 
-type ModuleSwitchRessourceModel struct {
+type ModuleSwitchResourceModel struct {
 	ID            types.String `tfsdk:"id"`
 	NotifyEnabled types.Bool   `tfsdk:"notify_enabled"`
 	AuditEnabled  types.Bool   `tfsdk:"audit_enabled"`
 }
 
-func NewModuleSwitchRessource() resource.Resource {
-	return &ModuleSwitchRessource{}
+func NewModuleSwitchResource() resource.Resource {
+	return &ModuleSwitchResource{}
 }
 
-func (r *ModuleSwitchRessource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
+func (r *ModuleSwitchResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
 	resp.TypeName = req.ProviderTypeName + "_module_switch"
 }
 
-func (r *ModuleSwitchRessource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
+func (r *ModuleSwitchResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		Description:         "Manage RustFS feature module switches",
 		MarkdownDescription: "Manage RustFS feature module switches (notify and audit modules).",
@@ -64,7 +64,7 @@ func (r *ModuleSwitchRessource) Schema(_ context.Context, _ resource.SchemaReque
 	}
 }
 
-func (r *ModuleSwitchRessource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
+func (r *ModuleSwitchResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	if req.ProviderData == nil {
 		return
 	}
@@ -76,8 +76,8 @@ func (r *ModuleSwitchRessource) Configure(_ context.Context, req resource.Config
 	r.client = client
 }
 
-func (r *ModuleSwitchRessource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
-	var plan ModuleSwitchRessourceModel
+func (r *ModuleSwitchResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+	var plan ModuleSwitchResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -95,8 +95,8 @@ func (r *ModuleSwitchRessource) Create(ctx context.Context, req resource.CreateR
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
-func (r *ModuleSwitchRessource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
-	var state ModuleSwitchRessourceModel
+func (r *ModuleSwitchResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+	var state ModuleSwitchResourceModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -112,8 +112,8 @@ func (r *ModuleSwitchRessource) Read(ctx context.Context, req resource.ReadReque
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
-func (r *ModuleSwitchRessource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var plan ModuleSwitchRessourceModel
+func (r *ModuleSwitchResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	var plan ModuleSwitchResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -133,22 +133,22 @@ func (r *ModuleSwitchRessource) Update(ctx context.Context, req resource.UpdateR
 // Delete removes the resource from state. The admin API exposes no reset
 // endpoint for module switches, so the server switches are intentionally left
 // unchanged on destroy.
-func (r *ModuleSwitchRessource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+func (r *ModuleSwitchResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
 	tflog.Trace(ctx, "module switches left unchanged on destroy (no DELETE endpoint)")
 }
 
-func (r *ModuleSwitchRessource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+func (r *ModuleSwitchResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
 }
 
-func moduleSwitchUpdateFromModel(model ModuleSwitchRessourceModel) rustfs.ModuleSwitchUpdate {
+func moduleSwitchUpdateFromModel(model ModuleSwitchResourceModel) rustfs.ModuleSwitchUpdate {
 	return rustfs.ModuleSwitchUpdate{
 		NotifyEnabled: model.NotifyEnabled.ValueBool(),
 		AuditEnabled:  model.AuditEnabled.ValueBool(),
 	}
 }
 
-func applyModuleSwitchState(model *ModuleSwitchRessourceModel, state *rustfs.ModuleSwitchState) {
+func applyModuleSwitchState(model *ModuleSwitchResourceModel, state *rustfs.ModuleSwitchState) {
 	model.NotifyEnabled = types.BoolValue(state.NotifyEnabled)
 	model.AuditEnabled = types.BoolValue(state.AuditEnabled)
 }

@@ -19,19 +19,19 @@ import (
 )
 
 var (
-	_ resource.Resource                = &SiteReplicationRessource{}
-	_ resource.ResourceWithImportState = &SiteReplicationRessource{}
+	_ resource.Resource                = &SiteReplicationResource{}
+	_ resource.ResourceWithImportState = &SiteReplicationResource{}
 )
 
-func NewSiteReplicationRessource() resource.Resource {
-	return &SiteReplicationRessource{}
+func NewSiteReplicationResource() resource.Resource {
+	return &SiteReplicationResource{}
 }
 
-type SiteReplicationRessource struct {
+type SiteReplicationResource struct {
 	client *AllClient
 }
 
-type SiteReplicationRessourceModel struct {
+type SiteReplicationResourceModel struct {
 	Name          types.String `tfsdk:"name"`
 	Endpoint      types.String `tfsdk:"endpoint"`
 	AccessKey     types.String `tfsdk:"access_key"`
@@ -40,11 +40,11 @@ type SiteReplicationRessourceModel struct {
 	CACertPEM     types.String `tfsdk:"ca_cert_pem"`
 }
 
-func (r *SiteReplicationRessource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
+func (r *SiteReplicationResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
 	resp.TypeName = req.ProviderTypeName + "_site_replication"
 }
 
-func (r *SiteReplicationRessource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
+func (r *SiteReplicationResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		Description:         "Manage site-replication peers in rustfs",
 		MarkdownDescription: "Manage site-replication peers in rustfs",
@@ -84,7 +84,7 @@ func (r *SiteReplicationRessource) Schema(_ context.Context, _ resource.SchemaRe
 	}
 }
 
-func (r *SiteReplicationRessource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
+func (r *SiteReplicationResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	if req.ProviderData == nil {
 		return
 	}
@@ -99,8 +99,8 @@ func (r *SiteReplicationRessource) Configure(_ context.Context, req resource.Con
 	r.client = client
 }
 
-func (r *SiteReplicationRessource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
-	var plan SiteReplicationRessourceModel
+func (r *SiteReplicationResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+	var plan SiteReplicationResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -113,8 +113,8 @@ func (r *SiteReplicationRessource) Create(ctx context.Context, req resource.Crea
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
-func (r *SiteReplicationRessource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
-	var state SiteReplicationRessourceModel
+func (r *SiteReplicationResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+	var state SiteReplicationResourceModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -140,8 +140,8 @@ func (r *SiteReplicationRessource) Read(ctx context.Context, req resource.ReadRe
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
-func (r *SiteReplicationRessource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var plan SiteReplicationRessourceModel
+func (r *SiteReplicationResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	var plan SiteReplicationResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -154,8 +154,8 @@ func (r *SiteReplicationRessource) Update(ctx context.Context, req resource.Upda
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
-func (r *SiteReplicationRessource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
-	var data SiteReplicationRessourceModel
+func (r *SiteReplicationResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+	var data SiteReplicationResourceModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -174,11 +174,11 @@ func (r *SiteReplicationRessource) Delete(ctx context.Context, req resource.Dele
 	}
 }
 
-func (r *SiteReplicationRessource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+func (r *SiteReplicationResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	resource.ImportStatePassthroughID(ctx, path.Root("name"), req, resp)
 }
 
-func modelToSite(plan SiteReplicationRessourceModel) rustfs.SiteReplicationSite {
+func modelToSite(plan SiteReplicationResourceModel) rustfs.SiteReplicationSite {
 	return rustfs.SiteReplicationSite{
 		Name:          plan.Name.ValueString(),
 		Endpoint:      strings.TrimSuffix(plan.Endpoint.ValueString(), "/"),

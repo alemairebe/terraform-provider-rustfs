@@ -13,8 +13,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
-func TestBucketDurabilityRessourceSchema(t *testing.T) {
-	r := NewBucketDurabilityRessource()
+func TestBucketDurabilityResourceSchema(t *testing.T) {
+	r := NewBucketDurabilityResource()
 	resp := &resource.SchemaResponse{}
 	r.Schema(context.Background(), resource.SchemaRequest{}, resp)
 	if resp.Diagnostics.HasError() {
@@ -28,8 +28,8 @@ func TestBucketDurabilityRessourceSchema(t *testing.T) {
 	}
 }
 
-func TestBucketDurabilityRessourceMetadata(t *testing.T) {
-	r := NewBucketDurabilityRessource()
+func TestBucketDurabilityResourceMetadata(t *testing.T) {
+	r := NewBucketDurabilityResource()
 	resp := &resource.MetadataResponse{}
 	r.Metadata(context.Background(), resource.MetadataRequest{ProviderTypeName: "rustfs"}, resp)
 	if resp.TypeName != "rustfs_bucket_durability" {
@@ -39,18 +39,18 @@ func TestBucketDurabilityRessourceMetadata(t *testing.T) {
 
 // durabilityLifecycleModel is a plan/state value with every required attribute
 // set; the framework cannot convert a model that leaves bucket or mode null.
-func durabilityLifecycleModel() *BucketDurabilityRessourceModel {
-	return &BucketDurabilityRessourceModel{
+func durabilityLifecycleModel() *BucketDurabilityResourceModel {
+	return &BucketDurabilityResourceModel{
 		Bucket: types.StringValue("tf-test"),
 		Mode:   types.StringValue("strict"),
 	}
 }
 
-// TestBucketDurabilityRessourceLifecyclePaths covers the paths the acceptance
+// TestBucketDurabilityResourceLifecyclePaths covers the paths the acceptance
 // suite cannot reach with a live server: an override that disappeared behind
 // Terraform's back, a delete that arrives after the bucket is already gone, and
 // every failing API call in Create, Read and Delete.
-func TestBucketDurabilityRessourceLifecyclePaths(t *testing.T) {
+func TestBucketDurabilityResourceLifecyclePaths(t *testing.T) {
 	t.Parallel()
 
 	readCases := []struct {
@@ -84,7 +84,7 @@ func TestBucketDurabilityRessourceLifecyclePaths(t *testing.T) {
 	for _, tc := range readCases {
 		t.Run("read: "+tc.name, func(t *testing.T) {
 			client, _ := routedClient(t, tc.routes...)
-			h := newCRUDHarness(t, NewBucketDurabilityRessource(), client)
+			h := newCRUDHarness(t, NewBucketDurabilityResource(), client)
 
 			resp := h.read(durabilityLifecycleModel())
 
@@ -137,7 +137,7 @@ func TestBucketDurabilityRessourceLifecyclePaths(t *testing.T) {
 	for _, tc := range deleteCases {
 		t.Run("delete: "+tc.name, func(t *testing.T) {
 			client, _ := routedClient(t, tc.routes...)
-			h := newCRUDHarness(t, NewBucketDurabilityRessource(), client)
+			h := newCRUDHarness(t, NewBucketDurabilityResource(), client)
 
 			resp := h.delete(durabilityLifecycleModel())
 
@@ -174,7 +174,7 @@ func TestBucketDurabilityRessourceLifecyclePaths(t *testing.T) {
 	for _, tc := range createCases {
 		t.Run("create: "+tc.name, func(t *testing.T) {
 			client, _ := routedClient(t, tc.routes...)
-			h := newCRUDHarness(t, NewBucketDurabilityRessource(), client)
+			h := newCRUDHarness(t, NewBucketDurabilityResource(), client)
 			plan := durabilityLifecycleModel()
 
 			resp := h.create(plan)
@@ -186,7 +186,7 @@ func TestBucketDurabilityRessourceLifecyclePaths(t *testing.T) {
 
 	t.Run("create: accepted override writes the normalized mode", func(t *testing.T) {
 		client, _ := routedClient(t, requestRoute{status: http.StatusOK, body: `{"bucket":"tf-test","mode":"strict"}`})
-		h := newCRUDHarness(t, NewBucketDurabilityRessource(), client)
+		h := newCRUDHarness(t, NewBucketDurabilityResource(), client)
 
 		resp := h.create(durabilityLifecycleModel())
 
@@ -196,7 +196,7 @@ func TestBucketDurabilityRessourceLifecyclePaths(t *testing.T) {
 
 	t.Run("update: rejected change reports a diagnostic and keeps the prior state", func(t *testing.T) {
 		client, _ := routedClient(t, requestRoute{status: http.StatusInternalServerError, body: s3ErrorXML("InternalError", "update exploded")})
-		h := newCRUDHarness(t, NewBucketDurabilityRessource(), client)
+		h := newCRUDHarness(t, NewBucketDurabilityResource(), client)
 
 		plan := durabilityLifecycleModel()
 		plan.Mode = types.StringValue("relaxed")
@@ -209,7 +209,7 @@ func TestBucketDurabilityRessourceLifecyclePaths(t *testing.T) {
 	})
 
 	t.Run("configure: rejects foreign provider data", func(t *testing.T) {
-		h := newCRUDHarness(t, NewBucketDurabilityRessource(), cannedClient(t, http.StatusOK, ""))
+		h := newCRUDHarness(t, NewBucketDurabilityResource(), cannedClient(t, http.StatusOK, ""))
 
 		resp := h.configure("not-a-client")
 

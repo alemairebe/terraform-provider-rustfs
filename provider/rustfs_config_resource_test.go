@@ -303,7 +303,7 @@ func testAccMutateConfigOutOfBand(scope, key, value string) resource.TestCheckFu
 }
 
 // Migrated from main's read/delete/create error-path work.
-func TestConfigRessourceLifecyclePaths(t *testing.T) {
+func TestConfigResourceLifecyclePaths(t *testing.T) {
 	t.Parallel()
 
 	readCases := []struct {
@@ -350,9 +350,9 @@ func TestConfigRessourceLifecyclePaths(t *testing.T) {
 	for _, tc := range readCases {
 		t.Run("read: "+tc.name, func(t *testing.T) {
 			client, _ := routedClient(t, tc.routes...)
-			h := newCRUDHarness(t, NewConfigRessource(), client)
+			h := newCRUDHarness(t, NewConfigResource(), client)
 
-			resp := h.read(&ConfigRessourceModel{SubSystem: types.StringValue("tf-test"), Settings: nullStringMap()})
+			resp := h.read(&ConfigResourceModel{SubSystem: types.StringValue("tf-test"), Settings: nullStringMap()})
 
 			if tc.wantRemoved {
 				requireNoDiagnostics(t, resp.Diagnostics)
@@ -394,9 +394,9 @@ func TestConfigRessourceLifecyclePaths(t *testing.T) {
 	for _, tc := range deleteCases {
 		t.Run("delete: "+tc.name, func(t *testing.T) {
 			client, _ := routedClient(t, tc.routes...)
-			h := newCRUDHarness(t, NewConfigRessource(), client)
+			h := newCRUDHarness(t, NewConfigResource(), client)
 
-			resp := h.delete(&ConfigRessourceModel{SubSystem: types.StringValue("tf-test"), Settings: nullStringMap()})
+			resp := h.delete(&ConfigResourceModel{SubSystem: types.StringValue("tf-test"), Settings: nullStringMap()})
 
 			if tc.wantSummary == "" {
 				requireNoDiagnostics(t, resp.Diagnostics)
@@ -423,8 +423,8 @@ func TestConfigRessourceLifecyclePaths(t *testing.T) {
 	for _, tc := range createCases {
 		t.Run("create: "+tc.name, func(t *testing.T) {
 			client, _ := routedClient(t, tc.routes...)
-			h := newCRUDHarness(t, NewConfigRessource(), client)
-			plan := &ConfigRessourceModel{
+			h := newCRUDHarness(t, NewConfigResource(), client)
+			plan := &ConfigResourceModel{
 				SubSystem: types.StringValue("tf-test"),
 				Settings:  types.MapValueMust(types.StringType, map[string]attr.Value{"enable": types.StringValue("on")}),
 			}
@@ -453,8 +453,8 @@ func TestConfigRessourceLifecyclePaths(t *testing.T) {
 	for _, tc := range updateCases {
 		t.Run("update: "+tc.name, func(t *testing.T) {
 			client, _ := routedClient(t, tc.routes...)
-			h := newCRUDHarness(t, NewConfigRessource(), client)
-			plan := &ConfigRessourceModel{
+			h := newCRUDHarness(t, NewConfigResource(), client)
+			plan := &ConfigResourceModel{
 				SubSystem: types.StringValue("tf-test"),
 				Settings:  types.MapValueMust(types.StringType, map[string]attr.Value{"enable": types.StringValue("on")}),
 			}
@@ -466,7 +466,7 @@ func TestConfigRessourceLifecyclePaths(t *testing.T) {
 	}
 
 	t.Run("configure: rejects foreign provider data", func(t *testing.T) {
-		h := newCRUDHarness(t, NewConfigRessource(), cannedClient(t, http.StatusOK, ""))
+		h := newCRUDHarness(t, NewConfigResource(), cannedClient(t, http.StatusOK, ""))
 
 		resp := h.configure("not-a-client")
 

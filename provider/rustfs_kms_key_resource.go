@@ -23,21 +23,21 @@ import (
 
 // Ensure the implementation satisfies the expected interfaces.
 var (
-	_ resource.Resource                = &kmsKeyRessource{}
-	_ resource.ResourceWithImportState = &kmsKeyRessource{}
+	_ resource.Resource                = &kmsKeyResource{}
+	_ resource.ResourceWithImportState = &kmsKeyResource{}
 )
 
-// NewKmsKeyRessource is a helper function to simplify the provider implementation.
-func NewKmsKeyRessource() resource.Resource {
-	return &kmsKeyRessource{}
+// NewKmsKeyResource is a helper function to simplify the provider implementation.
+func NewKmsKeyResource() resource.Resource {
+	return &kmsKeyResource{}
 }
 
-// kmsKeyRessource is the resource implementation.
-type kmsKeyRessource struct {
+// kmsKeyResource is the resource implementation.
+type kmsKeyResource struct {
 	client *AllClient
 }
 
-type kmsKeyRessourceModel struct {
+type kmsKeyResourceModel struct {
 	Name        types.String `tfsdk:"name"`
 	KeyID       types.String `tfsdk:"key_id"`
 	CreatedAt   types.String `tfsdk:"created_at"`
@@ -46,12 +46,12 @@ type kmsKeyRessourceModel struct {
 }
 
 // Metadata returns the resource type name.
-func (r *kmsKeyRessource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
+func (r *kmsKeyResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
 	resp.TypeName = req.ProviderTypeName + "_kms_key"
 }
 
 // Schema defines the schema for the resource.
-func (r *kmsKeyRessource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
+func (r *kmsKeyResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		Description:         "Manage RustFS KMS master keys",
 		MarkdownDescription: "Manage RustFS KMS master keys. Deleting a KMS master key is **critical and irreversible**: it schedules the destruction of the key material and makes every object encrypted under the key permanently unreadable. Guard the key with `skip_destroy = true`.",
@@ -85,7 +85,7 @@ func (r *kmsKeyRessource) Schema(_ context.Context, _ resource.SchemaRequest, re
 	}
 }
 
-func (r *kmsKeyRessource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
+func (r *kmsKeyResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	if req.ProviderData == nil {
 		return
 	}
@@ -101,8 +101,8 @@ func (r *kmsKeyRessource) Configure(_ context.Context, req resource.ConfigureReq
 }
 
 // Create creates the KMS key and sets the initial Terraform state.
-func (r *kmsKeyRessource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
-	var plan kmsKeyRessourceModel
+func (r *kmsKeyResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+	var plan kmsKeyResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -133,8 +133,8 @@ func (r *kmsKeyRessource) Create(ctx context.Context, req resource.CreateRequest
 }
 
 // Read refreshes the Terraform state with the latest data.
-func (r *kmsKeyRessource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
-	var state kmsKeyRessourceModel
+func (r *kmsKeyResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+	var state kmsKeyResourceModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -195,7 +195,7 @@ func isKmsKeyNotFound(err error) bool {
 // when the state does not yet carry one (import path). On the Local dev
 // backend the key id equals the name; on production backends the key created
 // through this provider carries a `name` tag that the listing exposes.
-func (r *kmsKeyRessource) resolveKeyID(ctx context.Context, name string, resp *resource.ReadResponse) string {
+func (r *kmsKeyResource) resolveKeyID(ctx context.Context, name string, resp *resource.ReadResponse) string {
 	keys, err := r.client.RustClient.ListKmsKeys()
 	if err != nil {
 		resp.Diagnostics.AddError(
@@ -214,8 +214,8 @@ func (r *kmsKeyRessource) resolveKeyID(ctx context.Context, name string, resp *r
 }
 
 // Update enables or disables the key and updates the Terraform state on success.
-func (r *kmsKeyRessource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var plan, state kmsKeyRessourceModel
+func (r *kmsKeyResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	var plan, state kmsKeyResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
@@ -249,8 +249,8 @@ func (r *kmsKeyRessource) Update(ctx context.Context, req resource.UpdateRequest
 }
 
 // Delete irreversibly deletes the KMS key unless skip_destroy is set.
-func (r *kmsKeyRessource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
-	var state kmsKeyRessourceModel
+func (r *kmsKeyResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+	var state kmsKeyResourceModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -279,6 +279,6 @@ func (r *kmsKeyRessource) Delete(ctx context.Context, req resource.DeleteRequest
 	}
 }
 
-func (r *kmsKeyRessource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+func (r *kmsKeyResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	resource.ImportStatePassthroughID(ctx, path.Root("name"), req, resp)
 }

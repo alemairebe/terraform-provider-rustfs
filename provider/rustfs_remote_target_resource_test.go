@@ -199,8 +199,8 @@ func peerServiceAccount(t *testing.T, peer *remoteTargetPeer, accessKey, secretK
 	})
 }
 
-func TestRemoteTargetRessourceSchema(t *testing.T) {
-	r := NewRemoteTargetRessource()
+func TestRemoteTargetResourceSchema(t *testing.T) {
+	r := NewRemoteTargetResource()
 	resp := &fwresource.SchemaResponse{}
 	r.Schema(context.Background(), fwresource.SchemaRequest{}, resp)
 	if resp.Diagnostics.HasError() {
@@ -227,8 +227,8 @@ func TestRemoteTargetRessourceSchema(t *testing.T) {
 	}
 }
 
-func TestRemoteTargetRessourceImportStateRejectsMalformedID(t *testing.T) {
-	r, ok := NewRemoteTargetRessource().(fwresource.ResourceWithImportState)
+func TestRemoteTargetResourceImportStateRejectsMalformedID(t *testing.T) {
+	r, ok := NewRemoteTargetResource().(fwresource.ResourceWithImportState)
 	if !ok {
 		t.Fatal("remote target resource does not implement ResourceWithImportState")
 	}
@@ -463,7 +463,7 @@ var (
 	lifecycleRemoteTargetSecretKey = unitTestCredential("RUSTFS_TEST_REMOTE_SECRET_KEY", 'o')
 )
 
-// TestRemoteTargetRessourceLifecyclePaths covers the paths the acceptance suite
+// TestRemoteTargetResourceLifecyclePaths covers the paths the acceptance suite
 // cannot reach with a live server: a target that disappeared behind
 // Terraform's back, a destroy that arrives after the target (or its whole
 // source bucket) is already gone, and every failing API call in Create, Read
@@ -473,7 +473,7 @@ var (
 // list-remote-targets and remove-remote-target for a bucket that does not
 // exist both answer 404 NoSuchBucket, so a missing source bucket is the
 // provider's missing-target signal for this resource.
-func TestRemoteTargetRessourceLifecyclePaths(t *testing.T) {
+func TestRemoteTargetResourceLifecyclePaths(t *testing.T) {
 	t.Parallel()
 
 	readCases := []struct {
@@ -514,9 +514,9 @@ func TestRemoteTargetRessourceLifecyclePaths(t *testing.T) {
 	for _, tc := range readCases {
 		t.Run("read: "+tc.name, func(t *testing.T) {
 			client, _ := routedClient(t, tc.routes...)
-			h := newCRUDHarness(t, NewRemoteTargetRessource(), client)
+			h := newCRUDHarness(t, NewRemoteTargetResource(), client)
 
-			resp := h.read(&RemoteTargetRessourceModel{
+			resp := h.read(&RemoteTargetResourceModel{
 				Bucket: types.StringValue("tf-test"),
 				Arn:    types.StringValue("arn:rustfs:replication::tf-test"),
 			})
@@ -536,9 +536,9 @@ func TestRemoteTargetRessourceLifecyclePaths(t *testing.T) {
 			method: http.MethodGet, pathContains: "list-remote-targets", status: http.StatusOK,
 			body: `[{"arn":"arn:rustfs:replication::tf-test","type":"replication","endpoint":"http://peer:9000","secure":false,"targetbucket":"dst-bucket","credentials":{"accessKey":"ak","secretKey":"sk"}}]`,
 		})
-		h := newCRUDHarness(t, NewRemoteTargetRessource(), client)
+		h := newCRUDHarness(t, NewRemoteTargetResource(), client)
 
-		resp := h.read(&RemoteTargetRessourceModel{
+		resp := h.read(&RemoteTargetResourceModel{
 			Bucket: types.StringValue("tf-test"),
 			Arn:    types.StringValue("arn:rustfs:replication::tf-test"),
 		})
@@ -584,9 +584,9 @@ func TestRemoteTargetRessourceLifecyclePaths(t *testing.T) {
 	for _, tc := range deleteCases {
 		t.Run("delete: "+tc.name, func(t *testing.T) {
 			client, _ := routedClient(t, tc.routes...)
-			h := newCRUDHarness(t, NewRemoteTargetRessource(), client)
+			h := newCRUDHarness(t, NewRemoteTargetResource(), client)
 
-			resp := h.delete(&RemoteTargetRessourceModel{
+			resp := h.delete(&RemoteTargetResourceModel{
 				Bucket: types.StringValue("tf-test"),
 				Arn:    types.StringValue("arn:rustfs:replication::tf-test"),
 			})
@@ -602,7 +602,7 @@ func TestRemoteTargetRessourceLifecyclePaths(t *testing.T) {
 	createCases := []struct {
 		name        string
 		routes      []requestRoute
-		plan        *RemoteTargetRessourceModel
+		plan        *RemoteTargetResourceModel
 		wantSummary string
 		wantDetail  string
 	}{
@@ -633,7 +633,7 @@ func TestRemoteTargetRessourceLifecyclePaths(t *testing.T) {
 	for _, tc := range createCases {
 		t.Run("create: "+tc.name, func(t *testing.T) {
 			client, rec := routedClient(t, tc.routes...)
-			h := newCRUDHarness(t, NewRemoteTargetRessource(), client)
+			h := newCRUDHarness(t, NewRemoteTargetResource(), client)
 
 			resp := h.create(tc.plan)
 
@@ -644,7 +644,7 @@ func TestRemoteTargetRessourceLifecyclePaths(t *testing.T) {
 	}
 
 	t.Run("configure: rejects foreign provider data", func(t *testing.T) {
-		h := newCRUDHarness(t, NewRemoteTargetRessource(), cannedClient(t, http.StatusOK, ""))
+		h := newCRUDHarness(t, NewRemoteTargetResource(), cannedClient(t, http.StatusOK, ""))
 
 		resp := h.configure("not-a-client")
 
@@ -654,8 +654,8 @@ func TestRemoteTargetRessourceLifecyclePaths(t *testing.T) {
 
 // remoteTargetPlan builds a complete remote-target plan: endpoint, access_key,
 // secret_key, bucket and target_bucket are required by the schema.
-func remoteTargetPlan(bucket, targetType string) *RemoteTargetRessourceModel {
-	return &RemoteTargetRessourceModel{
+func remoteTargetPlan(bucket, targetType string) *RemoteTargetResourceModel {
+	return &RemoteTargetResourceModel{
 		Type:         types.StringValue(targetType),
 		Endpoint:     types.StringValue("http://peer:9000"),
 		AccessKey:    types.StringValue(lifecycleRemoteTargetAccessKey),

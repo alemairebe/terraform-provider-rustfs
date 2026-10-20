@@ -95,7 +95,7 @@ provider/                      flat package `provider`
   provider.go                  schema, Configure, Resources(), DataSources()
   all_client.go                AllClient{S3, RustClient}
   helper.go                    env resolution, model helpers
-  rustfs_<name>_resource.go    one resource per file (legacy spelling: _ressource.go)
+  rustfs_<name>_resource.go    one resource per file
   rustfs_<name>_datasource.go  one data source per file (legacy: _data_source.go)
   *_test.go                    schema/metadata unit tests + TestAcc* acceptance tests
 pkg/rustfs/                    admin API client, one file per API area

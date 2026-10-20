@@ -19,29 +19,29 @@ import (
 )
 
 var (
-	_ resource.Resource                = &ConfigRessource{}
-	_ resource.ResourceWithImportState = &ConfigRessource{}
+	_ resource.Resource                = &ConfigResource{}
+	_ resource.ResourceWithImportState = &ConfigResource{}
 )
 
-type ConfigRessourceModel struct {
+type ConfigResourceModel struct {
 	SubSystem types.String `tfsdk:"sub_system"`
 	Settings  types.Map    `tfsdk:"settings"`
 	ID        types.String `tfsdk:"id"`
 }
 
-func NewConfigRessource() resource.Resource {
-	return &ConfigRessource{}
+func NewConfigResource() resource.Resource {
+	return &ConfigResource{}
 }
 
-type ConfigRessource struct {
+type ConfigResource struct {
 	client *AllClient
 }
 
-func (r *ConfigRessource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
+func (r *ConfigResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
 	resp.TypeName = req.ProviderTypeName + "_config"
 }
 
-func (r *ConfigRessource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
+func (r *ConfigResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		Description:         "Manage server sub-system configuration (config-kv)",
 		MarkdownDescription: "Manage server sub-system configuration (config-kv), the `mc admin config` equivalent. Each resource manages one sub-system scope.",
@@ -66,7 +66,7 @@ func (r *ConfigRessource) Schema(_ context.Context, _ resource.SchemaRequest, re
 	}
 }
 
-func (r *ConfigRessource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
+func (r *ConfigResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	if req.ProviderData == nil {
 		return
 	}
@@ -132,8 +132,8 @@ func configScopeGone(err error) bool {
 	return false
 }
 
-func (r *ConfigRessource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
-	var plan ConfigRessourceModel
+func (r *ConfigResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+	var plan ConfigResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -156,8 +156,8 @@ func (r *ConfigRessource) Create(ctx context.Context, req resource.CreateRequest
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
-func (r *ConfigRessource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
-	var state ConfigRessourceModel
+func (r *ConfigResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+	var state ConfigResourceModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -187,8 +187,8 @@ func (r *ConfigRessource) Read(ctx context.Context, req resource.ReadRequest, re
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
-func (r *ConfigRessource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var plan ConfigRessourceModel
+func (r *ConfigResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	var plan ConfigResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -211,8 +211,8 @@ func (r *ConfigRessource) Update(ctx context.Context, req resource.UpdateRequest
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
-func (r *ConfigRessource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
-	var data ConfigRessourceModel
+func (r *ConfigResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+	var data ConfigResourceModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -232,6 +232,6 @@ func (r *ConfigRessource) Delete(ctx context.Context, req resource.DeleteRequest
 	}
 }
 
-func (r *ConfigRessource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+func (r *ConfigResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	resource.ImportStatePassthroughID(ctx, path.Root("sub_system"), req, resp)
 }

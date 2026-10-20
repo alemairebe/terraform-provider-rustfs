@@ -18,29 +18,29 @@ Registry address: `registry.terraform.io/caberdo/rustfs`.
 | `rustfs_ldap_service_account` | `provider/rustfs_ldap_service_account_resource.go` | Service accounts scoped to an LDAP user |
 | `rustfs_bucket` | `provider/rustfs_bucket_resource.go` | S3 buckets |
 | `rustfs_quota` | `provider/rustfs_quota_resource.go` | Per-bucket quota limits |
-| `rustfs_user_policy_attachment` | `provider/rustfs_user_policy_attachment_ressource.go` | Canned policy on an IAM user |
+| `rustfs_user_policy_attachment` | `provider/rustfs_user_policy_attachment_resource.go` | Canned policy on an IAM user |
 | `rustfs_group_policy_attachment` | `provider/rustfs_group_policy_attachment_resource.go` | Canned policy on an IAM group |
-| `rustfs_ldap_policy_attachment` | `provider/rustfs_ldap_policy_attachment_ressource.go` | Canned policy on an LDAP user/group |
-| `rustfs_bucket_policy` | `provider/rustfs_bucket_policy_ressource.go` | Raw S3 bucket policy document |
-| `rustfs_bucket_public_access_block` | `provider/rustfs_bucket_public_access_block_ressource.go` | Block-public-access configuration |
-| `rustfs_bucket_tags` | `provider/rustfs_bucket_tags_ressource.go` | Bucket tags |
-| `rustfs_bucket_cors` | `provider/rustfs_bucket_cors_ressource.go` | Bucket CORS rules |
+| `rustfs_ldap_policy_attachment` | `provider/rustfs_ldap_policy_attachment_resource.go` | Canned policy on an LDAP user/group |
+| `rustfs_bucket_policy` | `provider/rustfs_bucket_policy_resource.go` | Raw S3 bucket policy document |
+| `rustfs_bucket_public_access_block` | `provider/rustfs_bucket_public_access_block_resource.go` | Block-public-access configuration |
+| `rustfs_bucket_tags` | `provider/rustfs_bucket_tags_resource.go` | Bucket tags |
+| `rustfs_bucket_cors` | `provider/rustfs_bucket_cors_resource.go` | Bucket CORS rules |
 | `rustfs_bucket_versioning` | `provider/rustfs_bucket_versioning_resource.go` | Bucket versioning |
 | `rustfs_bucket_object_lock` | `provider/rustfs_bucket_object_lock_resource.go` | Object lock / retention |
 | `rustfs_bucket_encryption` | `provider/rustfs_bucket_encryption_resource.go` | SSE-S3 / SSE-KMS encryption |
 | `rustfs_bucket_lifecycle_configuration` | `provider/rustfs_bucket_lifecycle_configuration_resource.go` | Lifecycle rules |
 | `rustfs_bucket_notification` | `provider/rustfs_bucket_notification_resource.go` | Event notification targets |
 | `rustfs_bucket_replication` | `provider/rustfs_bucket_replication_resource.go` | Cross-bucket replication |
-| `rustfs_bucket_durability` | `provider/rustfs_bucket_durability_ressource.go` | Per-bucket durability override |
-| `rustfs_site_replication` | `provider/rustfs_site_replication_ressource.go` | Site-replication peers |
-| `rustfs_remote_target` | `provider/rustfs_remote_target_ressource.go` | Remote replication/notification targets |
+| `rustfs_bucket_durability` | `provider/rustfs_bucket_durability_resource.go` | Per-bucket durability override |
+| `rustfs_site_replication` | `provider/rustfs_site_replication_resource.go` | Site-replication peers |
+| `rustfs_remote_target` | `provider/rustfs_remote_target_resource.go` | Remote replication/notification targets |
 | `rustfs_rebalance` | `provider/rustfs_rebalance_resource.go` | Pool rebalancing |
 | `rustfs_group` | `provider/rustfs_group_resource.go` | IAM groups with members |
 | `rustfs_tier` | `provider/rustfs_tier_resource.go` | Storage tiers (S3, Azure, GCS, …) |
-| `rustfs_kms_key` | `provider/rustfs_kms_key_ressource.go` | KMS master keys |
-| `rustfs_config` | `provider/rustfs_config_ressource.go` | Server sub-system configuration (config-kv) |
-| `rustfs_module_switch` | `provider/rustfs_module_switch_ressource.go` | Feature module switches |
-| `rustfs_audit_target` | `provider/rustfs_audit_target_ressource.go` | Audit-log targets (webhook, kafka, amqp, mqtt, mysql, nats, postgres, pulsar, redis) |
+| `rustfs_kms_key` | `provider/rustfs_kms_key_resource.go` | KMS master keys |
+| `rustfs_config` | `provider/rustfs_config_resource.go` | Server sub-system configuration (config-kv) |
+| `rustfs_module_switch` | `provider/rustfs_module_switch_resource.go` | Feature module switches |
+| `rustfs_audit_target` | `provider/rustfs_audit_target_resource.go` | Audit-log targets (webhook, kafka, amqp, mqtt, mysql, nats, postgres, pulsar, redis) |
 | `rustfs_notification_target` | `provider/rustfs_notification_target_resource.go` | Event-notification targets (webhook, amqp, kafka, mqtt, nats, postgres, mysql, redis, pulsar) |
 | `rustfs_iam_backup_import` | `provider/rustfs_iam_backup_import_resource.go` | IAM import from backup |
 | `rustfs_bucket_metadata_backup_import` | `provider/rustfs_bucket_metadata_backup_import_resource.go` | Bucket metadata import from backup |
@@ -77,7 +77,7 @@ provider/                     # flat package `provider`
 ├── provider.go               # provider schema, Configure, Resources(), DataSources()
 ├── all_client.go             # AllClient{S3 *s3.Client, RustClient rustfs.RustfsAdmin}
 ├── helper.go                 # envOrDefault, secret_key/access_secret resolution
-├── rustfs_<name>_resource.go # resource (legacy spelling: _ressource.go)
+├── rustfs_<name>_resource.go # resource
 ├── rustfs_<name>_datasource.go # data source (legacy spelling: _data_source.go)
 └── *_test.go                 # schema/metadata unit tests + TestAcc* acceptance tests
 pkg/rustfs/                   # RustFS admin API client (package `rustfs`)

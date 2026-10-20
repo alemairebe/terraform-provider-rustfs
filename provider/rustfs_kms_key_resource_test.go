@@ -288,8 +288,8 @@ func newKmsKeyAccClient() *rustfs.RustfsAdmin {
 // kmsKeyLifecycleModel is a plan/state value with every attribute set; the
 // computed key_id and created_at carry the values a previous apply would have
 // stored.
-func kmsKeyLifecycleModel() *kmsKeyRessourceModel {
-	return &kmsKeyRessourceModel{
+func kmsKeyLifecycleModel() *kmsKeyResourceModel {
+	return &kmsKeyResourceModel{
 		Name:        types.StringValue("tf-key"),
 		KeyID:       types.StringValue("key-1"),
 		CreatedAt:   types.StringValue("2026-01-01T00:00:00Z"),
@@ -304,7 +304,7 @@ func kmsKeyResponse(keyID, state, created string) string {
 	return fmt.Sprintf(`{"success":true,"key_metadata":{"key_id":%q,"key_state":%q,"key_usage":"ENCRYPT_DECRYPT","creation_date":%q,"origin":"RustFS_KMS","key_manager":"CUSTOMER"}}`, keyID, state, created)
 }
 
-// TestKmsKeyRessourceLifecyclePaths covers the paths the acceptance suite
+// TestKmsKeyResourceLifecyclePaths covers the paths the acceptance suite
 // cannot reach with a live server: a key that disappeared behind Terraform's
 // back, a delete that arrives after the key is already gone, and every failing
 // API call in Create, Read and Delete.
@@ -312,12 +312,12 @@ func kmsKeyResponse(keyID, state, created string) string {
 // The KMS service was not running on the probe host (GET kms/status answered
 // 500 InternalError "KMS service not initialized"), so these cases drive the
 // paths from canned responses in the shape pkg/rustfs/kms.go documents.
-func TestKmsKeyRessourceLifecyclePaths(t *testing.T) {
+func TestKmsKeyResourceLifecyclePaths(t *testing.T) {
 	t.Parallel()
 
 	readCases := []struct {
 		name        string
-		model       *kmsKeyRessourceModel
+		model       *kmsKeyResourceModel
 		routes      []requestRoute
 		wantRemoved bool
 		wantSummary string
@@ -346,20 +346,20 @@ func TestKmsKeyRessourceLifecyclePaths(t *testing.T) {
 		{
 			// Import path: no key_id in state, so the listing resolves one.
 			name:        "import with no key id resolves the listing and is removed when unmatched",
-			model:       &kmsKeyRessourceModel{Name: types.StringValue("tf-key"), KeyID: types.StringNull(), CreatedAt: types.StringNull(), Enabled: types.BoolValue(true), SkipDestroy: types.BoolValue(false)},
+			model:       &kmsKeyResourceModel{Name: types.StringValue("tf-key"), KeyID: types.StringNull(), CreatedAt: types.StringNull(), Enabled: types.BoolValue(true), SkipDestroy: types.BoolValue(false)},
 			routes:      []requestRoute{{status: http.StatusOK, body: `{"success":true,"keys":[]}`}},
 			wantRemoved: true,
 		},
 		{
 			name:        "import with no key id reports a failed listing",
-			model:       &kmsKeyRessourceModel{Name: types.StringValue("tf-key"), KeyID: types.StringNull(), CreatedAt: types.StringNull(), Enabled: types.BoolValue(true), SkipDestroy: types.BoolValue(false)},
+			model:       &kmsKeyResourceModel{Name: types.StringValue("tf-key"), KeyID: types.StringNull(), CreatedAt: types.StringNull(), Enabled: types.BoolValue(true), SkipDestroy: types.BoolValue(false)},
 			routes:      []requestRoute{{status: http.StatusForbidden, body: s3ErrorXML("AccessDenied", "nope")}},
 			wantSummary: "Error listing KMS keys",
 			wantDetail:  "Could not resolve key id from name, unexpected error: ",
 		},
 		{
 			name:  "import with no key id resolves the tagged key",
-			model: &kmsKeyRessourceModel{Name: types.StringValue("tf-key"), KeyID: types.StringNull(), CreatedAt: types.StringNull(), Enabled: types.BoolValue(true), SkipDestroy: types.BoolValue(false)},
+			model: &kmsKeyResourceModel{Name: types.StringValue("tf-key"), KeyID: types.StringNull(), CreatedAt: types.StringNull(), Enabled: types.BoolValue(true), SkipDestroy: types.BoolValue(false)},
 			routes: []requestRoute{
 				{method: http.MethodGet, pathContains: "kms/keys/key-9f3", status: http.StatusOK, body: kmsKeyResponse("key-9f3", "Enabled", "2026-03-03T00:00:00Z")},
 				{method: http.MethodGet, pathContains: "kms/keys", status: http.StatusOK, body: `{"success":true,"keys":[{"key_id":"key-9f3","tags":{"name":"tf-key"}}]}`},
@@ -371,7 +371,7 @@ func TestKmsKeyRessourceLifecyclePaths(t *testing.T) {
 	for _, tc := range readCases {
 		t.Run("read: "+tc.name, func(t *testing.T) {
 			client, _ := routedClient(t, tc.routes...)
-			h := newCRUDHarness(t, NewKmsKeyRessource(), client)
+			h := newCRUDHarness(t, NewKmsKeyResource(), client)
 
 			model := tc.model
 			if model == nil {
@@ -401,7 +401,7 @@ func TestKmsKeyRessourceLifecyclePaths(t *testing.T) {
 
 	deleteCases := []struct {
 		name        string
-		model       *kmsKeyRessourceModel
+		model       *kmsKeyResourceModel
 		routes      []requestRoute
 		wantSummary string
 		wantDetail  string
@@ -421,7 +421,7 @@ func TestKmsKeyRessourceLifecyclePaths(t *testing.T) {
 	for _, tc := range deleteCases {
 		t.Run("delete: "+tc.name, func(t *testing.T) {
 			client, _ := routedClient(t, tc.routes...)
-			h := newCRUDHarness(t, NewKmsKeyRessource(), client)
+			h := newCRUDHarness(t, NewKmsKeyResource(), client)
 
 			model := tc.model
 			if model == nil {
@@ -441,7 +441,7 @@ func TestKmsKeyRessourceLifecyclePaths(t *testing.T) {
 		// No route at all: any request the resource made would be unrouted and
 		// fail the test.
 		client, rec := routedClient(t)
-		h := newCRUDHarness(t, NewKmsKeyRessource(), client)
+		h := newCRUDHarness(t, NewKmsKeyResource(), client)
 		model := kmsKeyLifecycleModel()
 		model.SkipDestroy = types.BoolValue(true)
 
@@ -453,7 +453,7 @@ func TestKmsKeyRessourceLifecyclePaths(t *testing.T) {
 
 	t.Run("delete: successful destroy is silent", func(t *testing.T) {
 		client, rec := routedClient(t, requestRoute{status: http.StatusOK, body: `{"success":true}`})
-		h := newCRUDHarness(t, NewKmsKeyRessource(), client)
+		h := newCRUDHarness(t, NewKmsKeyResource(), client)
 
 		resp := h.delete(kmsKeyLifecycleModel())
 
@@ -463,7 +463,7 @@ func TestKmsKeyRessourceLifecyclePaths(t *testing.T) {
 
 	createCases := []struct {
 		name        string
-		model       *kmsKeyRessourceModel
+		model       *kmsKeyResourceModel
 		routes      []requestRoute
 		wantSummary string
 		wantDetail  string
@@ -476,7 +476,7 @@ func TestKmsKeyRessourceLifecyclePaths(t *testing.T) {
 		},
 		{
 			name: "failed disable of a new key is reported",
-			model: &kmsKeyRessourceModel{
+			model: &kmsKeyResourceModel{
 				Name:        types.StringValue("tf-key"),
 				KeyID:       types.StringNull(),
 				CreatedAt:   types.StringNull(),
@@ -495,7 +495,7 @@ func TestKmsKeyRessourceLifecyclePaths(t *testing.T) {
 	for _, tc := range createCases {
 		t.Run("create: "+tc.name, func(t *testing.T) {
 			client, _ := routedClient(t, tc.routes...)
-			h := newCRUDHarness(t, NewKmsKeyRessource(), client)
+			h := newCRUDHarness(t, NewKmsKeyResource(), client)
 
 			model := tc.model
 			if model == nil {
@@ -510,7 +510,7 @@ func TestKmsKeyRessourceLifecyclePaths(t *testing.T) {
 
 	t.Run("create: accepted key writes the server identity", func(t *testing.T) {
 		client, _ := routedClient(t, requestRoute{status: http.StatusOK, body: kmsKeyResponse("key-1", "Enabled", "2026-01-01T00:00:00Z")})
-		h := newCRUDHarness(t, NewKmsKeyRessource(), client)
+		h := newCRUDHarness(t, NewKmsKeyResource(), client)
 		plan := kmsKeyLifecycleModel()
 		plan.KeyID = types.StringNull()
 		plan.CreatedAt = types.StringNull()
@@ -524,7 +524,7 @@ func TestKmsKeyRessourceLifecyclePaths(t *testing.T) {
 
 	t.Run("update: rejected enable reports a diagnostic and keeps the prior state", func(t *testing.T) {
 		client, _ := routedClient(t, requestRoute{method: http.MethodPost, pathContains: "kms/keys/disable", status: http.StatusInternalServerError, body: s3ErrorXML("InternalError", "disable exploded")})
-		h := newCRUDHarness(t, NewKmsKeyRessource(), client)
+		h := newCRUDHarness(t, NewKmsKeyResource(), client)
 
 		plan := kmsKeyLifecycleModel()
 		plan.Enabled = types.BoolValue(false)
@@ -538,7 +538,7 @@ func TestKmsKeyRessourceLifecyclePaths(t *testing.T) {
 
 	t.Run("update: unchanged enable switch makes no request", func(t *testing.T) {
 		client, rec := routedClient(t)
-		h := newCRUDHarness(t, NewKmsKeyRessource(), client)
+		h := newCRUDHarness(t, NewKmsKeyResource(), client)
 		plan := kmsKeyLifecycleModel()
 		state := kmsKeyLifecycleModel()
 
@@ -549,7 +549,7 @@ func TestKmsKeyRessourceLifecyclePaths(t *testing.T) {
 	})
 
 	t.Run("configure: rejects foreign provider data", func(t *testing.T) {
-		h := newCRUDHarness(t, NewKmsKeyRessource(), cannedClient(t, http.StatusOK, ""))
+		h := newCRUDHarness(t, NewKmsKeyResource(), cannedClient(t, http.StatusOK, ""))
 
 		resp := h.configure("not-a-client")
 

@@ -22,17 +22,17 @@ import (
 
 // Ensure the implementation satisfies the expected interfaces.
 var (
-	_ resource.Resource                = &bucketTagsRessource{}
-	_ resource.ResourceWithImportState = &bucketTagsRessource{}
+	_ resource.Resource                = &bucketTagsResource{}
+	_ resource.ResourceWithImportState = &bucketTagsResource{}
 )
 
-// NewBucketTagsRessource is a helper function to simplify the provider implementation.
-func NewBucketTagsRessource() resource.Resource {
-	return &bucketTagsRessource{}
+// NewBucketTagsResource is a helper function to simplify the provider implementation.
+func NewBucketTagsResource() resource.Resource {
+	return &bucketTagsResource{}
 }
 
-// bucketTagsRessource is the resource implementation.
-type bucketTagsRessource struct {
+// bucketTagsResource is the resource implementation.
+type bucketTagsResource struct {
 	client *AllClient
 }
 
@@ -43,12 +43,12 @@ type bucketTagsModel struct {
 }
 
 // Metadata returns the resource type name.
-func (r *bucketTagsRessource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
+func (r *bucketTagsResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
 	resp.TypeName = req.ProviderTypeName + "_bucket_tags"
 }
 
 // Schema defines the schema for the resource.
-func (r *bucketTagsRessource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
+func (r *bucketTagsResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		Description:         "Manage the tags on an S3 bucket in rustfs",
 		MarkdownDescription: "Manage the tags on an S3 bucket in rustfs",
@@ -76,7 +76,7 @@ func (r *bucketTagsRessource) Schema(_ context.Context, _ resource.SchemaRequest
 	}
 }
 
-func (r *bucketTagsRessource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
+func (r *bucketTagsResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	if req.ProviderData == nil {
 		return
 	}
@@ -110,7 +110,7 @@ func buildBucketTagging(tags map[string]string) *s3types.Tagging {
 }
 
 // Create creates the resource and sets the initial Terraform state.
-func (r *bucketTagsRessource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+func (r *bucketTagsResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var plan bucketTagsModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
@@ -142,7 +142,7 @@ func (r *bucketTagsRessource) Create(ctx context.Context, req resource.CreateReq
 }
 
 // Read refreshes the Terraform state with the latest data.
-func (r *bucketTagsRessource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+func (r *bucketTagsResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
 	var state bucketTagsModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
@@ -181,7 +181,7 @@ func (r *bucketTagsRessource) Read(ctx context.Context, req resource.ReadRequest
 }
 
 // Update updates the resource and sets the updated Terraform state on success.
-func (r *bucketTagsRessource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+func (r *bucketTagsResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	var plan bucketTagsModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
@@ -211,7 +211,7 @@ func (r *bucketTagsRessource) Update(ctx context.Context, req resource.UpdateReq
 }
 
 // Delete deletes the resource and removes the Terraform state on success.
-func (r *bucketTagsRessource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+func (r *bucketTagsResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
 	var data bucketTagsModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
 	if resp.Diagnostics.HasError() {
@@ -233,6 +233,6 @@ func (r *bucketTagsRessource) Delete(ctx context.Context, req resource.DeleteReq
 	}
 }
 
-func (r *bucketTagsRessource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+func (r *bucketTagsResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	resource.ImportStatePassthroughID(ctx, path.Root("bucket"), req, resp)
 }

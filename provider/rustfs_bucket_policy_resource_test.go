@@ -22,8 +22,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
 )
 
-func TestBucketPolicyRessourceSchema(t *testing.T) {
-	r := NewBucketPolicyRessource()
+func TestBucketPolicyResourceSchema(t *testing.T) {
+	r := NewBucketPolicyResource()
 	req := frameworkresource.SchemaRequest{}
 	resp := frameworkresource.SchemaResponse{}
 	r.Schema(context.Background(), req, &resp)
@@ -334,7 +334,7 @@ func testAccDeleteBucketPolicyOutOfBand(t *testing.T, bucket string) resource.Te
 }
 
 // Migrated from main's read/delete/create error-path work.
-func TestBucketPolicyRessourceLifecyclePaths(t *testing.T) {
+func TestBucketPolicyResourceLifecyclePaths(t *testing.T) {
 	t.Parallel()
 
 	validPolicy := `{"Version":"2012-10-17","Statement":[]}`
@@ -377,7 +377,7 @@ func TestBucketPolicyRessourceLifecyclePaths(t *testing.T) {
 	for _, tc := range readCases {
 		t.Run("read: "+tc.name, func(t *testing.T) {
 			client, _ := routedClient(t, tc.routes...)
-			h := newCRUDHarness(t, NewBucketPolicyRessource(), client)
+			h := newCRUDHarness(t, NewBucketPolicyResource(), client)
 
 			resp := h.read(&bucketPolicyModel{Bucket: types.StringValue("tf-test"), Policy: types.StringValue(validPolicy)})
 
@@ -416,7 +416,7 @@ func TestBucketPolicyRessourceLifecyclePaths(t *testing.T) {
 	for _, tc := range deleteCases {
 		t.Run("delete: "+tc.name, func(t *testing.T) {
 			client, _ := routedClient(t, tc.routes...)
-			h := newCRUDHarness(t, NewBucketPolicyRessource(), client)
+			h := newCRUDHarness(t, NewBucketPolicyResource(), client)
 
 			resp := h.delete(&bucketPolicyModel{Bucket: types.StringValue("tf-test"), Policy: types.StringValue(validPolicy)})
 
@@ -455,7 +455,7 @@ func TestBucketPolicyRessourceLifecyclePaths(t *testing.T) {
 	for _, tc := range createCases {
 		t.Run("create: "+tc.name, func(t *testing.T) {
 			client, _ := routedClient(t, tc.routes...)
-			h := newCRUDHarness(t, NewBucketPolicyRessource(), client)
+			h := newCRUDHarness(t, NewBucketPolicyResource(), client)
 			plan := &bucketPolicyModel{Bucket: types.StringValue("tf-test"), Policy: types.StringValue(tc.policy)}
 
 			resp := h.create(plan)
@@ -468,7 +468,7 @@ func TestBucketPolicyRessourceLifecyclePaths(t *testing.T) {
 
 	t.Run("update: malformed policy document is reported", func(t *testing.T) {
 		client, _ := routedClient(t, requestRoute{method: http.MethodPut, status: http.StatusBadRequest, body: s3ErrorXML("MalformedPolicy", "Policies must be valid JSON")})
-		h := newCRUDHarness(t, NewBucketPolicyRessource(), client)
+		h := newCRUDHarness(t, NewBucketPolicyResource(), client)
 
 		resp := h.update(
 			&bucketPolicyModel{Bucket: types.StringValue("tf-test"), Policy: types.StringValue(malformedPolicy)},
@@ -479,7 +479,7 @@ func TestBucketPolicyRessourceLifecyclePaths(t *testing.T) {
 	})
 
 	t.Run("configure: rejects foreign provider data", func(t *testing.T) {
-		h := newCRUDHarness(t, NewBucketPolicyRessource(), cannedClient(t, http.StatusOK, ""))
+		h := newCRUDHarness(t, NewBucketPolicyResource(), cannedClient(t, http.StatusOK, ""))
 
 		resp := h.configure("not-a-client")
 

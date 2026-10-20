@@ -28,15 +28,15 @@ import (
 )
 
 var (
-	_ resource.Resource                = &bucketCorsRessource{}
-	_ resource.ResourceWithImportState = &bucketCorsRessource{}
+	_ resource.Resource                = &bucketCorsResource{}
+	_ resource.ResourceWithImportState = &bucketCorsResource{}
 )
 
-func NewBucketCorsRessource() resource.Resource {
-	return &bucketCorsRessource{}
+func NewBucketCorsResource() resource.Resource {
+	return &bucketCorsResource{}
 }
 
-type bucketCorsRessource struct {
+type bucketCorsResource struct {
 	client *AllClient
 }
 
@@ -55,11 +55,11 @@ type corsRuleModel struct {
 	Id             types.String `tfsdk:"id"`
 }
 
-func (r *bucketCorsRessource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
+func (r *bucketCorsResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
 	resp.TypeName = req.ProviderTypeName + "_bucket_cors"
 }
 
-func (r *bucketCorsRessource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
+func (r *bucketCorsResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		Description:         "Manage the CORS configuration of an S3 bucket in rustfs",
 		MarkdownDescription: "Manage the CORS configuration of an S3 bucket in rustfs",
@@ -122,7 +122,7 @@ func (r *bucketCorsRessource) Schema(_ context.Context, _ resource.SchemaRequest
 	}
 }
 
-func (r *bucketCorsRessource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
+func (r *bucketCorsResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	if req.ProviderData == nil {
 		return
 	}
@@ -235,7 +235,7 @@ func flattenCorsRules(rules []s3types.CORSRule) []corsRuleModel {
 	return out
 }
 
-func (r *bucketCorsRessource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+func (r *bucketCorsResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var plan bucketCorsModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
@@ -260,7 +260,7 @@ func (r *bucketCorsRessource) Create(ctx context.Context, req resource.CreateReq
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
-func (r *bucketCorsRessource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+func (r *bucketCorsResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
 	var state bucketCorsModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
@@ -287,7 +287,7 @@ func (r *bucketCorsRessource) Read(ctx context.Context, req resource.ReadRequest
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
-func (r *bucketCorsRessource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+func (r *bucketCorsResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	var plan bucketCorsModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
@@ -310,7 +310,7 @@ func (r *bucketCorsRessource) Update(ctx context.Context, req resource.UpdateReq
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
-func (r *bucketCorsRessource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+func (r *bucketCorsResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
 	var data bucketCorsModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
 	if resp.Diagnostics.HasError() {
@@ -331,6 +331,6 @@ func (r *bucketCorsRessource) Delete(ctx context.Context, req resource.DeleteReq
 	}
 }
 
-func (r *bucketCorsRessource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+func (r *bucketCorsResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	resource.ImportStatePassthroughID(ctx, path.Root("bucket"), req, resp)
 }
