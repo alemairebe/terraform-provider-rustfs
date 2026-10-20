@@ -49,6 +49,7 @@ Registry address: `registry.terraform.io/caberdo/rustfs`.
 | `rustfs_oidc_provider` | `provider/rustfs_oidc_provider_resource.go` | OIDC identity providers for Console SSO |
 | `rustfs_bucket_recovery` | `provider/rustfs_bucket_recovery_resource.go` | Generation-fenced recovery of an orphaned bucket |
 | `rustfs_tls_certificate` | `provider/rustfs_tls_certificate_resource.go` | Published TLS certificate served by the default listener |
+| `rustfs_bucket_on_demand_migration` | `provider/rustfs_bucket_on_demand_migration_resource.go` | Lazy migration from an external S3 source |
 
 | Data Source | Go file | Returns |
 |---|---|---|
@@ -71,6 +72,7 @@ Registry address: `registry.terraform.io/caberdo/rustfs`.
 | `rustfs_kms_status` | `provider/rustfs_kms_status_datasource.go` | KMS service status |
 | `rustfs_oidc_config` | `provider/rustfs_oidc_config_datasource.go` | Effective OIDC provider configuration |
 | `rustfs_tls_certificate_state` | `provider/rustfs_tls_certificate_state_datasource.go` | Served TLS certificate and publication state |
+| `rustfs_bucket_on_demand_migration_status` | `provider/rustfs_bucket_on_demand_migration_status_datasource.go` | Per-node on-demand migration runtime status |
 
 `rustfs_quota` intentionally exists as both a resource and a data source. Terraform type names
 are part of the provider's public contract — never rename one (it breaks existing state); the

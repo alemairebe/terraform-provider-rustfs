@@ -25,6 +25,7 @@ var goldenResourceTypeNames = []string{
 	"rustfs_bucket_metadata_backup_import",
 	"rustfs_bucket_notification",
 	"rustfs_bucket_object_lock",
+	"rustfs_bucket_on_demand_migration",
 	"rustfs_bucket_policy",
 	"rustfs_bucket_public_access_block",
 	"rustfs_bucket_recovery",
@@ -58,6 +59,7 @@ var goldenResourceTypeNames = []string{
 // goldenDataSourceTypeNames is every data source the provider must register.
 var goldenDataSourceTypeNames = []string{
 	"rustfs_bucket_metadata_backup",
+	"rustfs_bucket_on_demand_migration_status",
 	"rustfs_groups",
 	"rustfs_health_info",
 	"rustfs_iam_backup",

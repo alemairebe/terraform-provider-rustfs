@@ -115,6 +115,7 @@ server version up front; it reports a capability gap when a route it needs is un
 | Orphaned bucket recovery — `POST /rustfs/admin/v3/recover-orphaned-bucket/{bucket}` | `rustfs_bucket_recovery` | ❌¹ | ✅ | ✅ |
 | TLS certificate publication — `POST /rustfs/admin/v3/tls/certificate` | `rustfs_tls_certificate` create | ❌ | ✅ | ✅ |
 | TLS certificate state — `GET /rustfs/admin/v3/tls/certificate-state` | `rustfs_tls_certificate` refresh, `rustfs_tls_certificate_state` data source | ❌ | ✅ | ✅ |
+| On-demand migration — `PUT`/`GET`/`DELETE /rustfs/admin/v3/on-demand-migration/{bucket}` and `GET …/{bucket}/status` | `rustfs_bucket_on_demand_migration` resource, `rustfs_bucket_on_demand_migration_status` data source | ✅ | ✅ | ✅ |
 
 ¹ The recovery route is absent on `1.0.1` (the server answers `404`), rather than registered and
 unimplemented; the resource reports the route and the required `1.0.2` version.
@@ -219,6 +220,7 @@ Every resource links to its documentation on the Terraform Registry.
 | [`rustfs_oidc_provider`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/oidc_provider) | OIDC identity providers for Console SSO |
 | [`rustfs_bucket_recovery`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/bucket_recovery) | Generation-fenced recovery of an orphaned bucket |
 | [`rustfs_tls_certificate`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/tls_certificate) | Published TLS certificate served by the default listener |
+| [`rustfs_bucket_on_demand_migration`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/bucket_on_demand_migration) | Lazy migration from an external S3 source |
 
 `rustfs_iam_backup_import`, `rustfs_bucket_metadata_backup_import` and `rustfs_rebalance` are
 action-style resources and deliberately do not support import.
@@ -246,6 +248,7 @@ action-style resources and deliberately do not support import.
 | [`rustfs_kms_status`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/data-sources/kms_status) | KMS service status |
 | [`rustfs_oidc_config`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/data-sources/oidc_config) | Effective OIDC provider configuration |
 | [`rustfs_tls_certificate_state`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/data-sources/tls_certificate_state) | Served TLS certificate and publication state |
+| [`rustfs_bucket_on_demand_migration_status`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/data-sources/bucket_on_demand_migration_status) | Per-node on-demand migration runtime status |
 
 `rustfs_quota` intentionally exists both as a resource (per-bucket limit) and as a data source
 (read it back).
