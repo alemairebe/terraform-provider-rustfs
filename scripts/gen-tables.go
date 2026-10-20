@@ -78,7 +78,7 @@ func run(root string) error {
 			problems = append(problems, fmt.Sprintf("%s: %v", entry.TypeName, err))
 			continue
 		}
-		descriptions[entry.TypeName] = description
+		descriptions[descriptionKey(entry)] = description
 
 		if entry.File == "" {
 			problems = append(problems, fmt.Sprintf("%s: the source file could not be resolved from its factory", entry.TypeName))
@@ -151,11 +151,11 @@ func replaceRegion(content string, m marker, body string) (string, error) {
 func agentsTable(kind provider.RegistryKind, _ string, entries []provider.RegistryEntry, descriptions map[string]string) string {
 	if kind == provider.RegistryKindDataSource {
 		return renderTable("| Type | Returns | Source |", entries, descriptions, kind, func(entry provider.RegistryEntry) []string {
-			return []string{"`" + entry.TypeName + "`", descriptions[entry.TypeName], "`" + entry.File + "`"}
+			return []string{"`" + entry.TypeName + "`", descriptions[descriptionKey(entry)], "`" + entry.File + "`"}
 		})
 	}
 	return renderTable("| Type | Manages | Source |", entries, descriptions, kind, func(entry provider.RegistryEntry) []string {
-		return []string{"`" + entry.TypeName + "`", descriptions[entry.TypeName], "`" + entry.File + "`"}
+		return []string{"`" + entry.TypeName + "`", descriptions[descriptionKey(entry)], "`" + entry.File + "`"}
 	})
 }
 
@@ -167,7 +167,7 @@ func readmeTable(kind provider.RegistryKind, segment string, entries []provider.
 	return renderTable(header, entries, descriptions, kind, func(entry provider.RegistryEntry) []string {
 		name := strings.TrimPrefix(entry.TypeName, "rustfs_")
 		link := "[" + "`" + entry.TypeName + "`" + "](" + registryURL + "/" + segment + "/" + name + ")"
-		return []string{link, descriptions[entry.TypeName]}
+		return []string{link, descriptions[descriptionKey(entry)]}
 	})
 }
 
@@ -186,6 +186,12 @@ func renderTable(header string, entries []provider.RegistryEntry, descriptions m
 		lines = append(lines, "| "+strings.Join(cells, " | ")+" |")
 	}
 	return strings.Join(lines, "\n")
+}
+
+// descriptionKey scopes a description to a kind, because one type name can be
+// both a resource and a data source (rustfs_quota).
+func descriptionKey(entry provider.RegistryEntry) string {
+	return string(entry.Kind) + "/" + entry.TypeName
 }
 
 func counts(entries []provider.RegistryEntry) string {
