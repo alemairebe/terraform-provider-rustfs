@@ -5,7 +5,11 @@ package provider
 
 import (
 	"context"
+	"path/filepath"
+	"reflect"
+	"runtime"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
@@ -92,4 +96,100 @@ func sortedByTypeName[T any](factories []func() T, typeName func(T) string) []fu
 		sorted[i] = entry.factory
 	}
 	return sorted
+}
+
+// RegistryKind distinguishes the two kinds of type the provider registers.
+type RegistryKind string
+
+const (
+	RegistryKindResource   RegistryKind = "resource"
+	RegistryKindDataSource RegistryKind = "data source"
+)
+
+// RegistryEntry describes one registered Terraform type. File is the
+// repository-relative path of the Go file that defines the factory, or an
+// empty string when the path cannot be resolved; Description is the type's
+// schema description.
+type RegistryEntry struct {
+	TypeName    string
+	Kind        RegistryKind
+	File        string
+	Description string
+}
+
+// RegistrySnapshot returns every registered resource and data source together
+// with the file that defines it and its schema description, sorted by type
+// name. The generated tables in AGENTS.md and README.md are built from it, so
+// no hand-maintained type-to-file mapping exists anywhere.
+func RegistrySnapshot() []RegistryEntry {
+	registryMu.RLock()
+	resources := append([]func() resource.Resource(nil), resourceFactories...)
+	dataSources := append([]func() datasource.DataSource(nil), dataSourceFactories...)
+	registryMu.RUnlock()
+
+	ctx := context.Background()
+	entries := make([]RegistryEntry, 0, len(resources)+len(dataSources))
+
+	for _, factory := range resources {
+		r := factory()
+		var meta resource.MetadataResponse
+		r.Metadata(ctx, resource.MetadataRequest{ProviderTypeName: providerTypeName}, &meta)
+
+		var schema resource.SchemaResponse
+		r.Schema(ctx, resource.SchemaRequest{}, &schema)
+
+		entries = append(entries, RegistryEntry{
+			TypeName:    meta.TypeName,
+			Kind:        RegistryKindResource,
+			File:        factoryFile(factory),
+			Description: schema.Schema.Description,
+		})
+	}
+
+	for _, factory := range dataSources {
+		d := factory()
+		var meta datasource.MetadataResponse
+		d.Metadata(ctx, datasource.MetadataRequest{ProviderTypeName: providerTypeName}, &meta)
+
+		var schema datasource.SchemaResponse
+		d.Schema(ctx, datasource.SchemaRequest{}, &schema)
+
+		entries = append(entries, RegistryEntry{
+			TypeName:    meta.TypeName,
+			Kind:        RegistryKindDataSource,
+			File:        factoryFile(factory),
+			Description: schema.Schema.Description,
+		})
+	}
+
+	sort.SliceStable(entries, func(i, j int) bool {
+		return entries[i].TypeName < entries[j].TypeName
+	})
+	return entries
+}
+
+// factoryFile reports the repository-relative Go file that defines factory.
+func factoryFile(factory any) string {
+	value := reflect.ValueOf(factory)
+	if value.Kind() != reflect.Func || value.IsNil() {
+		return ""
+	}
+
+	fn := runtime.FuncForPC(value.Pointer())
+	if fn == nil {
+		return ""
+	}
+
+	file, _ := fn.FileLine(fn.Entry())
+	file = filepath.ToSlash(file)
+
+	// Strip the build prefix, or a -trimpath module prefix, so the table only
+	// ever shows provider/<file>.go.
+	if index := strings.LastIndex(file, "/provider/"); index >= 0 {
+		return file[index+1:]
+	}
+	if strings.HasPrefix(file, "provider/") {
+		return file
+	}
+	return ""
 }

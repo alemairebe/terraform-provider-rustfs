@@ -8,11 +8,20 @@ changelog:
       - dependabot[bot]
 
   categories:
+    # The changelog fragment kinds (breaking, feature, improvement, bugfix,
+    # security, chore) map onto these titles; the remaining categories apply to
+    # label-driven GitHub release notes.
+    - title: "Breaking Changes"
+      labels:
+        - breaking
     - title: "Features"
       labels:
         - feature
         - enhancement
         - feat
+    - title: "Improvements"
+      labels:
+        - improvement
     - title: "Bug Fixes"
       labels:
         - bug
@@ -25,7 +34,7 @@ changelog:
     - title: "Security"
       labels:
         - security
-    - title: "Maintenance"
+    - title: "Chores"
       labels:
         - chore
         - maintenance

@@ -17,7 +17,9 @@ storage — as code. This provider covers the S3 API **and** the RustFS admin AP
 (`/rustfs/admin/v3`), so buckets, IAM, encryption, replication, storage tiers, event targets and
 cluster health all live in the same Terraform state as the rest of your infrastructure.
 
-**32 resources and 17 data sources.**
+<!-- BEGIN AUTOGEN:counts -->
+**37 resources and 19 data sources.**
+<!-- END AUTOGEN:counts -->
 
 | | |
 |---|---|
@@ -180,72 +182,76 @@ explicit diagnostic instead of guessing a default.
 
 Every resource links to its documentation on the Terraform Registry.
 
+<!-- BEGIN AUTOGEN:resources -->
 | Resource | Manages |
 |---|---|
-| [`rustfs_user`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/user) | IAM users |
-| [`rustfs_policy`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/policy) | S3/IAM policies |
-| [`rustfs_serviceaccount`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/serviceaccount) | Service accounts / API keys |
-| [`rustfs_ldap_service_account`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/ldap_service_account) | Service accounts scoped to an LDAP user |
-| [`rustfs_bucket`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/bucket) | S3 buckets |
-| [`rustfs_quota`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/quota) | Per-bucket quota limits |
-| [`rustfs_user_policy_attachment`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/user_policy_attachment) | Canned policy on an IAM user |
-| [`rustfs_group_policy_attachment`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/group_policy_attachment) | Canned policy on an IAM group |
-| [`rustfs_ldap_policy_attachment`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/ldap_policy_attachment) | Canned policy on an LDAP user/group |
-| [`rustfs_bucket_policy`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/bucket_policy) | Raw S3 bucket policy document |
-| [`rustfs_bucket_public_access_block`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/bucket_public_access_block) | Block-public-access configuration |
-| [`rustfs_bucket_tags`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/bucket_tags) | Bucket tags |
-| [`rustfs_bucket_cors`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/bucket_cors) | Bucket CORS rules |
-| [`rustfs_bucket_versioning`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/bucket_versioning) | Bucket versioning |
-| [`rustfs_bucket_object_lock`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/bucket_object_lock) | Object lock / retention |
-| [`rustfs_bucket_encryption`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/bucket_encryption) | SSE-S3 / SSE-KMS encryption |
-| [`rustfs_bucket_lifecycle_configuration`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/bucket_lifecycle_configuration) | Lifecycle rules |
-| [`rustfs_bucket_notification`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/bucket_notification) | Bucket event notification configuration |
-| [`rustfs_bucket_replication`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/bucket_replication) | Cross-bucket replication |
-| [`rustfs_bucket_durability`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/bucket_durability) | Per-bucket durability override |
-| [`rustfs_table_bucket`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/table_bucket) | S3 Tables (Iceberg REST catalog) switch on a bucket |
-| [`rustfs_site_replication`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/site_replication) | Site-replication peers |
-| [`rustfs_remote_target`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/remote_target) | Remote replication/notification targets |
-| [`rustfs_rebalance`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/rebalance) | Trigger pool rebalancing |
-| [`rustfs_group`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/group) | IAM groups with members |
-| [`rustfs_tier`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/tier) | Storage tiers (S3, Azure, GCS, …) |
-| [`rustfs_kms_key`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/kms_key) | KMS master keys |
-| [`rustfs_config`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/config) | Server sub-system configuration (config-kv) |
-| [`rustfs_module_switch`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/module_switch) | Feature module switches |
-| [`rustfs_audit_target`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/audit_target) | Audit-log targets (webhook, Kafka, AMQP, MQTT, MySQL, NATS, Postgres, Pulsar, Redis) |
-| [`rustfs_notification_target`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/notification_target) | Event-notification targets (webhook, AMQP, Kafka, MQTT, NATS, Postgres, MySQL, Redis, Pulsar) |
-| [`rustfs_iam_backup_import`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/iam_backup_import) | Import IAM entities from a backup |
-| [`rustfs_bucket_metadata_backup_import`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/bucket_metadata_backup_import) | Import bucket metadata from a backup |
-| [`rustfs_pool_decommission`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/pool_decommission) | Drain and retire a storage pool |
-| [`rustfs_oidc_provider`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/oidc_provider) | OIDC identity providers for Console SSO |
-| [`rustfs_bucket_recovery`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/bucket_recovery) | Generation-fenced recovery of an orphaned bucket |
-| [`rustfs_tls_certificate`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/tls_certificate) | Published TLS certificate served by the default listener |
+| [`rustfs_audit_target`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/audit_target) | Manage RustFS audit-log targets (webhook, amqp, kafka, mqtt, nats, postgres, mysql, redis, pulsar) |
+| [`rustfs_bucket`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/bucket) | Manage S3 buckets in rustfs |
+| [`rustfs_bucket_cors`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/bucket_cors) | Manage the CORS configuration of an S3 bucket in rustfs |
+| [`rustfs_bucket_durability`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/bucket_durability) | Manage the per-bucket durability override in rustfs |
+| [`rustfs_bucket_encryption`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/bucket_encryption) | Manage RustFS bucket server-side encryption configuration |
+| [`rustfs_bucket_lifecycle_configuration`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/bucket_lifecycle_configuration) | Manage S3 bucket lifecycle configurations in rustfs |
+| [`rustfs_bucket_metadata_backup_import`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/bucket_metadata_backup_import) | Import bucket metadata from a ZIP archive |
+| [`rustfs_bucket_notification`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/bucket_notification) | Manage RustFS bucket event notification configuration |
+| [`rustfs_bucket_object_lock`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/bucket_object_lock) | Manage RustFS bucket object lock configuration |
+| [`rustfs_bucket_policy`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/bucket_policy) | Manage the raw S3 bucket policy document in rustfs |
+| [`rustfs_bucket_public_access_block`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/bucket_public_access_block) | Manage the block public access configuration of an S3 bucket in rustfs |
+| [`rustfs_bucket_recovery`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/bucket_recovery) | Recover an orphaned bucket: bucket metadata (or its incarnation sidecar) that survived after the bucket's volume directories were removed outside RustFS, leaving an ordinary CreateBucket to refuse the name. The operation is generation-fenced. incarnation_id is the exact incarnation UUID the orphaned metadata belongs to, sent as expectedIncarnationId; RustFS refuses the recovery when a disk still holds the volume, when any disk is offline or its metadata is unreadable, or when the identity does not match. That UUID, not the bucket name, is what makes the operation safe, so it is also the resource id: bucket names are reusable, and a recovery pinned only to a name could refer to a later, unrelated bucket. Usage Recovery retires the orphan and frees the name; it does not create a bucket. Pair it with a rustfs_bucket for the same name whose depends_on lists this resource, as in the example below. Used alone, the next refresh finds no bucket (Read can only confirm existence), removes this resource from state, and Terraform plans the recovery again. Because the server retires the input UUID, re-sending the request is safe, but the plan never converges. Where the UUID comes from The UUID is not generated by Terraform. Read it from the orphaned bucket's incarnation sidecar, or from a trusted metadata backup taken from that bucket. A diagnostic metadata export is not a restorable backup and does not carry a usable identity. Read and destroy There is no route to read orphan state back: once the name is recreated the bucket is ordinary, so Read can only confirm that the bucket exists. A missing bucket is removed from state without error; an existing one keeps its state as the audit trail. Because the server retires the input UUID and a recreated bucket receives a new generation whose UUID this route does not return, the provider cannot later prove that the live bucket is the one it recovered. Delete is a no-op. Recovery cannot be undone, and the provider never deletes the recovered bucket or its objects: terraform destroy only forgets the record. Remove the bucket itself with rustfs_bucket if that is what you want. Restrictions Recovery is local to one deployment and is refused with OperationAborted while site replication is enabled; reconcile every site before retrying. The caller needs the RecoverOrphanedBucketAction admin action. The route ships in RustFS 1.0.2; on 1.0.1 the failure names the route and the server version. |
+| [`rustfs_bucket_replication`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/bucket_replication) | Manage RustFS bucket replication configuration |
+| [`rustfs_bucket_tags`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/bucket_tags) | Manage the tags on an S3 bucket in rustfs |
+| [`rustfs_bucket_versioning`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/bucket_versioning) | Manage RustFS bucket versioning configuration |
+| [`rustfs_config`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/config) | Manage server sub-system configuration (config-kv), the mc admin config equivalent. Each resource manages one sub-system scope. |
+| [`rustfs_group`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/group) | Manage RustFS IAM groups and their members |
+| [`rustfs_group_policy_attachment`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/group_policy_attachment) | Attach a canned IAM policy to an IAM group and detach it on destroy, leaving every other policy on the group untouched |
+| [`rustfs_iam_backup_import`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/iam_backup_import) | Import RustFS IAM entities (users, groups, policies, service accounts) from a base64-encoded ZIP archive |
+| [`rustfs_kms_key`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/kms_key) | Manage RustFS KMS master keys. Deleting a KMS master key is critical and irreversible: it schedules the destruction of the key material and makes every object encrypted under the key permanently unreadable. Guard the key with skip_destroy = true. |
+| [`rustfs_ldap_policy_attachment`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/ldap_policy_attachment) | Attach a canned policy to an LDAP user or group and detach it on destroy |
+| [`rustfs_ldap_service_account`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/ldap_service_account) | Create a service account scoped to an LDAP user |
+| [`rustfs_module_switch`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/module_switch) | Manage RustFS feature module switches (notify and audit modules). |
+| [`rustfs_notification_target`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/notification_target) | Manage RustFS event-notification targets |
+| [`rustfs_oidc_provider`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/oidc_provider) | Manage one persisted OIDC identity provider used by RustFS Console single sign-on (GET/PUT/DELETE /rustfs/admin/v3/oidc/config). Creating or updating the resource first runs OIDC discovery through POST /rustfs/admin/v3/oidc/validate, so an unreachable config_url or an invalid discovery document fails the apply before anything is persisted. Lockout risk: deleting the last enabled provider can lock operators out of the RustFS Console. The provider emits a warning when it detects that condition. Secrets: the server never returns client_secret. The provider keeps the configured value in state (marked sensitive) while the server reports the secret as configured, and removing it from the configuration does not clear it on the server. Destroy and recreate the provider to remove its secret. |
+| [`rustfs_policy`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/policy) | Manage S3 policies |
+| [`rustfs_pool_decommission`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/pool_decommission) | Drain and retire a RustFS storage pool. This resource moves data. Creating it starts a decommission: RustFS copies every object of the named pool to the remaining pools and then retires the pool. Retiring the pool from the deployment still requires removing its volume expression from the server configuration and restarting RustFS; this resource only drives the drain and reports its progress. The deployment must have at least two storage pools; RustFS answers 501 NotImplemented on a single-pool deployment. The drain needs enough free space on the remaining pools for the drained data plus overhead, and a decommission cannot run while a rebalance is in progress. Destroying an in-flight drain cancels it and clears the canceled record. Canceling does not move already relocated objects back, and a completed drain cannot be canceled or cleared: destroy leaves the completed record in place. |
+| [`rustfs_quota`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/quota) | Read the quota of a RustFS bucket |
+| [`rustfs_rebalance`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/rebalance) | Triggers a pool rebalancing operation in RustFS |
+| [`rustfs_remote_target`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/remote_target) | Manage remote targets used as replication destinations or notification ARNs in rustfs |
+| [`rustfs_serviceaccount`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/serviceaccount) | Manage ServiceUser/API Keys |
+| [`rustfs_site_replication`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/site_replication) | Manage site-replication peers in rustfs |
+| [`rustfs_table_bucket`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/table_bucket) | Manage the S3 Tables (Iceberg REST catalog) switch of an existing rustfs bucket. Enabling the catalog marks the bucket as a table bucket served at catalog_uri. Destroying this resource only switches the catalog off: the bucket and every object in it are left untouched, but the bucket returns to ordinary lifecycle behaviour (table buckets are excluded from normal expiration). S3 Tables is a preview feature upstream. This resource exposes the switch, not Iceberg client compatibility. |
+| [`rustfs_tier`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/tier) | Manage RustFS storage tiers for data transition to external backends |
+| [`rustfs_tls_certificate`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/tls_certificate) | Publish the leaf certificate the RustFS default listener serves. Publishing is a whole-file replacement, not a patch, so changing either PEM replaces the resource and publishes the new pair. RustFS accepts the request only on its native TLS listener (ssl = true) and only when started with RUSTFS_TLS_RELOAD_ENABLE=true and RUSTFS_TLS_PUBLISH_DIR pointing at a private directory outside RUSTFS_TLS_PATH. RustFS has no route that removes a published certificate. Destroying this resource therefore only removes it from Terraform state (with a warning); the server keeps serving the last published certificate until another publication replaces it or the server is restarted with different TLS material. Import is not supported: the PEM pair is write-only and the server never returns it, so an imported resource could not describe the certificate it manages. |
+| [`rustfs_user`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/user) | Manage RustFS user |
+| [`rustfs_user_policy_attachment`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/user_policy_attachment) | Attach a canned IAM policy to a user and detach it on destroy |
+<!-- END AUTOGEN:resources -->
 
-`rustfs_iam_backup_import`, `rustfs_bucket_metadata_backup_import` and `rustfs_rebalance` are
-action-style resources and deliberately do not support import.
+Some resources perform an action on the server instead of modelling a stored object, so they
+deliberately do not support import. Each resource page says whether it does.
 
 ## Data sources
 
+<!-- BEGIN AUTOGEN:data-sources -->
 | Data source | Returns |
 |---|---|
-| [`rustfs_pools`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/data-sources/pools) | Storage pools |
-| [`rustfs_users`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/data-sources/users) | IAM users |
-| [`rustfs_groups`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/data-sources/groups) | IAM groups |
-| [`rustfs_user_mfa`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/data-sources/user_mfa) | MFA status of a user |
-| [`rustfs_iam_backup`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/data-sources/iam_backup) | IAM export (ZIP) |
-| [`rustfs_iam_policies`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/data-sources/iam_policies) | Canned IAM policies |
-| [`rustfs_iam_policy`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/data-sources/iam_policy) | A single canned IAM policy |
-| [`rustfs_quota`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/data-sources/quota) | Bucket quota |
-| [`rustfs_bucket_metadata_backup`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/data-sources/bucket_metadata_backup) | Bucket metadata export (ZIP) |
-| [`rustfs_metrics`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/data-sources/metrics) | Metrics stream |
-| [`rustfs_health_info`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/data-sources/health_info) | Cluster health / OBD diagnostics |
-| [`rustfs_storage_info`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/data-sources/storage_info) | Cluster storage info |
-| [`rustfs_server_info`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/data-sources/server_info) | Cluster, server, pool and drive info |
-| [`rustfs_replication_metrics`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/data-sources/replication_metrics) | Replication transfer metrics |
-| [`rustfs_ilm_tier_stats`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/data-sources/ilm_tier_stats) | Per-tier ILM statistics |
-| [`rustfs_kms_config`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/data-sources/kms_config) | KMS backend configuration |
-| [`rustfs_kms_status`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/data-sources/kms_status) | KMS service status |
-| [`rustfs_oidc_config`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/data-sources/oidc_config) | Effective OIDC provider configuration |
-| [`rustfs_tls_certificate_state`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/data-sources/tls_certificate_state) | Served TLS certificate and publication state |
+| [`rustfs_bucket_metadata_backup`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/data-sources/bucket_metadata_backup) | Export bucket metadata as a ZIP archive |
+| [`rustfs_groups`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/data-sources/groups) | Lists all IAM groups for RustFS |
+| [`rustfs_health_info`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/data-sources/health_info) | Cluster health info and OBD diagnostics for RustFS |
+| [`rustfs_iam_backup`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/data-sources/iam_backup) | Export all RustFS IAM entities (users, groups, policies, service accounts) as a base64-encoded ZIP archive |
+| [`rustfs_iam_policies`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/data-sources/iam_policies) | List all canned IAM policies available on the RustFS cluster |
+| [`rustfs_iam_policy`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/data-sources/iam_policy) | Fetch the details of a single canned IAM policy by name |
+| [`rustfs_ilm_tier_stats`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/data-sources/ilm_tier_stats) | Exposes per-tier ILM storage statistics (object counts and sizes) from RustFS. |
+| [`rustfs_kms_config`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/data-sources/kms_config) | Fetch the current RustFS KMS backend configuration, including the backend type, cache settings, and default key ID. |
+| [`rustfs_kms_status`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/data-sources/kms_status) | Fetch the current RustFS KMS service status, including backend health, cache stats, capabilities, and cluster config. |
+| [`rustfs_metrics`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/data-sources/metrics) | Metrics stream for the RustFS server. Requires a server that implements GET /rustfs/admin/v3/metrics: RustFS 1.0.1 through 1.0.3 register the route but answer 501 NotImplemented, which Terraform reports as an unsupported capability naming the server version and the route. |
+| [`rustfs_oidc_config`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/data-sources/oidc_config) | Read every effective OIDC provider RustFS reports (GET /rustfs/admin/v3/oidc/config), including providers configured through server environment variables. Set provider_id to return only that provider. The server never returns client secrets; client_secret_configured reports whether one is stored. |
+| [`rustfs_pools`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/data-sources/pools) | List all RustFS storage pools and their status |
+| [`rustfs_quota`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/data-sources/quota) | Read the quota of a RustFS bucket |
+| [`rustfs_replication_metrics`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/data-sources/replication_metrics) | Exposes replication transfer metrics (counts, bytes, queue backlog) for a bucket from RustFS. |
+| [`rustfs_server_info`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/data-sources/server_info) | Exposes cluster, server, pool and drive information from the RustFS admin API. |
+| [`rustfs_storage_info`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/data-sources/storage_info) | Storage layout and health information for the RustFS cluster, including the storage backend and a per-drive breakdown. |
+| [`rustfs_tls_certificate_state`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/data-sources/tls_certificate_state) | Read the TLS certificate the RustFS default listener serves, including the publication revision and fingerprints. The route is only available on RustFS 1.0.2 or later, and only on the native TLS listener (ssl = true). |
+| [`rustfs_user_mfa`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/data-sources/user_mfa) | Fetch the second-factor (MFA) status of a RustFS user by access key |
+| [`rustfs_users`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/data-sources/users) | List all RustFS IAM users, optionally filtered by bucket name |
+<!-- END AUTOGEN:data-sources -->
 
 `rustfs_quota` intentionally exists both as a resource (per-bucket limit) and as a data source
 (read it back).
