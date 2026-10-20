@@ -7,8 +7,29 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"testing"
 )
+
+// newDecommissionTestClient builds an admin client for the mocked server. The
+// mocked API never authenticates, so only non-empty credentials are needed;
+// they come from the environment when set, with a generated fallback so no
+// credential literal lives in the source.
+func newDecommissionTestClient(server *httptest.Server) RustfsAdmin {
+	return New(&RustfsAdminConfig{
+		Endpoint:     server.Listener.Addr().String(),
+		AccessKey:    decommissionTestCredential("RUSTFS_ACCESS_KEY", 'a'),
+		AccessSecret: decommissionTestCredential("RUSTFS_SECRET", 's'),
+	})
+}
+
+func decommissionTestCredential(env string, fallback rune) string {
+	if v := os.Getenv(env); v != "" {
+		return v
+	}
+	return strings.Repeat(string(fallback), 16)
+}
 
 // The payloads below are copied from GET /rustfs/admin/v3/decommission/status
 // on RustFS 1.0.3 with two pools, while pool 1 is draining.
@@ -36,8 +57,7 @@ func TestDecommissionStatuses(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := New(&RustfsAdminConfig{Endpoint: server.Listener.Addr().String(), AccessKey: "admin"})
-	client.accessSecret = "secret"
+	client := newDecommissionTestClient(server)
 
 	statuses, err := client.DecommissionStatuses()
 	if err != nil {
@@ -74,8 +94,7 @@ func TestDecommissionStatusesRejectsMalformedPayload(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := New(&RustfsAdminConfig{Endpoint: server.Listener.Addr().String(), AccessKey: "admin"})
-	client.accessSecret = "secret"
+	client := newDecommissionTestClient(server)
 
 	if _, err := client.DecommissionStatuses(); err == nil {
 		t.Fatal("expected a decode error")
@@ -114,8 +133,7 @@ func TestPoolDecommissionMutations(t *testing.T) {
 			}))
 			defer server.Close()
 
-			client := New(&RustfsAdminConfig{Endpoint: server.Listener.Addr().String(), AccessKey: "admin"})
-			client.accessSecret = "secret"
+			client := newDecommissionTestClient(server)
 
 			if err := tc.call(&client); err != nil {
 				t.Fatalf("unexpected error: %v", err)
@@ -131,8 +149,7 @@ func TestDecommissionErrorsAreStructured(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := New(&RustfsAdminConfig{Endpoint: server.Listener.Addr().String(), AccessKey: "admin"})
-	client.accessSecret = "secret"
+	client := newDecommissionTestClient(server)
 
 	err := client.StartPoolDecommission("/nope")
 	if !IsAPIErrorCode(err, "InvalidArgument") {
@@ -160,8 +177,7 @@ func TestDecommissionNotImplementedIsFeatureGated(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := New(&RustfsAdminConfig{Endpoint: server.Listener.Addr().String(), AccessKey: "admin"})
-	client.accessSecret = "secret"
+	client := newDecommissionTestClient(server)
 
 	_, err := client.DecommissionStatuses()
 	if !IsUnsupportedFeature(err) {

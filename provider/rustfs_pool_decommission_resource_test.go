@@ -500,7 +500,7 @@ func TestPoolDecommissionCreate(t *testing.T) {
 		server.assertAllConsumed(t)
 	})
 
-	t.Run("501 with no reported pools still names the topology gap", func(t *testing.T) {
+	t.Run("501 with no reported pools falls back to the raw error", func(t *testing.T) {
 		client, server := scriptedClient(t,
 			scriptedResponse{method: http.MethodGet, pathContains: "decommission/status", status: http.StatusNotImplemented,
 				body: `<Error><Code>NotImplemented</Code><Message>A header you provided implies functionality that is not implemented</Message></Error>`},
@@ -511,9 +511,21 @@ func TestPoolDecommissionCreate(t *testing.T) {
 
 		resp := h.create(poolDecommissionPlan("/data"))
 
+		assertErrorDiagnostic(t, resp.Diagnostics, "Error starting pool decommission", "does not implement")
+		server.assertAllConsumed(t)
+	})
+
+	t.Run("unknown pool with an empty inventory names the empty list", func(t *testing.T) {
+		client, server := scriptedClient(t,
+			scriptedResponse{method: http.MethodGet, pathContains: "decommission/status", status: http.StatusOK,
+				body: decommissionStatusBody()},
+		)
+		h := newCRUDHarness(t, NewPoolDecommissionResource(), client)
+
+		resp := h.create(poolDecommissionPlan(decommissionPoolB))
+
 		assertErrorDiagnostic(t, resp.Diagnostics, "Error starting pool decommission",
-			"only on a deployment with at least two storage pools")
-		assertDiagnosticDetail(t, resp.Diagnostics, "reports no pools")
+			"Current pools: no pools.")
 		server.assertAllConsumed(t)
 	})
 
@@ -1023,6 +1035,22 @@ func TestAccPoolDecommission_lifecycle(t *testing.T) {
 					tfresource.TestCheckResourceAttrSet(resourceName, "status"),
 					testAccCheckPoolDecommissionStarted(t, resourceName),
 				),
+			},
+			{
+				// Import by pool cmdline. Drain progress moves between steps, so
+				// only the stable identity attributes are verified.
+				ResourceName:                         resourceName,
+				ImportState:                          true,
+				ImportStateId:                        pool,
+				ImportStateVerify:                    true,
+				ImportStateVerifyIdentifierAttribute: "id",
+				ImportStateVerifyIgnore: []string{
+					"status", "pool_status", "started_at", "complete", "failed", "canceled", "queued",
+					"queued_buckets", "decommissioned_buckets", "bucket", "prefix", "object", "stage",
+					"waiting_reason", "start_size", "total_size", "current_size",
+					"objects_decommissioned", "objects_decommissioned_failed",
+					"bytes_decommissioned", "bytes_decommissioned_failed",
+				},
 			},
 			{
 				// Progress is computed state, so the post-apply plan is empty.

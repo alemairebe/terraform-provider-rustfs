@@ -484,7 +484,10 @@ func (r *PoolDecommissionResource) singlePoolExplanation(err error) (string, boo
 		return "", false
 	}
 	pools, listErr := r.client.RustClient.ListPools()
-	if listErr != nil || len(pools) > 1 {
+	// Only an exactly-one-pool answer proves the topology gap. An empty list
+	// means the pool inventory could not be determined, so the raw 501 is the
+	// truthful diagnosis.
+	if listErr != nil || len(pools) != 1 {
 		return "", false
 	}
 	names := make([]string, 0, len(pools))
