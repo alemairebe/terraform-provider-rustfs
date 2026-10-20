@@ -112,6 +112,10 @@ server version up front; it reports a capability gap when a route it needs is un
 | S3 Tables catalog disable — `DELETE /iceberg/v1/buckets/{bucket}` | `rustfs_table_bucket` destroy | ❌ | ✅ | ✅ |
 | Admin metrics stream — `GET /rustfs/admin/v3/metrics` | `rustfs_metrics` data source | ❌ | ❌ | ❌ |
 | OIDC providers — `GET`/`PUT`/`DELETE /rustfs/admin/v3/oidc/config` and `POST /rustfs/admin/v3/oidc/validate` | `rustfs_oidc_provider` resource, `rustfs_oidc_config` data source | ✅ | ✅ | ✅ |
+| Orphaned bucket recovery — `POST /rustfs/admin/v3/recover-orphaned-bucket/{bucket}` | `rustfs_bucket_recovery` | ❌¹ | ✅ | ✅ |
+
+¹ The recovery route is absent on `1.0.1` (the server answers `404`), rather than registered and
+unimplemented; the resource reports the route and the required `1.0.2` version.
 
 `1.0.3` is a console-only update: it ships the same server code as `1.0.2`, so its server
 capabilities are identical. A ❌ means the route is registered but not implemented (see below); the
@@ -202,6 +206,7 @@ Every resource links to its documentation on the Terraform Registry.
 | [`rustfs_bucket_metadata_backup_import`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/bucket_metadata_backup_import) | Import bucket metadata from a backup |
 | [`rustfs_pool_decommission`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/pool_decommission) | Drain and retire a storage pool |
 | [`rustfs_oidc_provider`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/oidc_provider) | OIDC identity providers for Console SSO |
+| [`rustfs_bucket_recovery`](https://registry.terraform.io/providers/caberdo/rustfs/latest/docs/resources/bucket_recovery) | Generation-fenced recovery of an orphaned bucket |
 
 `rustfs_iam_backup_import`, `rustfs_bucket_metadata_backup_import` and `rustfs_rebalance` are
 action-style resources and deliberately do not support import.

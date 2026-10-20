@@ -47,6 +47,7 @@ Registry address: `registry.terraform.io/caberdo/rustfs`.
 | `rustfs_bucket_metadata_backup_import` | `provider/rustfs_bucket_metadata_backup_import_resource.go` | Bucket metadata import from backup |
 | `rustfs_pool_decommission` | `provider/rustfs_pool_decommission_resource.go` | Storage pool drain and retirement |
 | `rustfs_oidc_provider` | `provider/rustfs_oidc_provider_resource.go` | OIDC identity providers for Console SSO |
+| `rustfs_bucket_recovery` | `provider/rustfs_bucket_recovery_resource.go` | Generation-fenced recovery of an orphaned bucket |
 
 | Data Source | Go file | Returns |
 |---|---|---|

@@ -35,7 +35,7 @@ Terraform CLI ──plugin protocol 6.0──► terraform-provider-rustfs (one 
 | Provider identity | `provider/provider.go` `Metadata` | `TypeName = "rustfs"`, version from the binary. |
 | Schema | `provider/provider.go` `Schema` | Six optional attributes: `endpoint`, `access_key`, `secret_key` (sensitive), `access_secret` (deprecated alias, sensitive), `ssl`, `insecure`. |
 | Configure | `provider/provider.go` `Configure` | Resolves each attribute through `envOrDefault` (`RUSTFS_ENDPOINT`, `RUSTFS_USER`, `RUSTFS_SECRET` win over the block), fails with an explicit diagnostic when the endpoint is empty, then builds `*AllClient` and hands the *same* value to both `resp.ResourceData` and `resp.DataSourceData`. |
-| Registration | `provider/provider.go` `Resources()` / `DataSources()` | 32 constructors and 17 constructors; every resource implements `ResourceWithImportState` except the three action-style resources (`rustfs_iam_backup_import`, `rustfs_bucket_metadata_backup_import`, `rustfs_rebalance`), which deliberately do not support import. |
+| Registration | `provider/provider.go` `Resources()` / `DataSources()` | 36 constructors and 18 constructors; every resource implements `ResourceWithImportState` except the three action-style resources (`rustfs_iam_backup_import`, `rustfs_bucket_metadata_backup_import`, `rustfs_rebalance`), which deliberately do not support import. |
 
 `AllClient` (`provider/all_client.go`) is the whole runtime state a resource gets: an `*s3.Client`
 and a `rustfs.RustfsAdmin`. Resources are structs holding that pointer; there is no global state.

@@ -27,6 +27,7 @@ var goldenResourceTypeNames = []string{
 	"rustfs_bucket_object_lock",
 	"rustfs_bucket_policy",
 	"rustfs_bucket_public_access_block",
+	"rustfs_bucket_recovery",
 	"rustfs_bucket_replication",
 	"rustfs_bucket_tags",
 	"rustfs_bucket_versioning",
