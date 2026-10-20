@@ -255,3 +255,7 @@ func tableBucketMissing(err error) bool {
 	}
 	return apiErr.StatusCode == http.StatusInternalServerError && strings.Contains(apiErr.Error(), "Bucket not found")
 }
+
+func init() {
+	registerResource(NewTableBucketResource)
+}

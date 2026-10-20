@@ -236,3 +236,7 @@ func (r *bucketTagsResource) Delete(ctx context.Context, req resource.DeleteRequ
 func (r *bucketTagsResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	resource.ImportStatePassthroughID(ctx, path.Root("bucket"), req, resp)
 }
+
+func init() {
+	registerResource(NewBucketTagsResource)
+}

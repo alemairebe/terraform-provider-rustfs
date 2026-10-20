@@ -104,6 +104,16 @@ func TestMetricsFeatureRoute(t *testing.T) {
 	}
 }
 
+func TestUnregisteredFeatureIsProgrammingError(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("Feature.Route on an unregistered feature must panic instead of returning an empty route")
+		}
+	}()
+
+	_ = rustfs.Feature("not-registered").Route()
+}
+
 // newAdminTestServer wires an httptest server that answers the metrics and
 // healthinfo routes with the supplied handlers.
 func newAdminTestServer(t *testing.T, metrics, health http.HandlerFunc) rustfs.RustfsAdmin {

@@ -85,3 +85,7 @@ func (d *PoolsDataSource) Read(ctx context.Context, req datasource.ReadRequest, 
 	config.Names = poolNames
 	resp.Diagnostics.Append(resp.State.Set(ctx, &config)...)
 }
+
+func init() {
+	registerDataSource(NewPoolsDataSource)
+}

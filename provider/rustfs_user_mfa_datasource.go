@@ -95,3 +95,7 @@ func (d *UserMfaDataSource) Read(ctx context.Context, req datasource.ReadRequest
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &config)...)
 }
+
+func init() {
+	registerDataSource(NewUserMfaDataSource)
+}

@@ -332,3 +332,7 @@ func buildPutBucketEncryptionInput(plan BucketEncryptionResourceModel) *s3.PutBu
 	}
 	return input
 }
+
+func init() {
+	registerResource(NewBucketEncryptionResource)
+}

@@ -267,3 +267,7 @@ func (d *StorageInfoDataSource) Read(ctx context.Context, _ datasource.ReadReque
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
+
+func init() {
+	registerDataSource(NewStorageInfoDataSource)
+}

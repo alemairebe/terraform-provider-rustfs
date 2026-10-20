@@ -200,3 +200,7 @@ func (r *GroupPolicyAttachmentResource) ImportState(ctx context.Context, req res
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("policy"), parts[1])...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)
 }
+
+func init() {
+	registerResource(NewGroupPolicyAttachmentResource)
+}

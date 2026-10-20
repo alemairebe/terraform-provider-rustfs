@@ -201,3 +201,7 @@ func (d *HealthInfoDataSource) Read(ctx context.Context, _ datasource.ReadReques
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
+
+func init() {
+	registerDataSource(NewHealthInfoDataSource)
+}

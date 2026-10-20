@@ -266,3 +266,7 @@ func (r *bucketPublicAccessBlockResource) Delete(ctx context.Context, req resour
 func (r *bucketPublicAccessBlockResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	resource.ImportStatePassthroughID(ctx, path.Root("bucket"), req, resp)
 }
+
+func init() {
+	registerResource(NewBucketPublicAccessBlockResource)
+}

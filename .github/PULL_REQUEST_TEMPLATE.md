@@ -44,13 +44,15 @@ Describe how you tested this change:
 ### New Resources
 - [ ] API client methods in `pkg/rustfs/<name>.go`
 - [ ] Resource file in `provider/rustfs_<name>_resource.go`
-- [ ] Registered in `provider/provider.go`
+- [ ] Registered from `init()` in that file (`registerResource`); type name added to
+      `provider/registry_test.go`
 - [ ] ImportState implemented
 - [ ] Documentation + example
 
 ### New Data Sources
 - [ ] Data source file in `provider/rustfs_<name>_datasource.go`
-- [ ] Registered in `provider/provider.go`
+- [ ] Registered from `init()` in that file (`registerDataSource`); type name added to
+      `provider/registry_test.go`
 - [ ] Documentation + example
 
 ### Bug Fixes

@@ -231,3 +231,7 @@ func (r *TierResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 func (r *TierResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	resource.ImportStatePassthroughID(ctx, path.Root("name"), req, resp)
 }
+
+func init() {
+	registerResource(NewTierResource)
+}

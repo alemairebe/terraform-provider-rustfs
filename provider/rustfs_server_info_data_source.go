@@ -490,3 +490,7 @@ func flattenServers(servers []rustfs.ServerEntry) []serverInfoServerModel {
 	}
 	return out
 }
+
+func init() {
+	registerDataSource(NewServerInfoDataSource)
+}

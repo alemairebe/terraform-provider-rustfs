@@ -89,3 +89,7 @@ func (r *RebalanceResource) Update(ctx context.Context, req resource.UpdateReque
 
 func (r *RebalanceResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
 }
+
+func init() {
+	registerResource(NewRebalanceResource)
+}

@@ -295,3 +295,7 @@ func isMissingServiceAccount(err error) bool {
 func (r *ServiceAccountResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	resource.ImportStatePassthroughID(ctx, path.Root("access_key"), req, resp)
 }
+
+func init() {
+	registerResource(NewServiceAccountResource)
+}

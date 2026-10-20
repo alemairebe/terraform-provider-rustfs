@@ -72,3 +72,7 @@ func (d *BucketMetadataBackupDataSource) Read(ctx context.Context, req datasourc
 	config.ContentBase64 = types.StringValue(base64.StdEncoding.EncodeToString(data))
 	resp.Diagnostics.Append(resp.State.Set(ctx, &config)...)
 }
+
+func init() {
+	registerDataSource(NewBucketMetadataBackupDataSource)
+}

@@ -104,3 +104,7 @@ func (d *IAMPoliciesDataSource) Read(ctx context.Context, req datasource.ReadReq
 	config.Policies = policies
 	resp.Diagnostics.Append(resp.State.Set(ctx, &config)...)
 }
+
+func init() {
+	registerDataSource(NewIAMPoliciesDataSource)
+}

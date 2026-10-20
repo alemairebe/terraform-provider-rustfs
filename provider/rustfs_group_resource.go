@@ -344,3 +344,7 @@ func isGroupNotEmpty(err error) bool {
 func (r *GroupResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	resource.ImportStatePassthroughID(ctx, path.Root("name"), req, resp)
 }
+
+func init() {
+	registerResource(NewGroupResource)
+}

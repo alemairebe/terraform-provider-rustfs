@@ -224,3 +224,7 @@ func kmsStatusModelFromStatus(ctx context.Context, status *rustfs.KmsStatus) (Km
 
 	return config, diags
 }
+
+func init() {
+	registerDataSource(NewKmsStatusDataSource)
+}

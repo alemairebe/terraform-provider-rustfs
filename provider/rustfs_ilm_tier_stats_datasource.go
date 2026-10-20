@@ -141,3 +141,7 @@ func (d *IlmTierStatsDataSource) Read(ctx context.Context, req datasource.ReadRe
 	config.Tiers = tiersValue
 	resp.Diagnostics.Append(resp.State.Set(ctx, &config)...)
 }
+
+func init() {
+	registerDataSource(NewIlmTierStatsDataSource)
+}

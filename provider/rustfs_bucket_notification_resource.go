@@ -555,3 +555,7 @@ func bucketNotificationStringSet(events []s3types.Event) types.Set {
 	}
 	return types.SetValueMust(types.StringType, elements)
 }
+
+func init() {
+	registerResource(NewBucketNotificationResource)
+}

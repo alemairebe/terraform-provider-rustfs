@@ -241,3 +241,7 @@ func (r *LDAPServiceAccountResource) Delete(ctx context.Context, req resource.De
 func (r *LDAPServiceAccountResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	resource.ImportStatePassthroughID(ctx, path.Root("access_key"), req, resp)
 }
+
+func init() {
+	registerResource(NewLDAPServiceAccountResource)
+}

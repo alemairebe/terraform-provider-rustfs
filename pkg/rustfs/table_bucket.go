@@ -76,3 +76,13 @@ func (c *RustfsAdmin) DisableTableBucket(bucket string) (TableBucket, error) {
 	}
 	return tableBucket, nil
 }
+
+func init() {
+	registerFeature(FeatureTableBucket, featureSpec{
+		route: "DELETE /iceberg/v1/buckets/{bucket}",
+		// Probed live: 1.0.1 answers 501 NotImplemented for the disable route,
+		// while 1.0.2 and 1.0.3 disable the catalog. Enable and read work on
+		// all three.
+		minVersion: &Version{Major: 1, Minor: 0, Patch: 2, Raw: "1.0.2"},
+	})
+}

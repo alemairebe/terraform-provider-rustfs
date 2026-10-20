@@ -467,3 +467,7 @@ func isBucketNotFound(err error) bool {
 	}
 	return false
 }
+
+func init() {
+	registerResource(NewBucketResource)
+}
