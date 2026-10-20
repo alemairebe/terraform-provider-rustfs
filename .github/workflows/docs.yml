@@ -16,7 +16,9 @@ permissions:
 jobs:
   generate-docs:
     name: Generate Docs
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Drift must fail the pull request that introduces it, not main after the
+    # merge. The push-to-main run stays as a safety net.
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     # Docs drift is reported as a failed check instead of an auto-opened PR:
     # GitHub Actions is not permitted to create pull requests in this repo
