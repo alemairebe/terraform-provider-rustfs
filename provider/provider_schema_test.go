@@ -82,31 +82,44 @@ var (
 	legacySecretKey     = unitTestCredential("RUSTFS_TEST_LEGACY_SECRET_KEY", 'l')
 )
 
-// providerConfig builds the framework configuration for the provider schema from
-// model, the way Terraform hands a provider block to Configure.
-func providerConfig(t *testing.T, model RustfsProviderModel) tfsdk.Config {
-	t.Helper()
-
+// providerConfigValue builds the framework configuration for the provider
+// schema from model, the way Terraform hands a provider block to Configure.
+func providerConfigValue(model RustfsProviderModel) (tfsdk.Config, error) {
 	p := &RustfsProvider{}
 	schemaResp := &provider.SchemaResponse{}
 	p.Schema(context.Background(), provider.SchemaRequest{}, schemaResp)
 	if schemaResp.Diagnostics.HasError() {
-		t.Fatalf("provider schema: %v", schemaResp.Diagnostics)
+		return tfsdk.Config{}, fmt.Errorf("provider schema: %v", schemaResp.Diagnostics)
 	}
 
 	plan := tfsdk.Plan{Schema: schemaResp.Schema}
 	if diags := plan.Set(context.Background(), model); diags.HasError() {
-		t.Fatalf("provider config set: %v", diags)
+		return tfsdk.Config{}, fmt.Errorf("provider config set: %v", diags)
 	}
-	return tfsdk.Config{Schema: schemaResp.Schema, Raw: plan.Raw}
+	return tfsdk.Config{Schema: schemaResp.Schema, Raw: plan.Raw}, nil
 }
 
 func configureProvider(t *testing.T, model RustfsProviderModel) *provider.ConfigureResponse {
 	t.Helper()
 
-	resp := &provider.ConfigureResponse{}
-	New("test")().Configure(context.Background(), provider.ConfigureRequest{Config: providerConfig(t, model)}, resp)
+	resp, err := configureProviderValue(model)
+	if err != nil {
+		t.Fatal(err)
+	}
 	return resp
+}
+
+// configureProviderValue is configureProvider without *testing.T, for callers
+// such as a CheckDestroy helper that only have an error return.
+func configureProviderValue(model RustfsProviderModel) (*provider.ConfigureResponse, error) {
+	config, err := providerConfigValue(model)
+	if err != nil {
+		return nil, err
+	}
+
+	resp := &provider.ConfigureResponse{}
+	New("test")().Configure(context.Background(), provider.ConfigureRequest{Config: config}, resp)
+	return resp, nil
 }
 
 // TestProviderConfigure covers the endpoint/credential resolution the provider
