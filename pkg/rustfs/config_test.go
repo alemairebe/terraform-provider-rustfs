@@ -162,3 +162,167 @@ func TestHelpConfig(t *testing.T) {
 		t.Errorf("unexpected kvs: %+v", kvs)
 	}
 }
+
+func TestListConfigHistory(t *testing.T) {
+	var gotPath, gotQuery string
+	client := newTestConfigAdminServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotQuery = r.URL.Path, r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[
+			{"RestoreID":"4a1c","CreateTime":"2026-10-20T09:15:00Z","Data":"notify_webhook endpoint=\"*redacted*\"","DataRedacted":true},
+			{"RestoreID":"3b2d","CreateTime":"2026-10-19T18:00:00Z","Data":"scanner delay=\"10\"","DataRedacted":true}
+		]`))
+	})
+
+	entries, err := client.ListConfigHistory(7)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotPath != "/rustfs/admin/v3/list-config-history-kv" {
+		t.Errorf("path = %q", gotPath)
+	}
+	if gotQuery != "count=7" {
+		t.Errorf("query = %q, want count=7", gotQuery)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(entries))
+	}
+	if entries[0].RestoreID != "4a1c" || entries[0].CreateTime != "2026-10-20T09:15:00Z" {
+		t.Errorf("unexpected first entry: %+v", entries[0])
+	}
+	if !entries[0].DataRedacted || !strings.Contains(entries[0].Data, "*redacted*") {
+		t.Errorf("unexpected redaction: %+v", entries[0])
+	}
+}
+
+func TestListConfigHistoryEmpty(t *testing.T) {
+	client := newTestConfigAdminServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[]`))
+	})
+
+	entries, err := client.ListConfigHistory(1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("expected no entries, got %+v", entries)
+	}
+}
+
+func TestListConfigHistoryRejectsInvalidCount(t *testing.T) {
+	client := newTestConfigAdminServer(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("the client must not call the server for an invalid count")
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+
+	if _, err := client.ListConfigHistory(0); err == nil || !strings.Contains(err.Error(), "at least 1") {
+		t.Errorf("expected a count validation error, got %v", err)
+	}
+}
+
+func TestListConfigHistoryServerError(t *testing.T) {
+	client := newTestConfigAdminServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`<Error><Code>AccessDenied</Code><Message>not authorized</Message></Error>`))
+	})
+
+	_, err := client.ListConfigHistory(10)
+	if err == nil || !strings.Contains(err.Error(), "not authorized") {
+		t.Fatalf("expected the server error, got %v", err)
+	}
+}
+
+func TestListConfigHistoryMalformedResponse(t *testing.T) {
+	client := newTestConfigAdminServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"RestoreID":`))
+	})
+
+	_, err := client.ListConfigHistory(10)
+	if err == nil || !strings.Contains(err.Error(), "decode config history") {
+		t.Fatalf("expected a decode error, got %v", err)
+	}
+}
+
+func TestRestoreConfigHistory(t *testing.T) {
+	var gotMethod, gotPath, gotQuery string
+	client := newTestConfigAdminServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath, gotQuery = r.Method, r.URL.Path, r.URL.RawQuery
+		w.WriteHeader(http.StatusOK)
+	})
+
+	if err := client.RestoreConfigHistory("4a1c"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotMethod != http.MethodPut {
+		t.Errorf("method = %q, want PUT", gotMethod)
+	}
+	if gotPath != "/rustfs/admin/v3/restore-config-history-kv" {
+		t.Errorf("path = %q", gotPath)
+	}
+	if gotQuery != "restoreId=4a1c" {
+		t.Errorf("query = %q, want restoreId=4a1c", gotQuery)
+	}
+}
+
+func TestRestoreConfigHistoryRejectsEmptyID(t *testing.T) {
+	client := newTestConfigAdminServer(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("the client must not call the server without a restore id")
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+
+	if err := client.RestoreConfigHistory(""); err == nil || !strings.Contains(err.Error(), "restore id is required") {
+		t.Errorf("expected a restore id validation error, got %v", err)
+	}
+}
+
+func TestRestoreConfigHistoryServerError(t *testing.T) {
+	client := newTestConfigAdminServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`<Error><Code>InvalidRequest</Code><Message>config history entry not found</Message></Error>`))
+	})
+
+	err := client.RestoreConfigHistory("missing")
+	if err == nil || !strings.Contains(err.Error(), "config history entry not found") {
+		t.Fatalf("expected the server error, got %v", err)
+	}
+}
+
+func TestListConfigHistoryUnsupportedFeature(t *testing.T) {
+	client := newTestConfigAdminServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "healthinfo") {
+			_, _ = w.Write([]byte(`{"version":"refs/tags/1.0.3"}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotImplemented)
+		_, _ = w.Write([]byte(`<Error><Code>NotImplemented</Code><Message>not implemented</Message></Error>`))
+	})
+
+	_, err := client.ListConfigHistory(10)
+	if err == nil || !rustfs.IsUnsupportedFeature(err) {
+		t.Fatalf("expected an unsupported feature error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "RustFS 1.0.3") || !strings.Contains(err.Error(), "list-config-history-kv") {
+		t.Errorf("error should name the server version and route: %v", err)
+	}
+}
+
+func TestRestoreConfigHistoryUnsupportedFeature(t *testing.T) {
+	client := newTestConfigAdminServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "healthinfo") {
+			_, _ = w.Write([]byte(`{"version":"refs/tags/1.0.3"}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotImplemented)
+		_, _ = w.Write([]byte(`<Error><Code>NotImplemented</Code><Message>not implemented</Message></Error>`))
+	})
+
+	err := client.RestoreConfigHistory("4a1c")
+	if err == nil || !rustfs.IsUnsupportedFeature(err) {
+		t.Fatalf("expected an unsupported feature error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "RustFS 1.0.3") || !strings.Contains(err.Error(), "restore-config-history-kv") {
+		t.Errorf("error should name the server version and route: %v", err)
+	}
+}
