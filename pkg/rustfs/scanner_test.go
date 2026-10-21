@@ -197,6 +197,89 @@ func TestGetScannerStatusMalformedBody(t *testing.T) {
 	}
 }
 
+func TestScannerResetsMalformedBody(t *testing.T) {
+	tests := []struct {
+		name string
+		call func(rustfs.RustfsAdmin) error
+	}{
+		{
+			name: "cycle-state reset",
+			call: func(client rustfs.RustfsAdmin) error {
+				_, err := client.ResetScannerCycleState()
+				return err
+			},
+		},
+		{
+			name: "usage-state reset",
+			call: func(client rustfs.RustfsAdmin) error {
+				_, err := client.ResetScannerUsageState()
+				return err
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			client := newScannerTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, `not-json`)
+			})
+
+			if err := tc.call(client); err == nil {
+				t.Fatal("expected a decode error")
+			}
+		})
+	}
+}
+
+// readErrorBody fails every read while behaving like a closable body.
+type readErrorBody struct{}
+
+func (readErrorBody) Read([]byte) (int, error) { return 0, errors.New("transport read failed") }
+func (readErrorBody) Close() error             { return nil }
+
+// roundTripFunc adapts a function to an http.RoundTripper.
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// TestScannerAndCacheReadErrors covers the io.ReadAll branch of the scanner and
+// object data cache calls by serving an unreadable response body.
+func TestScannerAndCacheReadErrors(t *testing.T) {
+	client := rustfs.New(&rustfs.RustfsAdminConfig{
+		AccessKey:    "unit-test-access-key",
+		AccessSecret: "unit-test-secret-key",
+		Endpoint:     "example.invalid:9000",
+		HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       readErrorBody{},
+			}, nil
+		})},
+	})
+
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{"GetScannerStatus", func() error { _, err := client.GetScannerStatus(); return err }},
+		{"ResetScannerCycleState", func() error { _, err := client.ResetScannerCycleState(); return err }},
+		{"ResetScannerUsageState", func() error { _, err := client.ResetScannerUsageState(); return err }},
+		{"GetObjectDataCacheStats", func() error { _, err := client.GetObjectDataCacheStats(); return err }},
+		{"FlushObjectDataCache", func() error { _, err := client.FlushObjectDataCache("", ""); return err }},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.call()
+			if err == nil || !strings.Contains(err.Error(), "transport read failed") {
+				t.Fatalf("expected the transport read error, got %v", err)
+			}
+		})
+	}
+}
+
 func TestGetScannerStatusNotImplementedBecomesUnsupportedFeature(t *testing.T) {
 	client := newScannerTestClient(t, unsupportedScannerRoute(t, "/rustfs/admin/v3/scanner/status"))
 

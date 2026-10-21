@@ -104,6 +104,41 @@ func TestGetObjectDataCacheStatsDisabled(t *testing.T) {
 	}
 }
 
+func TestObjectDataCacheMalformedBody(t *testing.T) {
+	tests := []struct {
+		name string
+		call func(rustfs.RustfsAdmin) error
+	}{
+		{
+			name: "stats",
+			call: func(client rustfs.RustfsAdmin) error {
+				_, err := client.GetObjectDataCacheStats()
+				return err
+			},
+		},
+		{
+			name: "flush",
+			call: func(client rustfs.RustfsAdmin) error {
+				_, err := client.FlushObjectDataCache("", "")
+				return err
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			client := newObjectDataCacheTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, `not-json`)
+			})
+
+			if err := tc.call(client); err == nil {
+				t.Fatal("expected a decode error")
+			}
+		})
+	}
+}
+
 func TestFlushObjectDataCache(t *testing.T) {
 	tests := []struct {
 		name        string
