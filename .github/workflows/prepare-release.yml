@@ -2,16 +2,18 @@
 #
 # Bundles every changelog.d/ fragment into a dated CHANGELOG.md section and
 # regenerates the resource/data-source tables in AGENTS.md and README.md, then
-# pushes the result to a release/v<version> branch. It does not open the pull
-# request and it does not tag.
+# pushes the result to a release/v<version> branch and opens or updates the pull
+# request. It does not tag.
 #
-# Opening the pull request stays manual: GitHub Actions is not permitted to
-# create pull requests in this repository, and a pull request opened with
-# GITHUB_TOKEN would not trigger the pull_request workflows that make it safe to
-# merge. Tagging stays manual too: it is irreversible and publishes immediately.
+# The pull request is created with a GitHub App installation token, not
+# GITHUB_TOKEN: GitHub does not run pull_request workflows for PRs opened with
+# GITHUB_TOKEN, and a release PR without checks is not safe to merge. The App
+# needs Contents and Pull requests read & write on this repository only. Without
+# the App credentials (forks, or before the App exists) the workflow still
+# pushes the branch and prints the manual compare link.
 #
-# After the release pull request merges, dispatch Create Release Tag with the
-# same version.
+# Tagging stays manual: it is irreversible and publishes immediately. After the
+# release pull request merges, dispatch Create Release Tag with the same version.
 name: Prepare Release
 
 on:
@@ -163,10 +165,80 @@ jobs:
           # the assembly is deterministic, so this is a reset, not a merge.
           git push --force origin "release/v$VERSION"
 
+      # The App is optional so that forks and repositories that have not created
+      # it yet keep working: they get the manual compare link instead.
+      - name: Check GitHub App credentials
+        id: app-credentials
+        env:
+          APP_ID: ${{ vars.APP_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$APP_ID" && -n "$APP_PRIVATE_KEY" ]]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub App token
+        id: app-token
+        if: steps.app-credentials.outputs.available == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: caberdo
+          repositories: terraform-provider-rustfs
+          permission-pull-requests: write
+
+      - name: Open or update the release pull request
+        id: release-pr
+        if: steps.app-credentials.outputs.available == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          BRANCH: release/v${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          TITLE="chore(release): v$VERSION"
+          BODY=$(cat <<EOF
+          Automated release preparation for \`v$VERSION\`.
+
+          This pull request bundles the \`changelog.d/\` fragments and regenerates
+          the resource tables. It was opened by the release GitHub App so the
+          \`pull_request\` workflows run on it.
+
+          Merge it once the checks pass, then dispatch **Create Release Tag** with
+          \`version: v$VERSION\`.
+          EOF
+          )
+
+          number="$(gh pr list --head "$BRANCH" --base main --state open \
+            --json number --jq '.[0].number // empty')"
+
+          if [[ -z "$number" ]]; then
+            url="$(gh pr create --base main --head "$BRANCH" \
+              --title "$TITLE" --body "$BODY")"
+            number="$(gh pr view "$url" --json number --jq '.number')"
+          else
+            gh pr edit "$number" --title "$TITLE" --body "$BODY" > /dev/null
+            url="$(gh pr view "$number" --json url --jq '.url')"
+          fi
+
+          if [[ -z "$number" || -z "$url" ]]; then
+            echo "could not resolve the release pull request" >&2
+            exit 1
+          fi
+
+          echo "number=$number" >> "$GITHUB_OUTPUT"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
       - name: Summary
         if: always()
         env:
           BRANCH: release/v${{ steps.version.outputs.version }}
+          PR_NUMBER: ${{ steps.release-pr.outputs.number }}
+          PR_URL: ${{ steps.release-pr.outputs.url }}
         run: |
           {
             echo "## Release v${{ steps.version.outputs.version }}"
@@ -175,14 +247,22 @@ jobs:
               echo "| Branch | \`$BRANCH\` |"
               echo "| Base | \`main\` |"
               echo "| Fragments consumed | ${{ env.fragments_removed }} |"
+              if [[ -n "$PR_NUMBER" ]]; then
+                echo "| Pull request | [#$PR_NUMBER]($PR_URL) |"
+              fi
               echo "| Tagged | no — tagging stays a separate manual dispatch |"
               echo ""
               echo "Next:"
               echo ""
-              echo "1. Open the pull request: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/compare/main...$BRANCH?expand=1"
+              if [[ -n "$PR_NUMBER" ]]; then
+                echo "1. Review pull request [#$PR_NUMBER]($PR_URL)."
+              else
+                echo "1. Open the pull request: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/compare/main...$BRANCH?expand=1"
+                echo "   (set the \`APP_ID\` repository variable and the \`APP_PRIVATE_KEY\` secret to open it automatically)"
+              fi
               echo "2. Merge it once the checks pass."
               echo "3. Dispatch **Create Release Tag** with \`version: ${{ steps.version.outputs.version }}\`."
             else
-              echo "The release branch was not pushed. See the failing step above."
+              echo "The release branch was not pushed or the pull request was not opened. See the failing step above."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
