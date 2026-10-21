@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 )
 
@@ -55,6 +56,99 @@ func TestRemoveTier(t *testing.T) {
 	err := client.RemoveTier("MYTIER")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestListTiers(t *testing.T) {
+	cases := []struct {
+		name    string
+		status  int
+		body    string
+		want    []TierInfo
+		wantErr bool
+	}{
+		{
+			// The server nests each backend under its type and leaves the
+			// enclosing tier name out; the backend's own name identifies it.
+			name:   "lists names and types",
+			status: http.StatusOK,
+			body:   `[{"type":"rustfs","rustfs":{"name":"COLD","endpoint":"https://cold.example.org"}},{"type":"s3","s3":{"name":"ARCHIVE"}}]`,
+			want: []TierInfo{
+				{Name: "COLD", TierType: "rustfs"},
+				{Name: "ARCHIVE", TierType: "s3"},
+			},
+		},
+		{
+			name:   "no tiers",
+			status: http.StatusOK,
+			body:   `[]`,
+			want:   []TierInfo{},
+		},
+		{
+			name:   "entry without a backend block",
+			status: http.StatusOK,
+			body:   `[{"type":"rustfs"}]`,
+			want:   []TierInfo{},
+		},
+		{
+			name:   "entry without a type",
+			status: http.StatusOK,
+			body:   `[{"rustfs":{"name":"COLD"}}]`,
+			want:   []TierInfo{},
+		},
+		{
+			name:    "malformed body",
+			status:  http.StatusOK,
+			body:    `not json`,
+			wantErr: true,
+		},
+		{
+			// One unusable entry must not hide the usable ones.
+			name:   "malformed entries are skipped",
+			status: http.StatusOK,
+			body:   `[{"type":{"nested":true}},{"type":"rustfs","rustfs":"not-an-object"},{"type":"s3","s3":{"name":"ARCHIVE"}}]`,
+			want:   []TierInfo{{Name: "ARCHIVE", TierType: "s3"}},
+		},
+		{
+			name:    "server failure",
+			status:  http.StatusForbidden,
+			body:    `<Error><Code>AccessDenied</Code><Message>nope</Message></Error>`,
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet {
+					t.Errorf("expected GET, got %s", r.Method)
+				}
+				if r.URL.Path != "/rustfs/admin/v3/tier" {
+					t.Errorf("unexpected path %s", r.URL.Path)
+				}
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer server.Close()
+
+			client := New(&RustfsAdminConfig{
+				Endpoint: server.Listener.Addr().String(),
+			})
+
+			got, err := client.ListTiers()
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected an error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("ListTiers = %+v, want %+v", got, tc.want)
+			}
+		})
 	}
 }
 
