@@ -151,16 +151,22 @@ func (r *TierResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 		return
 	}
 
+	name := state.Name.ValueString()
+
 	// GET tier/<name> is the server's own verdict on this exact tier: 200 when
 	// it holds the tier, 500 TierNotFound when it does not (probed on 1.0.1 and
-	// latest). It is preferred over tier-stats because a list only proves
-	// absence if it is complete, while this answers for the one name in state.
-	exists, err := r.client.RustClient.TierExists(state.Name.ValueString())
+	// latest). It answers for the one name in state even when the listing is
+	// incomplete, so it always decides whether the tier exists.
+	exists, err := r.client.RustClient.TierExists(name)
 	if err != nil {
 		// A server that does not implement the route cannot answer the
 		// question, so keep the last known state instead of guessing; the
-		// tier's destroy path has the same rule.
+		// tier's destroy path has the same rule. An import still needs the
+		// type from the listing, so fill it when the state lacks it.
 		if rustfs.IsUnsupportedFeature(err) || isUnsupportedTierRoute(err) {
+			if !r.fillTierType(resp, &state) {
+				return
+			}
 			resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 			return
 		}
@@ -173,7 +179,50 @@ func (r *TierResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 		return
 	}
 
+	if !r.fillTierType(resp, &state) {
+		return
+	}
+
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
+}
+
+// fillTierType fills tier_type from the server's tier listing when the state
+// does not have it. ImportStatePassthroughID seeds only name, and tier_type is
+// Required with RequiresReplace, so leaving it empty would make Terraform plan
+// to delete and recreate a tier the server already holds (#116). The listing
+// redacts credentials and is therefore used for the type alone.
+//
+// A missing type is reported as an error rather than left empty: planning a
+// destructive replacement is worse than failing the import with a reason. A
+// state that already carries the type costs no extra request.
+func (r *TierResource) fillTierType(resp *resource.ReadResponse, state *tierResourceModel) bool {
+	if !state.TierType.IsNull() {
+		return true
+	}
+
+	tiers, err := r.client.RustClient.ListTiers()
+	if err != nil {
+		resp.Diagnostics.AddError("Error reading tier type", "Could not list tiers: "+err.Error())
+		return false
+	}
+
+	name := state.Name.ValueString()
+	for _, tier := range tiers {
+		if tier.Name != name {
+			continue
+		}
+		if tier.TierType == "" {
+			break
+		}
+		state.TierType = types.StringValue(tier.TierType)
+		return true
+	}
+
+	resp.Diagnostics.AddError(
+		"Error reading tier type",
+		fmt.Sprintf("The server did not report a type for tier %q.", name),
+	)
+	return false
 }
 
 // isUnsupportedTierRoute reports whether err only says the server does not
