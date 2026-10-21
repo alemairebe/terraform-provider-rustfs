@@ -33,6 +33,8 @@ cluster health all live in the same Terraform state as the rest of your infrastr
 
 - [Quick start](#quick-start)
 - [Requirements and compatibility](#requirements-and-compatibility)
+- [Non-goals](#non-goals)
+- [Claiming a capability](#claiming-a-capability)
 - [Provider configuration](#provider-configuration)
 - [Resources](#resources)
 - [Data sources](#data-sources)
@@ -109,7 +111,7 @@ server version up front; it reports a capability gap when a route it needs is un
 
 | Capability | Provider types | `1.0.1` | `1.0.2` | `1.0.3` |
 |---|---|:--:|:--:|:--:|
-| S3 API and admin API v3 routes (buckets, IAM, quotas, replication, tiers, targets, config, health, info, …) | every resource and data source except `rustfs_metrics` | ✅ | ✅ | ✅ |
+| S3 API and admin API v3 routes (buckets, IAM, quotas, replication, tiers, targets, config, health, info, …) | every resource and data source not listed below | ✅ | ✅ | ✅ |
 | S3 Tables catalog switch — `PUT`/`GET /iceberg/v1/buckets/{bucket}` | `rustfs_table_bucket` create and read | ✅ | ✅ | ✅ |
 | S3 Tables catalog disable — `DELETE /iceberg/v1/buckets/{bucket}` | `rustfs_table_bucket` destroy | ❌ | ✅ | ✅ |
 | Admin metrics stream — `GET /rustfs/admin/v3/metrics` | `rustfs_metrics` data source | ❌ | ❌ | ❌ |
@@ -160,6 +162,29 @@ sub-system is enabled and configured: KMS (`rustfs_kms_key`), LDAP (`rustfs_ldap
 and ILM (`rustfs_tier`, `rustfs_rebalance`), audit targets (`rustfs_audit_target`) and notification
 targets (`rustfs_notification_target`, `rustfs_bucket_notification`). Until then the server returns
 its own error, which the provider surfaces verbatim.
+
+## Non-goals
+
+The provider models objects with a Terraform lifecycle. Some RustFS capabilities are deliberately
+outside that model. Gaps that are merely **not built yet** are tracked in epic
+[#92](https://github.com/caberdo/terraform-provider-rustfs/issues/92) and its child issues; the
+areas below are **declined**, not pending.
+
+| Area | Not modeled | Why it is out of scope |
+|---|---|---|
+| Diagnostics and one-shot actions | `top/locks`, `force-unlock`, `trace`, profiling/pprof, console `log`, `speedtest/*`, `inspect/archive`, `gateway-key-inventory`, `inspect-data`, `object-zip-downloads`, `POST /update` | They are imperative queries or operator actions with no durable desired state. `force-unlock` and update/restart mutate ephemeral server state that `plan`/`apply`/`destroy` cannot represent honestly; `top/locks`, profiling, tracing and speed tests report on demand. Use `mc` or the console. |
+| Server-launch and environment-only features | WebDAV, FTP(S), SFTP, Swift, `RUSTFS_HTTP3_ENABLE`, scanner knobs exposed only as `RUSTFS_SCANNER_*` variables | They are enabled or tuned by the server process environment or launch flags, not through an admin API route. The provider talks to a running server over HTTP and does not control its process, container or command line; manage these with the deployment tooling that starts RustFS. The `scanner` subsystem of `rustfs_config` is still managed by `rustfs_config`; only knobs without a config-kv key are out of scope. |
+| Console self-service | `account/*`, `mfa/challenge` | These endpoints serve a signed-in human through browser sessions: account self-service and an interactive MFA challenge. They are not part of the SigV4 admin API and expose no declarative object for Terraform to own. The RustFS Console and the configured identity provider handle them. |
+| Other products | RustFS Console UI, MCP server, operator/Helm charts | They are separate deliverables with their own repositories and release cadence. This provider is an API client; install, configure and upgrade those products with their own tooling. |
+| Iceberg catalog data | Namespaces, tables, views, refs and credentials; catalog backup/restore | The catalog's contents are application data, not infrastructure. Catalog backup returns an opaque server-side snapshot with no read/list/delete route, so it has no Terraform lifecycle; restore is destructive and must not happen as a side effect of `apply`. Only the bucket-level switch is modeled, by `rustfs_table_bucket`. |
+
+## Claiming a capability
+
+A route in RustFS's `route_policy.rs` is **not** proof of support. RustFS registers routes before it
+implements them and answers `501 NotImplemented` (see above). Before documenting or building a
+capability, probe the running server, record the exact RustFS version and the response, and cite that
+evidence in the issue or pull request. Do not infer support from the route table, a release note, or
+a successful call on a different method or path.
 
 ## Provider configuration
 
