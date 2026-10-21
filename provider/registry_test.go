@@ -70,6 +70,7 @@ var goldenResourceTypeNames = []string{
 
 // goldenDataSourceTypeNames is every data source the provider must register.
 var goldenDataSourceTypeNames = []string{
+	"rustfs_batch_jobs",
 	"rustfs_bucket_metadata_backup",
 	"rustfs_bucket_on_demand_migration_status",
 	"rustfs_bucket_usage",
@@ -95,9 +96,10 @@ var goldenDataSourceTypeNames = []string{
 	"rustfs_plugins",
 	"rustfs_pools",
 	"rustfs_quota",
+	"rustfs_replication_diff",
 	"rustfs_replication_metrics",
+	"rustfs_replication_mrf",
 	"rustfs_runtime_capabilities",
-	"rustfs_scanner_status",
 	"rustfs_server_info",
 	"rustfs_storage_info",
 	"rustfs_tls_certificate_state",
