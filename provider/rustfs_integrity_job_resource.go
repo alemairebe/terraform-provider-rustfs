@@ -35,13 +35,16 @@ var (
 	_ resource.ResourceWithValidateConfig = &IntegrityJobResource{}
 )
 
+// The byte-sized limits are int64 so their values survive a 32-bit build:
+// 5 GiB does not fit in an int on arm or 386, and fmt.Sprintf would then
+// refuse the constant at compile time.
 const (
-	integrityJobDefaultBytesPerSecond = 8 * 1024 * 1024
-	integrityJobMinBytesPerSecond     = 64 * 1024
-	integrityJobMaxBytesPerSecond     = 1024 * 1024 * 1024
-	integrityJobDefaultMaxObjectBytes = 5 * 1024 * 1024 * 1024
-	integrityJobMaxObjectBytes        = 5 * 1024 * 1024 * 1024
-	integrityJobMaxItems              = 64
+	integrityJobDefaultBytesPerSecond int64 = 8 * 1024 * 1024
+	integrityJobMinBytesPerSecond     int64 = 64 * 1024
+	integrityJobMaxBytesPerSecond     int64 = 1024 * 1024 * 1024
+	integrityJobDefaultMaxObjectBytes int64 = 5 * 1024 * 1024 * 1024
+	integrityJobMaxObjectBytes        int64 = 5 * 1024 * 1024 * 1024
+	integrityJobMaxItems                    = 64
 )
 
 // IntegrityJobResource starts one bounded data-integrity job and records the
