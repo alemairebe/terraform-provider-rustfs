@@ -100,6 +100,7 @@ var goldenDataSourceTypeNames = []string{
 	"rustfs_replication_metrics",
 	"rustfs_replication_mrf",
 	"rustfs_runtime_capabilities",
+	"rustfs_scanner_status",
 	"rustfs_server_info",
 	"rustfs_storage_info",
 	"rustfs_tls_certificate_state",
