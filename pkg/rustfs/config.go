@@ -6,11 +6,32 @@ package rustfs
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
+	"strconv"
 	"strings"
 )
+
+// FeatureConfigHistory is the config snapshot list read by the
+// rustfs_config_history data source (GET list-config-history-kv).
+const FeatureConfigHistory Feature = "config history"
+
+// FeatureConfigRestore is the rollback performed by the rustfs_config_restore
+// resource (PUT restore-config-history-kv).
+const FeatureConfigRestore Feature = "config restore"
+
+func init() {
+	registerFeature(FeatureConfigHistory, featureSpec{
+		route: "GET /rustfs/admin/v3/list-config-history-kv",
+		// The route is registered and implemented in the tagged RustFS source
+		// for 1.0.1 through 1.0.3, so there is no version floor to advertise.
+	})
+	registerFeature(FeatureConfigRestore, featureSpec{
+		route: "PUT /rustfs/admin/v3/restore-config-history-kv",
+	})
+}
 
 // ConfigKV is a single key/value pair of a sub-system config scope.
 type ConfigKV struct {
@@ -93,6 +114,84 @@ func (c *RustfsAdmin) DeleteConfig(subSystem string) error {
 	resp, err := c.doRequest(ctx, reqData)
 	if err != nil {
 		return err
+	}
+	drainClose(resp)
+	return nil
+}
+
+// ConfigHistoryEntry is one saved server-config snapshot from
+// GET list-config-history-kv.
+//
+// RustFS writes a snapshot before every config mutation, including a restore,
+// so the entry a mutation created is the way back to the state before it. Data
+// is the snapshot rendered in the same directive text as get-config-kv with
+// secret-like values replaced by the server; DataRedacted reports that the
+// server did so. The list carries no actor: the route does not record who made
+// the change.
+type ConfigHistoryEntry struct {
+	RestoreID    string `json:"RestoreID"`
+	CreateTime   string `json:"CreateTime"`
+	Data         string `json:"Data"`
+	DataRedacted bool   `json:"DataRedacted"`
+}
+
+// ListConfigHistory reads GET list-config-history-kv.
+//
+// The server requires a count and keeps at most that many newest entries. It
+// returns whole-server snapshots, not per-subsystem diffs, so every entry
+// describes the same config scopes.
+func (c *RustfsAdmin) ListConfigHistory(count int) ([]ConfigHistoryEntry, error) {
+	if count < 1 {
+		return nil, fmt.Errorf("config history count must be at least 1: %d", count)
+	}
+
+	query := make(url.Values)
+	query.Set("count", strconv.Itoa(count))
+	reqData := RequestData{
+		Method:      "GET",
+		RelPath:     "list-config-history-kv",
+		QueryValues: query,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	resp, err := c.doRequest(ctx, reqData)
+	if err != nil {
+		return nil, c.featureError(err, FeatureConfigHistory)
+	}
+	defer drainClose(resp)
+
+	var entries []ConfigHistoryEntry
+	if err := json.NewDecoder(resp.Body).Decode(&entries); err != nil {
+		return nil, fmt.Errorf("decode config history: %w", err)
+	}
+	return entries, nil
+}
+
+// RestoreConfigHistory replaces the live configuration with the snapshot named
+// by restoreID via PUT restore-config-history-kv.
+//
+// The restore overwrites every config scope, not just the one that changed, so
+// it can undo another operator's unrelated change. The server writes a new
+// history entry for the current configuration before applying the snapshot,
+// which is what makes a restore itself revertible. A missing or legacy entry
+// is reported by the server; the provider does not fall back to another entry.
+func (c *RustfsAdmin) RestoreConfigHistory(restoreID string) error {
+	if restoreID == "" {
+		return errors.New("restore id is required")
+	}
+
+	query := make(url.Values)
+	query.Set("restoreId", restoreID)
+	reqData := RequestData{
+		Method:      "PUT",
+		RelPath:     "restore-config-history-kv",
+		QueryValues: query,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	resp, err := c.doRequest(ctx, reqData)
+	if err != nil {
+		return c.featureError(err, FeatureConfigRestore)
 	}
 	drainClose(resp)
 	return nil
