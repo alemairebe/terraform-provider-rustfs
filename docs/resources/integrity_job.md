@@ -1,0 +1,132 @@
+---
+page_title: "rustfs_integrity_job Resource - rustfs"
+subcategory: ""
+description: |-
+  Start a bounded RustFS data-integrity job for explicit object versions (POST /rustfs/admin/v3/integrity/{bucket}/jobs) and keep the durable job the server returns.
+  This resource reads object data
+  An audit job reads the listed object versions and verifies their integrity evidence; a migrate job reads them and writes a verified copy under target_key. The read is bounded by the item list (1 to 64 versions) and max_object_bytes, but 64 versions at the limit is heavy I/O. confirm must repeat the bucket name so a job cannot be started against the wrong bucket by accident.
+  Lifecycle
+  RustFS creates a job paused and runs it only after a resume. Create creates the job and resumes it in one apply; Read reports the current state, revision and per-item results. Every configurable attribute carries RequiresReplace, so changing one starts a new job. One integrity worker runs per cluster, so a second resume can be refused with SlowDown while another job is active.
+  Delete sends cancel through the control route. Cancelling is idempotent and does not roll back bytes already verified or migrated; a terminal job is returned unchanged. There is no route that deletes a job record, so destroy only stops the work and forgets the record.
+  Readiness and requirements
+  migrate requires RUSTFS_SHARD_INTEGRITY_WRITE and RUSTFS_SHARD_INTEGRITY_FLEET_CONFIRMED on every node; without them the apply fails before a job is created. Read the rustfs_integrity_readiness data source to inspect those switches. The routes are implemented in RustFS 1.0.1 through 1.0.3; a server that does not implement them produces a version-aware diagnostic.
+  Import
+  Import with <bucket>/<job_id>, because the status route is bucket-scoped.
+---
+
+# rustfs_integrity_job Resource
+
+Start a bounded RustFS data-integrity job for explicit object versions (POST /rustfs/admin/v3/integrity/{bucket}/jobs) and keep the durable job the server returns.
+
+### This resource reads object data
+
+An `audit` job reads the listed object versions and verifies their integrity evidence; a `migrate` job reads them and writes a verified copy under `target_key`. The read is bounded by the item list (1 to 64 versions) and `max_object_bytes`, but 64 versions at the limit is heavy I/O. `confirm` must repeat the bucket name so a job cannot be started against the wrong bucket by accident.
+
+### Lifecycle
+
+RustFS creates a job paused and runs it only after a resume. `Create` creates the job and resumes it in one apply; `Read` reports the current `state`, `revision` and per-item `results`. Every configurable attribute carries `RequiresReplace`, so changing one starts a **new** job. One integrity worker runs per cluster, so a second resume can be refused with `SlowDown` while another job is active.
+
+`Delete` sends `cancel` through the control route. Cancelling is idempotent and does not roll back bytes already verified or migrated; a terminal job is returned unchanged. There is no route that deletes a job record, so destroy only stops the work and forgets the record.
+
+### Readiness and requirements
+
+`migrate` requires `RUSTFS_SHARD_INTEGRITY_WRITE` and `RUSTFS_SHARD_INTEGRITY_FLEET_CONFIRMED` on every node; without them the apply fails before a job is created. Read the `rustfs_integrity_readiness` data source to inspect those switches. The routes are implemented in RustFS 1.0.1 through 1.0.3; a server that does not implement them produces a version-aware diagnostic.
+
+### Import
+
+Import with `<bucket>/<job_id>`, because the status route is bucket-scoped.
+
+## Example Usage
+
+```terraform
+# An integrity job covers explicit object versions, never a whole bucket. An
+# audit reads each version and verifies its integrity evidence; a migrate job
+# also writes a verified copy under target_key (and needs the shard-integrity
+# write switches on every node).
+#
+# confirm must repeat the bucket name. It is the cost guard: each listed version
+# is read, up to max_object_bytes per object.
+resource "rustfs_integrity_job" "check_reports" {
+  bucket  = "logs"
+  mode    = "audit"
+  confirm = "logs"
+
+  items = [
+    {
+      key        = "reports/2026.csv"
+      version_id = "null"
+    },
+    {
+      key             = "reports/2026-q3.csv"
+      expected_sha256 = "uU0nuZNNPgilLlLX2n2r+sSE7+N6U4DukIj3rOLvzek="
+    },
+  ]
+
+  # 8 MiB/s is the default; the server accepts 64 KiB/s to 1 GiB/s.
+  bytes_per_second = 8388608
+  max_object_bytes = 5368709120
+}
+
+output "integrity_job_id" {
+  value = rustfs_integrity_job.check_reports.id
+}
+
+output "integrity_job_state" {
+  value = rustfs_integrity_job.check_reports.state
+}
+
+# `terraform destroy` sends cancel through the control route. Cancelling stops
+# remaining work but does not roll back bytes already verified, and there is no
+# route that deletes the job record.
+```
+
+<!-- schema generated by tfplugindocs -->
+## Schema
+
+### Required
+
+- `bucket` (String) Bucket that holds the listed object versions. Changing it starts a new job.
+- `confirm` (String) Must repeat `bucket`. This is the cost guard: a job reads every listed version, so starting one against the wrong bucket is expensive. Changing it starts a new job.
+- `items` (Attributes List) Explicit source versions the job covers. RustFS accepts 1 to 64 items; the job never scans a prefix or the rest of the bucket. Changing the list starts a new job. (see [below for nested schema](#nestedatt--items))
+- `mode` (String) `audit` reads and verifies the listed versions; `migrate` also writes a verified copy under each item's `target_key`. Changing it starts a new job.
+
+### Optional
+
+- `bytes_per_second` (Number) Bounds each source read, destination PUT and verification stream in bytes per second. RustFS accepts 65536 to 1073741824; the default is 8388608 (8 MiB/s). Changing it starts a new job.
+- `max_object_bytes` (Number) Largest object the job stages. RustFS accepts 1 to 5368709120 bytes; the default is the maximum. Changing it starts a new job.
+
+### Read-Only
+
+- `bucket_incarnation` (String) Incarnation UUID of the bucket the job was created against. A job is fenced to that generation.
+- `id` (String) Durable job id of the integrity job.
+- `last_error` (String) Why the job failed, when the server reports one.
+- `results` (Attributes List) Per-item outcome, in the same order as `items`. (see [below for nested schema](#nestedatt--results))
+- `revision` (Number) Monotonic job revision reported by the server.
+- `state` (String) Job state reported by the server: `paused`, `running`, `pause_requested`, `cancel_requested`, `cancelled`, `complete` or `failed`.
+
+<a id="nestedatt--items"></a>
+### Nested Schema for `items`
+
+Required:
+
+- `key` (String) Object key of the source version.
+
+Optional:
+
+- `expected_sha256` (String) Canonical Base64 SHA-256 supplied by an independent source. When set, the job compares the object against this value instead of trusting the stored checksum.
+- `target_key` (String) Destination key for `migrate`, distinct from every source and every other target. It must be omitted for `audit`.
+- `version_id` (String) S3 version selector. Omit it for the current version, or use the literal `null` for the null version slot.
+
+
+<a id="nestedatt--results"></a>
+### Nested Schema for `results`
+
+Read-Only:
+
+- `detail` (String) Human-readable detail for a non-success item.
+- `evidence_source` (String) Where the verification evidence came from.
+- `expected_sha256` (String) Expected SHA-256 recorded for the item, when the job had one.
+- `source_fingerprint` (String) Fingerprint of the source metadata the item was verified against.
+- `source_size` (Number) Source object size in bytes, once observed.
+- `state` (String) Item state: `pending`, `prepared`, `verified`, `migrated`, `unsupported`, `unavailable`, `mismatch`, `stale` or `conflict`.
+- `target_version_id` (String) Version id the migrated copy received.
