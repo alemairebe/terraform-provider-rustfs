@@ -48,6 +48,9 @@ services:
         exit $$status
     environment:
       TF_ACC: "1"
+      # The pinned golang image bundles an older Go than go.mod requires and
+      # disables toolchain downloads; let it fetch the matching toolchain.
+      GOTOOLCHAIN: auto
       RUSTFS_ENDPOINT: "rustfs:9001"
       RUSTFS_USER: "rustfsadmin"
       RUSTFS_SECRET: "rustfsadmin"
@@ -138,7 +141,7 @@ services:
       - .
       - /workspaces/terraform-provider-rustfs/acc_test/tls
     environment:
-      # go.mod requires go 1.27.2; let the image fetch that toolchain if its
+      # go.mod requires go 1.27.3; let the image fetch that toolchain if its
       # bundled Go is older, matching the test service.
       GOTOOLCHAIN: auto
 
