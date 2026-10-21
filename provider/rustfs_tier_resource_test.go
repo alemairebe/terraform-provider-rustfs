@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -209,9 +210,9 @@ func TestTierResourceCreate(t *testing.T) {
 // TestTierResourceRead was deleted with #74: it pinned Read as a no-op that
 // never calls the admin API, which is the behaviour the issue requires to
 // change (a tier removed outside Terraform stayed in state forever).
-// TestTierResourceLifecyclePaths covers the new contract: the read calls
-// tier-stats, keeps a listed tier, removes a tier the server no longer lists,
-// and reports a server error.
+// TestTierResourceLifecyclePaths covers the new contract: the read refreshes
+// tier_type from the tier listing, keeps a tier the exact-name check still
+// holds, removes a tier the server no longer has, and reports a server error.
 
 func TestTierResourceUpdate(t *testing.T) {
 	t.Run("edits the tier", func(t *testing.T) {
@@ -341,6 +342,50 @@ func TestTierResourceImportState(t *testing.T) {
 	}
 }
 
+// TestTierResourceReadPopulatesImportedTierType reproduces #116: an import
+// seeds only the name, so tier_type starts empty even though it is Required
+// and RequiresReplace. Read must fill it from the server listing, otherwise
+// Terraform plans to delete and recreate a tier that is already there.
+func TestTierResourceReadPopulatesImportedTierType(t *testing.T) {
+	client, _ := routedClient(t,
+		requestRoute{method: http.MethodGet, pathContains: "/v3/tier/COLD", status: http.StatusOK},
+		requestRoute{method: http.MethodGet, pathContains: "/v3/tier", status: http.StatusOK, body: `[{"type":"rustfs","rustfs":{"name":"COLD"}}]`},
+	)
+	h := newCRUDHarness(t, NewTierResource(), client)
+
+	resp := h.read(&tierResourceModel{Name: types.StringValue("COLD")})
+
+	requireNoDiagnostics(t, resp.Diagnostics)
+	assertStatePresent(t, resp.State)
+	assertStateString(t, resp.State, path.Root("name"), "COLD")
+	assertStateString(t, resp.State, path.Root("tier_type"), "rustfs")
+}
+
+// TestTierResourceReadSkipsListingWhenTypeIsKnown pins that a normal refresh
+// uses the exact-name check only: the listing is needed for an import, not for
+// every tier on every plan.
+func TestTierResourceReadSkipsListingWhenTypeIsKnown(t *testing.T) {
+	client, recorder := routedClient(t, requestRoute{
+		method:       http.MethodGet,
+		pathContains: "/v3/tier/COLD",
+		status:       http.StatusOK,
+	})
+	h := newCRUDHarness(t, NewTierResource(), client)
+
+	resp := h.read(&tierResourceModel{
+		Name:       types.StringValue("COLD"),
+		TierType:   types.StringValue("s3"),
+		ConfigJson: types.StringValue(`{"name":"COLD"}`),
+	})
+
+	requireNoDiagnostics(t, resp.Diagnostics)
+	assertStatePresent(t, resp.State)
+	assertStateString(t, resp.State, path.Root("tier_type"), "s3")
+	if want := []string{"GET /rustfs/admin/v3/tier/COLD"}; !slices.Equal(recorder.requests, want) {
+		t.Errorf("Read made %v, want only the exact-name check %v", recorder.requests, want)
+	}
+}
+
 // Tier acceptance coverage. A tier is only created when the server can probe a
 // reachable remote backend, so the test needs a second RustFS to point at and
 // skips when the environment does not provide one. The native `rustfs` tier
@@ -455,10 +500,11 @@ func TestAccTierResource(t *testing.T) {
 			},
 			{
 				// Out-of-band drift: the tier is edited straight through the
-				// admin API, behind Terraform's back. Read is a passthrough for
-				// this resource (the server's tier listing does not round-trip
-				// the configuration), so the follow-up plan stays empty by
-				// design; the check proves the server really moved.
+				// admin API, behind Terraform's back. Read refreshes tier_type
+				// from the listing but does not round-trip config_json (the
+				// server redacts credentials and keeps the value a tier was
+				// created with), so the follow-up plan stays empty by design;
+				// the check proves the server really moved.
 				Config:             testAccTierConfig(tierEndpoint, replacementName, bucket),
 				ExpectNonEmptyPlan: false,
 				Check: resource.ComposeAggregateTestCheckFunc(
@@ -470,19 +516,27 @@ func TestAccTierResource(t *testing.T) {
 				},
 			},
 			{
-				// ImportStatePassthroughID maps the tier name; tier_type and
-				// config_json are not readable back from the server, so the
-				// import step ignores them and expects the plan to want them
-				// re-supplied from the configuration.
+				// ImportStatePassthroughID maps the tier name and Read fills
+				// tier_type from the server listing, so importing a tier that
+				// already exists must not plan a replacement (#116). Only
+				// config_json stays absent from the imported state: the server
+				// redacts its credentials, so the configuration has to be
+				// re-supplied by an in-place update.
 				ResourceName:                         tierResourceName,
 				ImportState:                          true,
 				ImportStateId:                        replacementName,
 				ImportStateVerify:                    true,
 				ImportStateVerifyIdentifierAttribute: "name",
-				ImportStateVerifyIgnore:              []string{"tier_type", "config_json"},
+				ImportStateVerifyIgnore:              []string{"config_json"},
 				ExpectNonEmptyPlan:                   true,
+				ImportPlanChecks: resource.ImportPlanChecks{
+					PreApply: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction(tierResourceName, plancheck.ResourceActionUpdate),
+					},
+				},
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr(tierResourceName, "name", replacementName),
+					resource.TestCheckResourceAttr(tierResourceName, "tier_type", "rustfs"),
 				),
 			},
 		},
@@ -798,11 +852,13 @@ func TestTierResourceLifecyclePaths(t *testing.T) {
 	t.Parallel()
 
 	readCases := []struct {
-		name        string
-		routes      []requestRoute
-		wantRemoved bool
-		wantSummary string
-		wantDetail  string
+		name            string
+		routes          []requestRoute
+		missingTierType bool
+		wantRemoved     bool
+		wantSummary     string
+		wantDetail      string
+		wantTierType    string
 	}{
 		{
 			// Probed on 1.0.1 and latest: GET tier/<name> answers 500
@@ -817,12 +873,46 @@ func TestTierResourceLifecyclePaths(t *testing.T) {
 			wantDetail: "",
 		},
 		{
+			// An import seeds only name, so the type is missing. The listing
+			// supplies it, which keeps Terraform from planning a replacement
+			// of a tier the server already holds (#116).
+			name:            "import fills the backend type",
+			routes:          []requestRoute{{method: http.MethodGet, pathContains: "/v3/tier/COLD", status: http.StatusOK}, {method: http.MethodGet, pathContains: "/v3/tier", status: http.StatusOK, body: `[{"type":"rustfs","rustfs":{"name":"COLD"}}]`}},
+			missingTierType: true,
+			wantTierType:    "rustfs",
+		},
+		{
+			// A listing failure must not silently leave the type empty: that
+			// would reintroduce the destructive replacement plan without an
+			// explanation.
+			name:            "import reports a listing failure",
+			routes:          []requestRoute{{method: http.MethodGet, pathContains: "/v3/tier/COLD", status: http.StatusOK}, {method: http.MethodGet, pathContains: "/v3/tier", status: http.StatusInternalServerError, body: s3ErrorXML("InternalError", "listing failed")}},
+			missingTierType: true,
+			wantSummary:     "Error reading tier type",
+			wantDetail:      "Could not list tiers: ",
+		},
+		{
+			name:            "import reports a listing without the tier",
+			routes:          []requestRoute{{method: http.MethodGet, pathContains: "/v3/tier/COLD", status: http.StatusOK}, {method: http.MethodGet, pathContains: "/v3/tier", status: http.StatusOK, body: `[{"type":"s3","s3":{"name":"OTHER"}}]`}},
+			missingTierType: true,
+			wantSummary:     "Error reading tier type",
+			wantDetail:      `did not report a type for tier "COLD"`,
+		},
+		{
 			// A server that does not implement the verify route cannot answer
-			// the question, so the last known state is kept rather than
-			// planning a destructive recreation.
+			// the existence question, so the last known state is kept rather
+			// than planning a destructive recreation.
 			name:       "unimplemented route keeps state without a diagnostic",
 			routes:     []requestRoute{{status: http.StatusNotImplemented, body: s3ErrorXML("NotImplemented", "not implemented")}},
 			wantDetail: "",
+		},
+		{
+			// The same unsupported route still lets an import learn the type
+			// from the listing.
+			name:            "unimplemented route still fills a missing type",
+			routes:          []requestRoute{{method: http.MethodGet, pathContains: "/v3/tier/COLD", status: http.StatusNotImplemented, body: s3ErrorXML("NotImplemented", "not implemented")}, {method: http.MethodGet, pathContains: "/v3/tier", status: http.StatusOK, body: `[{"type":"rustfs","rustfs":{"name":"COLD"}}]`}},
+			missingTierType: true,
+			wantTierType:    "rustfs",
 		},
 		{
 			name:        "server error keeps state and names the failing call",
@@ -836,12 +926,15 @@ func TestTierResourceLifecyclePaths(t *testing.T) {
 		t.Run("read: "+tc.name, func(t *testing.T) {
 			client, _ := routedClient(t, tc.routes...)
 			h := newCRUDHarness(t, NewTierResource(), client)
-
-			resp := h.read(&tierResourceModel{
+			state := &tierResourceModel{
 				Name:       types.StringValue("COLD"),
-				TierType:   types.StringValue("s3"),
 				ConfigJson: types.StringValue(`{"name":"COLD"}`),
-			})
+			}
+			if !tc.missingTierType {
+				state.TierType = types.StringValue("s3")
+			}
+
+			resp := h.read(state)
 
 			if tc.wantRemoved {
 				requireNoDiagnostics(t, resp.Diagnostics)
@@ -856,6 +949,9 @@ func TestTierResourceLifecyclePaths(t *testing.T) {
 			requireNoDiagnostics(t, resp.Diagnostics)
 			assertStatePresent(t, resp.State)
 			assertStateString(t, resp.State, path.Root("name"), "COLD")
+			if tc.wantTierType != "" {
+				assertStateString(t, resp.State, path.Root("tier_type"), tc.wantTierType)
+			}
 		})
 	}
 
