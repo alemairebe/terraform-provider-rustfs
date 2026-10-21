@@ -23,7 +23,15 @@ import (
 )
 
 const (
-	rustfsApiVersion = "v3"
+	adminVersionV3 = "v3"
+	adminVersionV4 = "v4"
+	// defaultAdminAPIVersion is the admin API version a request without an
+	// explicit RequestData.Version uses. It keeps every pre-v4 call byte
+	// identical to the URLs the provider emitted before the version parameter
+	// existed.
+	defaultAdminAPIVersion = adminVersionV3
+	// adminBasePath is the path prefix shared by every admin API version.
+	adminBasePath = "/rustfs/admin"
 	// adminSigningRegion is the credential-scope region for every signed
 	// request. RustFS does not validate the scope's region: live probes on
 	// 1.0.1, 1.0.2 and 1.0.3 accepted both us-east-01 (this value) and
@@ -49,7 +57,8 @@ type RustfsAdminConfig struct {
 
 type RustfsAdmin struct {
 	httpClient         *http.Client
-	endpointURL        string
+	rootURL            string
+	adminBaseURL       string
 	configuredEndpoint string
 	accessKey          string
 	accessSecret       string
@@ -59,8 +68,13 @@ type RequestData struct {
 	CustomHeaders http.Header
 	QueryValues   url.Values
 	RelPath       string // URL path relative to admin API base endpoint
-	Content       []byte
-	Method        string
+	// Version selects the admin API version the request is sent to. Empty
+	// means defaultAdminAPIVersion ("v3"), so existing callers are unchanged;
+	// "v4" targets /rustfs/admin/v4/... DoDirectRequest rejects a non-empty
+	// value because it always resolves against the host root.
+	Version string
+	Content []byte
+	Method  string
 }
 
 // APIError is a structured client error produced from a non-2xx admin/S3
@@ -114,6 +128,18 @@ func parseAPIError(resp *http.Response, body []byte) *APIError {
 	return e
 }
 
+// IsUpgradeRequired reports whether err is the server's answer for an admin v4
+// path it does not serve: 511 Upgrade Required with an empty body. The body
+// carries no Code, so the status code is the only signal; in particular this is
+// not 501, which means the server does not implement the route at all.
+func IsUpgradeRequired(err error) bool {
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	return apiErr.StatusCode == http.StatusUpgradeRequired
+}
+
 // IsAPIErrorCode reports whether err carries one of the given structured error
 // codes as a *APIError. It never performs substring matching, so unrelated
 // errors containing the code text are not misclassified.
@@ -131,7 +157,8 @@ func IsAPIErrorCode(err error, codes ...string) bool {
 }
 
 func New(config *RustfsAdminConfig) (client RustfsAdmin) {
-	client.endpointURL = client.createEndpointUrl(config.Endpoint, config.Ssl)
+	client.rootURL = client.createRootURL(config.Endpoint, config.Ssl)
+	client.adminBaseURL = client.rootURL + adminBasePath
 	client.configuredEndpoint = config.Endpoint
 	client.httpClient = config.HTTPClient
 	if client.httpClient == nil {
@@ -177,7 +204,7 @@ func drainClose(resp *http.Response) {
 	_ = resp.Body.Close()
 }
 
-func (c *RustfsAdmin) createEndpointUrl(endpoint string, secure bool) string {
+func (c *RustfsAdmin) createRootURL(endpoint string, secure bool) string {
 	scheme := "https"
 	if !secure {
 		scheme = "http"
@@ -191,12 +218,33 @@ func (c *RustfsAdmin) createEndpointUrl(endpoint string, secure bool) string {
 		endpoint = strings.TrimSuffix(endpoint, ":80")
 	}
 
-	return scheme + "://" + endpoint + "/rustfs/admin/" + rustfsApiVersion
+	return scheme + "://" + endpoint
+}
+
+// adminURL returns the versioned admin API base a request is sent to. The
+// empty version keeps the historical v3 URL. Only v3 and v4 are accepted: the
+// provider deliberately models no other namespace.
+func (c *RustfsAdmin) adminURL(version string) (string, error) {
+	switch version {
+	case "":
+		version = defaultAdminAPIVersion
+	case adminVersionV3, adminVersionV4:
+	default:
+		return "", fmt.Errorf(
+			"unsupported admin API version %q: expected %q or %q",
+			version, adminVersionV3, adminVersionV4,
+		)
+	}
+	return c.adminBaseURL + "/" + version, nil
 }
 
 func (c *RustfsAdmin) createRequest(ctx context.Context, request RequestData) (*http.Request, error) {
 	// Initialize a new HTTP request for the method.
-	urlStr := c.endpointURL + "/" + request.RelPath
+	adminURL, err := c.adminURL(request.Version)
+	if err != nil {
+		return nil, err
+	}
+	urlStr := adminURL + "/" + request.RelPath
 	// If there are any query values, add them to the end.
 	if len(request.QueryValues) > 0 {
 		urlStr = urlStr + "?" + queryEncode(request.QueryValues)
@@ -233,7 +281,13 @@ func (c *RustfsAdmin) signRequest(ctx context.Context, req *http.Request, conten
 }
 
 func (c *RustfsAdmin) DoDirectRequest(ctx context.Context, request RequestData) (res *http.Response, err error) {
-	urlStr := strings.Replace(c.endpointURL, "/rustfs/admin/"+rustfsApiVersion, "", 1) + "/" + request.RelPath
+	if request.Version != "" {
+		return nil, fmt.Errorf(
+			"DoDirectRequest targets the host root and does not take an admin API version (got %q)",
+			request.Version,
+		)
+	}
+	urlStr := c.rootURL + "/" + request.RelPath
 	// If there are any query values, add them to the end.
 	if len(request.QueryValues) > 0 {
 		urlStr = urlStr + "?" + queryEncode(request.QueryValues)

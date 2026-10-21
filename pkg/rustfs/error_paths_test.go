@@ -389,8 +389,8 @@ func TestDoDirectRequestNetworkError(t *testing.T) {
 	}
 }
 
-// TestCreateEndpointUrl covers the default-port stripping and scheme choice.
-func TestCreateEndpointUrl(t *testing.T) {
+// TestCreateRootUrl covers the default-port stripping and scheme choice.
+func TestCreateRootUrl(t *testing.T) {
 	c := RustfsAdmin{}
 	tests := []struct {
 		name     string
@@ -398,15 +398,15 @@ func TestCreateEndpointUrl(t *testing.T) {
 		secure   bool
 		want     string
 	}{
-		{"secure strips 443", "host:443", true, "https://host/rustfs/admin/v3"},
-		{"secure keeps other port", "host:9000", true, "https://host:9000/rustfs/admin/v3"},
-		{"insecure strips 80", "host:80", false, "http://host/rustfs/admin/v3"},
-		{"insecure keeps other port", "host:9000", false, "http://host:9000/rustfs/admin/v3"},
+		{"secure strips 443", "host:443", true, "https://host"},
+		{"secure keeps other port", "host:9000", true, "https://host:9000"},
+		{"insecure strips 80", "host:80", false, "http://host"},
+		{"insecure keeps other port", "host:9000", false, "http://host:9000"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := c.createEndpointUrl(tt.endpoint, tt.secure); got != tt.want {
-				t.Errorf("createEndpointUrl(%q, %v) = %q, want %q", tt.endpoint, tt.secure, got, tt.want)
+			if got := c.createRootURL(tt.endpoint, tt.secure); got != tt.want {
+				t.Errorf("createRootURL(%q, %v) = %q, want %q", tt.endpoint, tt.secure, got, tt.want)
 			}
 		})
 	}
@@ -415,7 +415,7 @@ func TestCreateEndpointUrl(t *testing.T) {
 // TestCreateRequestError covers the invalid-request branch, which doRequest
 // surfaces unchanged.
 func TestCreateRequestError(t *testing.T) {
-	c := RustfsAdmin{endpointURL: "http://host/rustfs/admin/v3", accessKey: "a", accessSecret: "b", httpClient: &http.Client{}}
+	c := RustfsAdmin{rootURL: "http://host", adminBaseURL: "http://host/rustfs/admin", accessKey: "a", accessSecret: "b", httpClient: &http.Client{}}
 	if _, err := c.createRequest(context.Background(), RequestData{Method: "BAD METHOD", RelPath: "x"}); err == nil {
 		t.Fatal("expected an invalid request error")
 	}

@@ -735,8 +735,8 @@ func testAccCheckTierDestroy(s *terraform.State) error {
 		res, err := client.DoDirectRequest(context.Background(), rustfs.RequestData{
 			Method: http.MethodGet,
 			// DoDirectRequest resolves against the host root, so the admin
-			// prefix the production client builds in createEndpointUrl is part
-			// of the path here.
+			// prefix and version the production client builds in adminURL are
+			// part of the path here.
 			RelPath: "rustfs/admin/v3/tier/" + name,
 		})
 		if err != nil {
