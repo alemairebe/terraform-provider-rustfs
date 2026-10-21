@@ -36,6 +36,7 @@ var goldenResourceTypeNames = []string{
 	"rustfs_bucket_tags",
 	"rustfs_bucket_versioning",
 	"rustfs_config",
+	"rustfs_config_restore",
 	"rustfs_group",
 	"rustfs_group_policy_attachment",
 	"rustfs_iam_backup_import",
@@ -71,6 +72,8 @@ var goldenResourceTypeNames = []string{
 var goldenDataSourceTypeNames = []string{
 	"rustfs_bucket_metadata_backup",
 	"rustfs_bucket_on_demand_migration_status",
+	"rustfs_bucket_usage",
+	"rustfs_config_history",
 	"rustfs_groups",
 	"rustfs_health_info",
 	"rustfs_iam_backup",
