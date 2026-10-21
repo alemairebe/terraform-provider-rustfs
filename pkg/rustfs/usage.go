@@ -35,7 +35,7 @@ type BucketUsageSummary struct {
 
 // BucketSubPrefixUsage is one first-level sub-prefix row.
 type BucketSubPrefixUsage struct {
-	Prefix string            `json:"prefix"`
+	Prefix string             `json:"prefix"`
 	Usage  BucketUsageSummary `json:"usage"`
 }
 
