@@ -70,17 +70,53 @@ in detail, including the complete resource and data source tables.
 
 | Capability | Provider types | `1.0.1` | `1.0.2` | `1.0.3` |
 |---|---|:--:|:--:|:--:|
-| S3 API and admin API v3 routes (buckets, IAM, quotas, replication, tiers, targets, config, health, info, ...) | every resource and data source except `rustfs_metrics` | ✅ | ✅ | ✅ |
-| Admin metrics stream - `GET /rustfs/admin/v3/metrics` | `rustfs_metrics` data source | ❌ | ❌ | ❌ |
+| S3 API and admin API v3 routes (buckets, IAM, quotas, replication, tiers, targets, config, health, info, …) | every resource and data source not listed below | ✅ | ✅ | ✅ |
+| S3 Tables catalog switch — `PUT`/`GET /iceberg/v1/buckets/{bucket}` | `rustfs_table_bucket` create and read | ✅ | ✅ | ✅ |
+| S3 Tables catalog disable — `DELETE /iceberg/v1/buckets/{bucket}` | `rustfs_table_bucket` destroy | ❌ | ✅ | ✅ |
+| Admin metrics stream — `GET /rustfs/admin/v3/metrics` | `rustfs_metrics` data source | ❌ | ❌ | ❌ |
+| OIDC providers — `GET`/`PUT`/`DELETE /rustfs/admin/v3/oidc/config` and `POST /rustfs/admin/v3/oidc/validate` | `rustfs_oidc_provider` resource, `rustfs_oidc_config` data source | ✅ | ✅ | ✅ |
+| Orphaned bucket recovery — `POST /rustfs/admin/v3/recover-orphaned-bucket/{bucket}` | `rustfs_bucket_recovery` | ❌¹ | ✅ | ✅ |
+| TLS certificate publication — `POST /rustfs/admin/v3/tls/certificate` | `rustfs_tls_certificate` create | ❌ | ✅ | ✅ |
+| TLS certificate state — `GET /rustfs/admin/v3/tls/certificate-state` | `rustfs_tls_certificate` refresh, `rustfs_tls_certificate_state` data source | ❌ | ✅ | ✅ |
+
+¹ The recovery route is absent on `1.0.1` (the server answers `404`), rather than registered and
+unimplemented; the resource reports the route and the required `1.0.2` version.
 
 `1.0.3` is a console-only update: it ships the same server code as `1.0.2`, so its server
-capabilities are identical.
+capabilities are identical. A ❌ means the route is registered but not implemented (see below); the
+data source fails with a diagnostic naming the route and the server version instead of the raw
+error payload, and destroying `rustfs_table_bucket` on `1.0.1` warns, names the route and drops the
+resource from state.
 
 RustFS registers admin routes before it implements them and answers `501 NotImplemented` instead of
-`404`, so a route in the server's route table is not proof of support - `DELETE
-/iceberg/v1/buckets/{warehouse}` is registered but unimplemented on these releases. For the routes
+`404`, so a route in the server's route table is not proof of support — `DELETE
+/iceberg/v1/buckets/{warehouse}` is registered but unimplemented on `1.0.1` (it works on `1.0.2` and
+`1.0.3`). For the routes
 it depends on, the provider treats `404`, `405` and `501` as a capability gap and reports the
 feature, the route and the server version instead of the raw error payload.
+
+### Non-goals
+
+The provider models objects with a Terraform lifecycle. Some RustFS capabilities are deliberately
+outside that model. Gaps that are merely **not built yet** are tracked in epic
+[#92](https://github.com/caberdo/terraform-provider-rustfs/issues/92) and its child issues; the
+areas below are **declined**, not pending.
+
+| Area | Not modeled | Why it is out of scope |
+|---|---|---|
+| Diagnostics and one-shot actions | `top/locks`, `force-unlock`, `trace`, profiling/pprof, console `log`, `speedtest/*`, `inspect/archive`, `gateway-key-inventory`, `inspect-data`, `object-zip-downloads`, `POST /update` | They are imperative queries or operator actions with no durable desired state. `force-unlock` and update/restart mutate ephemeral server state that `plan`/`apply`/`destroy` cannot represent honestly; `top/locks`, profiling, tracing and speed tests report on demand. Use `mc` or the console. |
+| Server-launch and environment-only features | WebDAV, FTP(S), SFTP, Swift, `RUSTFS_HTTP3_ENABLE`, scanner knobs exposed only as `RUSTFS_SCANNER_*` variables | They are enabled or tuned by the server process environment or launch flags, not through an admin API route. The provider talks to a running server over HTTP and does not control its process, container or command line; manage these with the deployment tooling that starts RustFS. The `scanner` subsystem of `rustfs_config` is still managed by `rustfs_config`; only knobs without a config-kv key are out of scope. |
+| Console self-service | `account/*`, `mfa/challenge` | These endpoints serve a signed-in human through browser sessions: account self-service and an interactive MFA challenge. They are not part of the SigV4 admin API and expose no declarative object for Terraform to own. The RustFS Console and the configured identity provider handle them. |
+| Other products | RustFS Console UI, MCP server, operator/Helm charts | They are separate deliverables with their own repositories and release cadence. This provider is an API client; install, configure and upgrade those products with their own tooling. |
+| Iceberg catalog data | Namespaces, tables, views, refs and credentials; catalog backup/restore | The catalog's contents are application data, not infrastructure. Catalog backup returns an opaque server-side snapshot with no read/list/delete route, so it has no Terraform lifecycle; restore is destructive and must not happen as a side effect of `apply`. Only the bucket-level switch is modeled, by `rustfs_table_bucket`. |
+
+### Claiming a capability
+
+A route in RustFS's `route_policy.rs` is **not** proof of support. RustFS registers routes before it
+implements them and answers `501 NotImplemented` (see above). Before documenting or building a
+capability, probe the running server, record the exact RustFS version and the response, and cite that
+evidence in the issue or pull request. Do not infer support from the route table, a release note, or
+a successful call on a different method or path.
 
 ## Migrating from `weinmann-emt/rustfs`
 
