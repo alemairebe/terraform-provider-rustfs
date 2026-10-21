@@ -178,8 +178,8 @@ func TestTemporaryAccountsDataSourceRead(t *testing.T) {
 		})
 		requireNoDiagnostics(t, resp.Diagnostics)
 
-		if len(recorder.requests) != 3 {
-			t.Errorf("expected three bulk requests, got %v", recorder.requests)
+		if requests := recorder.snapshot(); len(requests) != 3 {
+			t.Errorf("expected three bulk requests, got %v", requests)
 		}
 
 		var got TemporaryAccountsDataSourceModel
@@ -457,7 +457,7 @@ func TestTemporaryAccountsDataSourceRead(t *testing.T) {
 }
 
 func recorderSaw(recorder *recordingServer, request string) bool {
-	for _, got := range recorder.requests {
+	for _, got := range recorder.snapshot() {
 		if got == request {
 			return true
 		}

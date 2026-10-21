@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -81,13 +82,17 @@ type requestRoute struct {
 // records the request lines it saw, so a test can assert which calls a resource
 // made (for example that a failed Create issued no follow-up write).
 type recordingServer struct {
-	t        *testing.T
-	routes   []requestRoute
+	t      *testing.T
+	routes []requestRoute
+
+	mu       sync.Mutex
 	requests []string
 }
 
 func (s *recordingServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
 	s.requests = append(s.requests, r.Method+" "+r.URL.Path)
+	s.mu.Unlock()
 
 	for _, route := range s.routes {
 		if route.method != "" && route.method != r.Method {
@@ -136,12 +141,22 @@ func s3ErrorXML(code, message string) string {
 	return `<?xml version="1.0" encoding="UTF-8"?><Error><Code>` + code + `</Code><Message>` + message + `</Message></Error>`
 }
 
+// snapshot returns the recorded request lines. A listing can issue requests
+// concurrently, so callers must not read the slice directly.
+func (s *recordingServer) snapshot() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return append([]string(nil), s.requests...)
+}
+
 func (s *recordingServer) assertNoRequest(t *testing.T, substr string) {
 	t.Helper()
 
-	for _, req := range s.requests {
+	requests := s.snapshot()
+	for _, req := range requests {
 		if strings.Contains(req, substr) {
-			t.Fatalf("expected no request containing %q, saw %q", substr, s.requests)
+			t.Fatalf("expected no request containing %q, saw %q", substr, requests)
 		}
 	}
 }
@@ -149,12 +164,13 @@ func (s *recordingServer) assertNoRequest(t *testing.T, substr string) {
 func (s *recordingServer) assertRequest(t *testing.T, substr string) {
 	t.Helper()
 
-	for _, req := range s.requests {
+	requests := s.snapshot()
+	for _, req := range requests {
 		if strings.Contains(req, substr) {
 			return
 		}
 	}
-	t.Fatalf("expected a request containing %q, saw %q", substr, s.requests)
+	t.Fatalf("expected a request containing %q, saw %q", substr, requests)
 }
 
 // crudHarness drives one resource's CRUD methods against a canned server.
