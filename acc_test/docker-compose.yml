@@ -8,10 +8,6 @@ services:
       - go-modules:/go/pkg/mod
       - terraform-bin:/usr/local/terraform
     working_dir: /workspaces/terraform-provider-rustfs
-    environment:
-      # The pinned image bundles Go 1.27.2 and defaults to GOTOOLCHAIN=local,
-      # so let it fetch the 1.27.3 patch release go.mod requires.
-      GOTOOLCHAIN: auto
     command:
       - bash
       - -c
