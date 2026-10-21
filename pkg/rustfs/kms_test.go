@@ -5,6 +5,7 @@ package rustfs
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -480,5 +481,490 @@ func TestDeleteKmsKey(t *testing.T) {
 
 	if err := client.DeleteKmsKey("mykey"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestUpdateKmsKeyDescription(t *testing.T) {
+	client := newKmsTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+		if r.URL.Path != "/rustfs/admin/v3/kms/keys/update-description" {
+			t.Errorf("wrong path: %s", r.URL.Path)
+		}
+		var req struct {
+			KeyID       string `json:"key_id"`
+			Description string `json:"description"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("invalid body: %v", err)
+		}
+		if req.KeyID != "k1" || req.Description != "app key" {
+			t.Errorf("unexpected body: %+v", req)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"success":true,"message":"key description updated","key_id":"k1","key_metadata":{"key_id":"k1","key_state":"Enabled","description":"app key","tags":{"name":"k1"}}}`))
+	})
+
+	key, err := client.UpdateKmsKeyDescription("k1", "app key")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if key.Description == nil || *key.Description != "app key" {
+		t.Errorf("unexpected description: %v", key.Description)
+	}
+}
+
+func TestTagKmsKey(t *testing.T) {
+	client := newKmsTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+		if r.URL.Path != "/rustfs/admin/v3/kms/keys/tag" {
+			t.Errorf("wrong path: %s", r.URL.Path)
+		}
+		var req struct {
+			KeyID string            `json:"key_id"`
+			Tags  map[string]string `json:"tags"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("invalid body: %v", err)
+		}
+		if req.KeyID != "k1" || req.Tags["environment"] != "test" {
+			t.Errorf("unexpected body: %+v", req)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"success":true,"message":"key tags updated","key_id":"k1","key_metadata":{"key_id":"k1","key_state":"Enabled","tags":{"name":"k1","environment":"test"}}}`))
+	})
+
+	key, err := client.TagKmsKey("k1", map[string]string{"environment": "test"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if key.Tags["environment"] != "test" {
+		t.Errorf("unexpected tags: %+v", key.Tags)
+	}
+}
+
+func TestUntagKmsKey(t *testing.T) {
+	client := newKmsTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+		if r.URL.Path != "/rustfs/admin/v3/kms/keys/untag" {
+			t.Errorf("wrong path: %s", r.URL.Path)
+		}
+		var req struct {
+			KeyID   string   `json:"key_id"`
+			TagKeys []string `json:"tag_keys"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("invalid body: %v", err)
+		}
+		if req.KeyID != "k1" || len(req.TagKeys) != 1 || req.TagKeys[0] != "environment" {
+			t.Errorf("unexpected body: %+v", req)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"success":true,"message":"key tags removed","key_id":"k1","key_metadata":{"key_id":"k1","key_state":"Enabled","tags":{"name":"k1"}}}`))
+	})
+
+	key, err := client.UntagKmsKey("k1", []string{"environment"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := key.Tags["environment"]; ok {
+		t.Errorf("expected the tag to be gone: %+v", key.Tags)
+	}
+}
+
+func TestDeleteKmsKeyWithWindow(t *testing.T) {
+	window := int64(7)
+	client := newKmsTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			t.Errorf("expected DELETE, got %s", r.Method)
+		}
+		if r.URL.Path != "/rustfs/admin/v3/kms/keys/delete" {
+			t.Errorf("wrong path: %s", r.URL.Path)
+		}
+		var req struct {
+			KeyID               string `json:"key_id"`
+			PendingWindowInDays *int64 `json:"pending_window_in_days"`
+			ForceImmediate      *bool  `json:"force_immediate"`
+			ConfirmKeyID        string `json:"confirm_key_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("invalid body: %v", err)
+		}
+		if req.KeyID != "k1" {
+			t.Errorf("wrong key id: %s", req.KeyID)
+		}
+		if req.PendingWindowInDays == nil || *req.PendingWindowInDays != window {
+			t.Errorf("wrong window: %v", req.PendingWindowInDays)
+		}
+		if req.ForceImmediate != nil || req.ConfirmKeyID != "" {
+			t.Errorf("scheduled deletion must not carry immediate-deletion fields: %+v", req)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"success":true,"key_id":"k1","deletion_date":"2026-10-27T00:00:00Z"}`))
+	})
+
+	if err := client.DeleteKmsKeyWithWindow("k1", &window); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestKmsCapabilityError(t *testing.T) {
+	t.Run("501 names the backend capability", func(t *testing.T) {
+		client := newKmsTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNotImplemented)
+			_, _ = w.Write([]byte(`{"error":"the configured KMS backend does not support rotation"}`))
+		})
+		_, err := client.RotateKmsKey("k1")
+		if err == nil || !strings.Contains(err.Error(), "does not support key rotation") {
+			t.Fatalf("expected a capability error, got %v", err)
+		}
+	})
+
+	t.Run("non-501 is unchanged", func(t *testing.T) {
+		client := newKmsTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`boom`))
+		})
+		_, err := client.RotateKmsKey("k1")
+		if err == nil || strings.Contains(err.Error(), "does not support") {
+			t.Fatalf("expected the raw error, got %v", err)
+		}
+	})
+}
+
+func TestStartKmsRekey(t *testing.T) {
+	client := newKmsTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+		if r.URL.Path != "/rustfs/admin/v3/kms/keys/rekey" {
+			t.Errorf("wrong path: %s", r.URL.Path)
+		}
+		var req struct {
+			Buckets []string `json:"buckets"`
+			Prefix  string   `json:"prefix"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("invalid body: %v", err)
+		}
+		if len(req.Buckets) != 1 || req.Buckets[0] != "b1" || req.Prefix != "photos/" {
+			t.Errorf("unexpected body: %+v", req)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"job_id":"job-1","state":"running","buckets":["b1"],"current_bucket":"b1","scanned":10,"rewrapped":7,"already_current":1,"not_applicable":1,"failed":1}`))
+	})
+
+	status, err := client.StartKmsRekey([]string{"b1"}, "photos/")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status.JobID != "job-1" || status.State != "running" {
+		t.Errorf("unexpected status: %+v", status)
+	}
+	if status.Scanned != 10 || status.Rewrapped != 7 || status.AlreadyCurrent != 1 || status.NotApplicable != 1 || status.Failed != 1 {
+		t.Errorf("unexpected counters: %+v", status)
+	}
+	if status.CurrentBucket == nil || *status.CurrentBucket != "b1" {
+		t.Errorf("unexpected current bucket: %v", status.CurrentBucket)
+	}
+}
+
+func TestStartKmsRekeyAllBucketsOmitsScope(t *testing.T) {
+	client := newKmsTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("invalid body: %v", err)
+		}
+		if len(req) != 0 {
+			t.Errorf("expected an empty body, got %+v", req)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"job_id":"job-1","state":"running","buckets":["b1"],"scanned":0,"rewrapped":0,"already_current":0,"not_applicable":0,"failed":0}`))
+	})
+
+	if _, err := client.StartKmsRekey(nil, ""); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestGetKmsRekeyStatus(t *testing.T) {
+	client := newKmsTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("expected GET, got %s", r.Method)
+		}
+		if r.URL.Path != "/rustfs/admin/v3/kms/keys/rekey/status" {
+			t.Errorf("wrong path: %s", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"job_id":"job-2","state":"completed","buckets":["b1","b2"],"current_bucket":null,"scanned":20,"rewrapped":18,"already_current":2,"not_applicable":0,"failed":0}`))
+	})
+
+	status, err := client.GetKmsRekeyStatus()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status.JobID != "job-2" || status.State != "completed" {
+		t.Errorf("unexpected status: %+v", status)
+	}
+	if status.CurrentBucket != nil {
+		t.Errorf("expected no current bucket, got %v", *status.CurrentBucket)
+	}
+}
+
+func TestGetKmsRekeyStatusNoSweep(t *testing.T) {
+	client := newKmsTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":"no rekey sweep has run"}`))
+	})
+
+	_, err := client.GetKmsRekeyStatus()
+	if !errors.Is(err, ErrKmsRekeyNotRun) {
+		t.Fatalf("expected ErrKmsRekeyNotRun, got %v", err)
+	}
+}
+
+func TestCancelKmsRekey(t *testing.T) {
+	client := newKmsTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+		if r.URL.Path != "/rustfs/admin/v3/kms/keys/rekey/cancel" {
+			t.Errorf("wrong path: %s", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"job_id":"job-1","state":"cancelled","buckets":["b1"],"scanned":3,"rewrapped":1,"already_current":0,"not_applicable":2,"failed":0}`))
+	})
+
+	status, err := client.CancelKmsRekey()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status.State != "cancelled" {
+		t.Errorf("unexpected state: %s", status.State)
+	}
+}
+
+func TestStartKmsRekeyUnsupportedBackend(t *testing.T) {
+	client := newKmsTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotImplemented)
+		_, _ = w.Write([]byte(`{"error":"the configured KMS backend does not support rewrapping data-key envelopes"}`))
+	})
+
+	_, err := client.StartKmsRekey(nil, "")
+	if err == nil || !strings.Contains(err.Error(), "does not support rewrapping data-key envelopes") {
+		t.Fatalf("expected a capability error, got %v", err)
+	}
+}
+
+func TestStartKmsRekeyAlreadyRunning(t *testing.T) {
+	client := newKmsTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"error":"a rekey sweep is already running","job_id":"job-1"}`))
+	})
+
+	_, err := client.StartKmsRekey(nil, "")
+	if err == nil || !strings.Contains(err.Error(), "already running") || !strings.Contains(err.Error(), "job-1") {
+		t.Fatalf("expected an already-running error naming the job, got %v", err)
+	}
+}
+
+func TestGetKmsBackupStatus(t *testing.T) {
+	client := newKmsTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("expected GET, got %s", r.Method)
+		}
+		if r.URL.Path != "/rustfs/admin/v3/kms/backup" {
+			t.Errorf("wrong path: %s", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"service_status":"healthy","backend":"local","responsibility":"full-material","export_supported":true,"deployment_identity":"deploy-1","backup_root":"/var/lib/rustfs/kms-backups","backup_kek_configured":true,"backup_kek_id":"kek-1","backup_kek_version":3,"target_key_dir":"/var/lib/rustfs/kms","unavailable_reason":null}`))
+	})
+
+	status, err := client.GetKmsBackupStatus()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !status.ExportSupported || status.ServiceStatus != "healthy" {
+		t.Errorf("unexpected status: %+v", status)
+	}
+	if status.Backend == nil || *status.Backend != "local" {
+		t.Errorf("unexpected backend: %v", status.Backend)
+	}
+	if status.Responsibility == nil || *status.Responsibility != "full-material" {
+		t.Errorf("unexpected responsibility: %v", status.Responsibility)
+	}
+	if status.BackupKEKVersion == nil || *status.BackupKEKVersion != 3 {
+		t.Errorf("unexpected kek version: %v", status.BackupKEKVersion)
+	}
+	if status.UnavailableReason != nil {
+		t.Errorf("expected no unavailable reason, got %v", *status.UnavailableReason)
+	}
+}
+
+func TestGetKmsBackupStatusOptionalAbsent(t *testing.T) {
+	client := newKmsTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"service_status":"unavailable","backend":null,"responsibility":null,"export_supported":false,"deployment_identity":null,"backup_root":null,"backup_kek_configured":false,"backup_kek_id":null,"backup_kek_version":null,"target_key_dir":null,"unavailable_reason":"RUSTFS_KMS_BACKUP_DIR is not set"}`))
+	})
+
+	status, err := client.GetKmsBackupStatus()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status.ExportSupported {
+		t.Error("expected export_supported false")
+	}
+	if status.UnavailableReason == nil || *status.UnavailableReason == "" {
+		t.Error("expected the unavailable reason")
+	}
+}
+
+func TestCreateKmsBackup(t *testing.T) {
+	client := newKmsTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+		if r.URL.Path != "/rustfs/admin/v3/kms/backup" {
+			t.Errorf("wrong path: %s", r.URL.Path)
+		}
+		var req struct {
+			BackupID string `json:"backup_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("invalid body: %v", err)
+		}
+		if req.BackupID != "nightly-1" {
+			t.Errorf("wrong backup id: %s", req.BackupID)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"backup_id":"nightly-1","snapshot_generation":42,"deployment_identity":"deploy-1","artifact_count":3,"manifest_digest":"abc123","backup_kek_id":"kek-1","backup_kek_version":3,"sanitized_config_included":true}`))
+	})
+
+	bundle, err := client.CreateKmsBackup("nightly-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if bundle.BackupID != "nightly-1" || bundle.SnapshotGeneration != 42 {
+		t.Errorf("unexpected bundle: %+v", bundle)
+	}
+	if bundle.ArtifactCount != 3 || bundle.ManifestDigest != "abc123" {
+		t.Errorf("unexpected metadata: %+v", bundle)
+	}
+	if bundle.BackupKEKVersion != 3 || !bundle.SanitizedConfigIncluded {
+		t.Errorf("unexpected bundle fields: %+v", bundle)
+	}
+}
+
+func TestCreateKmsBackupUnsupportedBackend(t *testing.T) {
+	client := newKmsTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotImplemented)
+		_, _ = w.Write([]byte(`{"message":"backend aws cannot export a RustFS bundle"}`))
+	})
+
+	_, err := client.CreateKmsBackup("nightly-1")
+	if err == nil || !strings.Contains(err.Error(), "does not support KMS backup") {
+		t.Fatalf("expected a capability error, got %v", err)
+	}
+}
+
+func TestGetKmsRekeyStatusInvalidJSON(t *testing.T) {
+	client := newKmsTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`not-json`))
+	})
+
+	if _, err := client.GetKmsRekeyStatus(); err == nil {
+		t.Fatal("expected a decode error")
+	}
+}
+
+func TestGetKmsBackupStatusError(t *testing.T) {
+	client := newKmsTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`boom`))
+	})
+
+	if _, err := client.GetKmsBackupStatus(); err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("expected the server error, got %v", err)
+	}
+}
+
+func TestGetKmsBackupStatusInvalidJSON(t *testing.T) {
+	client := newKmsTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"service_status":`))
+	})
+
+	if _, err := client.GetKmsBackupStatus(); err == nil {
+		t.Fatal("expected a decode error")
+	}
+}
+
+func TestCreateKmsBackupInvalidJSON(t *testing.T) {
+	client := newKmsTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`not-json`))
+	})
+
+	if _, err := client.CreateKmsBackup("nightly-1"); err == nil {
+		t.Fatal("expected a decode error")
+	}
+}
+
+func TestKmsKeyMetadataMutationErrors(t *testing.T) {
+	t.Run("server error", func(t *testing.T) {
+		client := newKmsTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`boom`))
+		})
+		if _, err := client.TagKmsKey("k1", map[string]string{"env": "test"}); err == nil || !strings.Contains(err.Error(), "boom") {
+			t.Fatalf("expected the server error, got %v", err)
+		}
+	})
+
+	t.Run("invalid JSON", func(t *testing.T) {
+		client := newKmsTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`not-json`))
+		})
+		if _, err := client.TagKmsKey("k1", nil); err == nil {
+			t.Fatal("expected a decode error")
+		}
+	})
+
+	t.Run("missing key metadata reports the server message", func(t *testing.T) {
+		client := newKmsTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"success":false,"message":"key not found"}`))
+		})
+		_, err := client.TagKmsKey("k1", nil)
+		if err == nil || err.Error() != "key not found" {
+			t.Fatalf("expected the server message, got %v", err)
+		}
+	})
+}
+
+func TestKmsRekeyCallMarshalError(t *testing.T) {
+	client := newKmsTestClient(t, func(http.ResponseWriter, *http.Request) {
+		t.Error("no request should be sent when the body cannot be encoded")
+	})
+
+	if _, err := client.kmsRekeyCall(http.MethodPost, "kms/keys/rekey", make(chan int)); err == nil {
+		t.Fatal("expected a marshal error")
+	}
+}
+
+func TestKmsKeyMetadataMutationMarshalError(t *testing.T) {
+	client := newKmsTestClient(t, func(http.ResponseWriter, *http.Request) {
+		t.Error("no request should be sent when the body cannot be encoded")
+	})
+
+	if _, err := client.kmsKeyMetadataMutation("kms/keys/tag", make(chan int)); err == nil {
+		t.Fatal("expected a marshal error")
 	}
 }
