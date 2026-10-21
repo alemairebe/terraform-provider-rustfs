@@ -64,6 +64,7 @@ var goldenResourceTypeNames = []string{
 	"rustfs_table_bucket",
 	"rustfs_tier",
 	"rustfs_tls_certificate",
+	"rustfs_token_revocation",
 	"rustfs_user",
 	"rustfs_user_policy_attachment",
 }
@@ -103,6 +104,7 @@ var goldenDataSourceTypeNames = []string{
 	"rustfs_scanner_status",
 	"rustfs_server_info",
 	"rustfs_storage_info",
+	"rustfs_temporary_accounts",
 	"rustfs_tls_certificate_state",
 	"rustfs_user_mfa",
 	"rustfs_users",

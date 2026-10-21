@@ -20,6 +20,10 @@ type ServiceAccount struct {
 	Policy        string `json:"policy,omitempty"`
 	TargetUser    string `json:"targetUser,omitempty"`
 	ParentUser    string `json:"parentUser,omitempty"`
+	// AccountStatus is reported by info-service-account and
+	// temporary-account-info, for example "on" or "off". It is not part of the
+	// create/update request.
+	AccountStatus string `json:"accountStatus,omitempty"`
 }
 
 type ServiceAccountUpdate struct {
@@ -65,6 +69,12 @@ func (c *RustfsAdmin) CreateServiceAccount(account ServiceAccount) error {
 }
 
 func (c *RustfsAdmin) ReadServiceAccount(name string) (ServiceAccount, error) {
+	return c.ReadServiceAccountContext(context.Background(), name)
+}
+
+// ReadServiceAccountContext is ReadServiceAccount with a caller context, so a
+// cancelled refresh stops the request.
+func (c *RustfsAdmin) ReadServiceAccountContext(ctx context.Context, name string) (ServiceAccount, error) {
 	var instance ServiceAccount
 	urlValues := make(url.Values)
 	urlValues.Set("accessKey", name)
@@ -73,8 +83,6 @@ func (c *RustfsAdmin) ReadServiceAccount(name string) (ServiceAccount, error) {
 		RelPath:     "info-service-account",
 		QueryValues: urlValues,
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	resp, err := c.doRequest(ctx, req_data)
 	if err != nil {
 		return instance, err
