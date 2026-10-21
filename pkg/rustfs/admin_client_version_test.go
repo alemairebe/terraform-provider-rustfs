@@ -107,7 +107,8 @@ func TestUnsupportedRequestVersionRejected(t *testing.T) {
 func TestDoDirectRequestRejectsVersion(t *testing.T) {
 	client := New(&RustfsAdminConfig{Endpoint: "rustfs.example.com:9000"})
 
-	if _, err := client.DoDirectRequest(context.Background(), RequestData{Method: http.MethodGet, RelPath: "x", Version: "v4"}); err == nil {
+	if resp, err := client.DoDirectRequest(context.Background(), RequestData{Method: http.MethodGet, RelPath: "x", Version: "v4"}); err == nil {
+		drainClose(resp)
 		t.Fatal("expected DoDirectRequest to reject a version")
 	} else if !strings.Contains(err.Error(), "does not take an admin API version") {
 		t.Errorf("error = %q", err)
