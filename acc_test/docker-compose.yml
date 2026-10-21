@@ -48,9 +48,9 @@ services:
         exit $$status
     environment:
       TF_ACC: "1"
-      # The pinned golang image bundles an older Go than go.mod requires and
-      # disables toolchain downloads; let it fetch the matching toolchain.
-      GOTOOLCHAIN: auto
+      # The pinned toolchain image ships an older Go than go.mod requires; let
+      # it fetch the matching toolchain instead of failing on GOTOOLCHAIN=local.
+      GOTOOLCHAIN: "auto"
       RUSTFS_ENDPOINT: "rustfs:9001"
       RUSTFS_USER: "rustfsadmin"
       RUSTFS_SECRET: "rustfsadmin"

@@ -36,6 +36,9 @@ Describe how you tested this change:
 
 - [ ] Example added to `examples/` directory (the documentation source)
 - [ ] `make generate` run and the regenerated `docs/` committed
+- [ ] `changelog.d/<issue>-<kind>-<slug>.md` added, or the `skip-changelog` label set
+- [ ] No shared Markdown edited (`CHANGELOG.md`, `AGENTS.md`, `README.md`, `docs/index.md`,
+      `templates/`); use the `shared-md` label for a deliberate documentation correction
 - [ ] Schema attributes have descriptions
 - [ ] Import section documented (if applicable)
 
