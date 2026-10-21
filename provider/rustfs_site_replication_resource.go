@@ -46,8 +46,11 @@ func (r *SiteReplicationResource) Metadata(_ context.Context, req resource.Metad
 
 func (r *SiteReplicationResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description:         "Manage site-replication peers in rustfs",
-		MarkdownDescription: "Manage site-replication peers in rustfs",
+		Description: "Manage site-replication peers in rustfs",
+		MarkdownDescription: "Manage site-replication peers in rustfs.\n\n" +
+			"Each resource manages one peer. Endpoint, credential and TLS changes edit the peer in place; " +
+			"only `name` forces a replacement, so adding or removing one peer never recreates the others. " +
+			"Use `rustfs_site_replication_repair` to reconcile a diverged group.",
 		Attributes: map[string]schema.Attribute{
 			"name": schema.StringAttribute{
 				Required:    true,
@@ -146,8 +149,11 @@ func (r *SiteReplicationResource) Update(ctx context.Context, req resource.Updat
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	site := modelToSite(plan)
-	if err := r.client.RustClient.SiteReplicationEdit(site); err != nil {
+	// The edit route updates the local topology and fans the change out to the
+	// remaining peers, so endpoint, credential and TLS changes land in place:
+	// only `name` (the peer identity) forces a replacement.
+	peer := modelToPeerEdit(plan)
+	if err := r.client.RustClient.EditPeer(peer); err != nil {
 		resp.Diagnostics.AddError("Error updating site replication", "Could not update site replication: "+err.Error())
 		return
 	}
@@ -160,10 +166,10 @@ func (r *SiteReplicationResource) Delete(ctx context.Context, req resource.Delet
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	if err := r.client.RustClient.SiteReplicationRemove([]string{data.Name.ValueString()}); err != nil {
+	if err := r.client.RustClient.RemovePeer([]string{data.Name.ValueString()}); err != nil {
 		// A site that is not (or no longer) configured is already gone: RustFS
 		// answers 400 InvalidRequest "none of the requested sites are
-		// configured" for site-replication/remove when none of the requested
+		// configured" for the public remove route when none of the requested
 		// names is a configured peer. Both the structured code and the
 		// endpoint's own missing-site text are required, so an unrelated
 		// InvalidRequest is still reported.
@@ -186,6 +192,18 @@ func modelToSite(plan SiteReplicationResourceModel) rustfs.SiteReplicationSite {
 		SecretKey:     plan.SecretKey.ValueString(),
 		SkipTLSVerify: plan.SkipTLSVerify.ValueBool(),
 		CACertPEM:     plan.CACertPEM.ValueString(),
+	}
+}
+
+func modelToPeerEdit(plan SiteReplicationResourceModel) rustfs.SiteReplicationPeerEdit {
+	site := modelToSite(plan)
+	return rustfs.SiteReplicationPeerEdit{
+		Name:          site.Name,
+		Endpoint:      site.Endpoint,
+		AccessKey:     site.AccessKey,
+		SecretKey:     site.SecretKey,
+		SkipTLSVerify: site.SkipTLSVerify,
+		CACertPEM:     site.CACertPEM,
 	}
 }
 

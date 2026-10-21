@@ -2,12 +2,15 @@
 page_title: "rustfs_site_replication Resource - rustfs"
 subcategory: ""
 description: |-
-  Manage site-replication peers in rustfs
+  Manage site-replication peers in rustfs.
+  Each resource manages one peer. Endpoint, credential and TLS changes edit the peer in place; only name forces a replacement, so adding or removing one peer never recreates the others. Use rustfs_site_replication_repair to reconcile a diverged group.
 ---
 
 # rustfs_site_replication Resource
 
-Manage site-replication peers in rustfs
+Manage site-replication peers in rustfs.
+
+Each resource manages one peer. Endpoint, credential and TLS changes edit the peer in place; only `name` forces a replacement, so adding or removing one peer never recreates the others. Use `rustfs_site_replication_repair` to reconcile a diverged group.
 
 ## Example Usage
 

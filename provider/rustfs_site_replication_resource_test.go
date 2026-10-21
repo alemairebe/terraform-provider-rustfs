@@ -13,6 +13,7 @@ import (
 	"github.com/caberdo/terraform-provider-rustfs/pkg/rustfs"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	frameworkresource "github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
@@ -27,6 +28,24 @@ func TestSiteReplicationResourceSchema(t *testing.T) {
 		if _, ok := resp.Schema.Attributes[attr]; !ok {
 			t.Errorf("missing schema attribute %q", attr)
 		}
+	}
+
+	// Only the peer identity forces a replacement. Endpoint, credentials and
+	// TLS settings edit the peer in place, so adding a peer to the group never
+	// means recreating the peers already managed.
+	name := resp.Schema.Attributes["name"].(schema.StringAttribute)
+	if len(name.PlanModifiers) == 0 {
+		t.Error("name must carry RequiresReplace: renaming a peer is a different peer")
+	}
+	for _, attr := range []string{"endpoint", "access_key", "secret_key", "ca_cert_pem"} {
+		field := resp.Schema.Attributes[attr].(schema.StringAttribute)
+		if len(field.PlanModifiers) != 0 {
+			t.Errorf("%s must not force a replacement: the server edits it in place", attr)
+		}
+	}
+	skipTLS := resp.Schema.Attributes["skip_tls_verify"].(schema.BoolAttribute)
+	if len(skipTLS.PlanModifiers) != 0 {
+		t.Error("skip_tls_verify must not force a replacement: the server edits it in place")
 	}
 }
 
@@ -492,6 +511,28 @@ func TestSiteReplicationResourceLifecyclePaths(t *testing.T) {
 
 		assertErrorDiagnostic(t, resp.Diagnostics, "Error updating site replication", "Could not update site replication: ")
 		assertStateString(t, resp.State, path.Root("endpoint"), "https://old.invalid:9000/")
+	})
+
+	t.Run("update: capability rejection is surfaced and keeps the prior state", func(t *testing.T) {
+		// An in-place edit can be refused when the peer cannot negotiate the
+		// change (for example TLS settings on an http endpoint). The diagnostic
+		// must name the server's refusal and the state must stay on the values
+		// Terraform already knows.
+		client, _ := routedClient(t, requestRoute{
+			status: http.StatusBadRequest,
+			body:   s3ErrorXML("InvalidRequest", "site replication TLS settings require an HTTPS endpoint"),
+		})
+		h := newCRUDHarness(t, NewSiteReplicationResource(), client)
+
+		plan := siteReplicationLifecycleModel()
+		plan.SkipTLSVerify = types.BoolValue(true)
+		state := siteReplicationLifecycleModel()
+
+		resp := h.update(plan, state)
+
+		assertErrorDiagnostic(t, resp.Diagnostics, "Error updating site replication", "Could not update site replication: ")
+		assertDiagnosticDetail(t, resp.Diagnostics, "require an HTTPS endpoint")
+		assertStatePresent(t, resp.State)
 	})
 
 	t.Run("configure: rejects foreign provider data", func(t *testing.T) {

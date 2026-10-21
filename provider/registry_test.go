@@ -58,6 +58,7 @@ var goldenResourceTypeNames = []string{
 	"rustfs_scanner_usage_state_reset",
 	"rustfs_serviceaccount",
 	"rustfs_site_replication",
+	"rustfs_site_replication_repair",
 	"rustfs_table_bucket",
 	"rustfs_tier",
 	"rustfs_tls_certificate",

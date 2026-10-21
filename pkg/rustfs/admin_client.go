@@ -48,10 +48,11 @@ type RustfsAdminConfig struct {
 }
 
 type RustfsAdmin struct {
-	httpClient   *http.Client
-	endpointURL  string
-	accessKey    string
-	accessSecret string
+	httpClient         *http.Client
+	endpointURL        string
+	configuredEndpoint string
+	accessKey          string
+	accessSecret       string
 }
 
 type RequestData struct {
@@ -131,6 +132,7 @@ func IsAPIErrorCode(err error, codes ...string) bool {
 
 func New(config *RustfsAdminConfig) (client RustfsAdmin) {
 	client.endpointURL = client.createEndpointUrl(config.Endpoint, config.Ssl)
+	client.configuredEndpoint = config.Endpoint
 	client.httpClient = config.HTTPClient
 	if client.httpClient == nil {
 		client.httpClient = &http.Client{}
@@ -138,6 +140,12 @@ func New(config *RustfsAdminConfig) (client RustfsAdmin) {
 	client.accessKey = config.AccessKey
 	client.accessSecret = config.AccessSecret
 	return
+}
+
+// Endpoint returns the endpoint the client was configured with, before the
+// scheme is filled in. It is what a caller can compare against configuration.
+func (c RustfsAdmin) Endpoint() string {
+	return c.configuredEndpoint
 }
 
 func (c *RustfsAdmin) doRequest(ctx context.Context, reqData RequestData) (res *http.Response, err error) {

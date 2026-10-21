@@ -228,3 +228,34 @@ func TestStopRebalanceNotStarted(t *testing.T) {
 		t.Errorf("expected NoSuchResource, got %v", err)
 	}
 }
+
+// TestRebalanceDecodeErrors covers a 2xx answer whose body is not the JSON the
+// callers expect.
+func TestRebalanceDecodeErrors(t *testing.T) {
+	client := func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{`))
+	}
+
+	startServer := httptest.NewServer(http.HandlerFunc(client))
+	defer startServer.Close()
+	startClient := New(&RustfsAdminConfig{
+		Endpoint:  startServer.Listener.Addr().String(),
+		AccessKey: "admin",
+	})
+	startClient.accessSecret = "secret"
+	if _, err := startClient.StartRebalance(context.Background()); err == nil {
+		t.Fatal("expected a decode error from the start route")
+	}
+
+	statusServer := httptest.NewServer(http.HandlerFunc(client))
+	defer statusServer.Close()
+	statusClient := New(&RustfsAdminConfig{
+		Endpoint:  statusServer.Listener.Addr().String(),
+		AccessKey: "admin",
+	})
+	statusClient.accessSecret = "secret"
+	if _, err := statusClient.RebalanceStatus(context.Background()); err == nil {
+		t.Fatal("expected a decode error from the status route")
+	}
+}

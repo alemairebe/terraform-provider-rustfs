@@ -25,3 +25,12 @@ func newTestAdminServer(t *testing.T, handler http.HandlerFunc) *rustfs.RustfsAd
 	})
 	return &c
 }
+
+// Endpoint reports the configured value before the scheme is filled in; the
+// site-replication repair interlock compares its confirm attribute against it.
+func TestRustfsAdminEndpoint(t *testing.T) {
+	client := rustfs.New(&rustfs.RustfsAdminConfig{Endpoint: "rustfs.example.com:9000", Ssl: true})
+	if got := client.Endpoint(); got != "rustfs.example.com:9000" {
+		t.Fatalf("Endpoint() = %q, want the configured value", got)
+	}
+}

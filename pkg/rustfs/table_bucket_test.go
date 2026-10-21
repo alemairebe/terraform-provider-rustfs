@@ -180,3 +180,25 @@ func TestDisableTableBucketMissingBucketStaysAnAPIError(t *testing.T) {
 		t.Fatalf("expected the APIError with status 500, got %v", err)
 	}
 }
+
+// TestTableBucketNoContentAndMalformedBody covers the empty answer DELETE and
+// some GETs produce, and a body that is not valid JSON.
+func TestTableBucketNoContentAndMalformedBody(t *testing.T) {
+	empty := newTableBucketClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	state, err := empty.GetTableBucket("probe")
+	if err != nil {
+		t.Fatalf("204 response: %v", err)
+	}
+	if state != (rustfs.TableBucket{}) {
+		t.Errorf("204 response carried state: %+v", state)
+	}
+
+	malformed := newTableBucketClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{`)
+	})
+	if _, err := malformed.GetTableBucket("probe"); err == nil {
+		t.Fatal("expected a decode error for a malformed body")
+	}
+}

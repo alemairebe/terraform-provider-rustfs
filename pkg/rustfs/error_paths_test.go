@@ -126,9 +126,9 @@ func TestAdminClientErrorBranchesOnServerFailure(t *testing.T) {
 		{"SetUserSecretKey", func() error { return client.SetUserSecretKey("alice", "s3cret") }},
 		{"SetUserStatus", func() error { return client.SetUserStatus("alice", "disabled") }},
 		{"SiteReplicationAdd", func() error { return client.SiteReplicationAdd(SiteReplicationSite{Name: "peer"}) }},
-		{"SiteReplicationEdit", func() error { return client.SiteReplicationEdit(SiteReplicationSite{Name: "peer"}) }},
+		{"EditPeer", func() error { return client.EditPeer(SiteReplicationPeerEdit{Name: "peer"}) }},
 		{"SiteReplicationInfo", func() error { _, err := client.SiteReplicationInfo(); return err }},
-		{"SiteReplicationRemove", func() error { return client.SiteReplicationRemove([]string{"peer"}) }},
+		{"RemovePeer", func() error { return client.RemovePeer([]string{"peer"}) }},
 		{"SiteReplicationResyncOp", func() error {
 			_, err := client.SiteReplicationResyncOp("start", SiteReplicationPeer{Name: "peer"})
 			return err
@@ -518,6 +518,17 @@ func TestReadPolicyMalformedDocument(t *testing.T) {
 	}
 }
 
+// TestPolicyParsersRejectMalformedJSON covers the unmarshal errors of the
+// condition-value and quoted-document parsers.
+func TestPolicyParsersRejectMalformedJSON(t *testing.T) {
+	if _, err := policyConditionValues(json.RawMessage(`[`)); err == nil {
+		t.Fatal("expected a malformed condition array to fail")
+	}
+	if _, err := parsePolicyField(json.RawMessage(`"unterminated`)); err == nil {
+		t.Fatal("expected a malformed quoted document to fail")
+	}
+}
+
 // TestParseServerVersionPrereleaseWithBuildMetadata covers stripping build
 // metadata from the prerelease part.
 func TestParseServerVersionPrereleaseWithBuildMetadata(t *testing.T) {
@@ -566,6 +577,30 @@ func TestUnsupportedFeatureErrorMessageBranches(t *testing.T) {
 	if message := withMinVersion.Error(); !strings.Contains(message, "requires RustFS 1.0.5 or later") {
 		t.Errorf("unexpected message: %q", message)
 	}
+
+	registered := &UnsupportedFeatureError{Feature: FeatureMetrics}
+	if message := registered.Error(); !strings.Contains(message, "GET /rustfs/admin/v3/metrics") {
+		t.Errorf("a registered feature must fall back to its route, got %q", message)
+	}
+}
+
+// TestRegisterFeatureRejectsDuplicate covers the programming-error guard that
+// keeps one spec per feature.
+func TestRegisterFeatureRejectsDuplicate(t *testing.T) {
+	feature := Feature("duplicate-test-feature")
+	registerFeature(feature, featureSpec{route: "GET /duplicate"})
+	t.Cleanup(func() {
+		featureMu.Lock()
+		delete(featureSpecs, feature)
+		featureMu.Unlock()
+	})
+	defer func() {
+		if recover() == nil {
+			t.Fatal("registering the same feature twice must panic")
+		}
+	}()
+
+	registerFeature(feature, featureSpec{route: "GET /duplicate-again"})
 }
 
 // TestIsUnsupportedRouteIgnoresPlainErrors covers the non-APIError branch.
