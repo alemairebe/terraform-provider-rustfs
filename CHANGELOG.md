@@ -1,5 +1,165 @@
 ## Unreleased
 
+## 0.6.0 (2026-10-21)
+
+FEATURES:
+- `rustfs_table_bucket` manages the S3 Tables (Iceberg REST catalog) switch of an existing bucket:
+  `PUT`, `GET` and `DELETE /iceberg/v1/buckets/{bucket}` through the direct-request client, exposing
+  `enabled`, `catalog_type`, `warehouse`, `catalog_entry_present` and `catalog_uri`, with the bucket
+  name as the import ID. Destroying the resource only switches the catalog off — the bucket and its
+  objects stay, but the bucket returns to ordinary expiry behaviour. RustFS `1.0.1` does not
+  implement the disable route, so destroy there warns, names the route and drops the resource from
+  state; `1.0.2` and `1.0.3` disable it. A disabled or missing catalog is removed from state, so the
+  next plan recreates it. The live probe proving both `us-east-1` and `us-east-01` credential scopes
+  work on these routes is recorded in the issue, and a unit test pins the emitted scope. No data
+  source is added
+- Add the `rustfs_bucket_on_demand_migration` resource and the
+  `rustfs_bucket_on_demand_migration_status` data source to attach an external
+  S3-compatible source bucket to a local RustFS bucket and pull objects lazily on
+  first read. Both need RustFS 1.0.1 or later, the
+  `RUSTFS_ON_DEMAND_MIGRATION_ENABLED` module switch on every node, and a license
+  that covers on-demand migration. Creating or updating a configuration probes
+  the source with a dry run first, and the server returns the stored source
+  secrets redacted, so the provider keeps the configured values in state.
+- Add `rustfs_scanner_status` and `rustfs_object_data_cache_stats` data sources plus the
+  one-shot `rustfs_scanner_cycle_state_reset`, `rustfs_scanner_usage_state_reset` and
+  `rustfs_object_data_cache_flush` actions. The reset and flush resources record the server
+  result, keep Read as a state echo, leave Delete empty, and rerun only when `triggers` (or the
+  flush scope) changes. `rustfs_scanner_usage_state_reset` requires `confirm_full_rebuild = true`
+  because it discards the durable usage baseline and quotas can misreport until a full scanner
+  pass rebuilds it; the reset actions retry a busy scanner leader lock a few times before failing.
+  Scanner and cache tuning stays in `rustfs_config` or the server environment.
+  The routes are registered in the RustFS 1.0.1 through 1.0.3 source; an unsupported route is
+  reported with the server version and the missing route.
+- `rustfs_ilm_transition` starts a manual ILM transition run for a bucket and
+  prefix, keeps the durable job the server returns, and reports its state and
+  progress counters on refresh. Every configurable attribute forces a new run,
+  and `triggers` exists to re-run one with the same parameters. Destroy is a
+  no-op: the provider never cancels a run, never rolls a transition back and never
+  mutates ILM state, so `terraform destroy` only forgets the record.
+
+  `rustfs_ilm_expiry_status` reads the lifecycle expiry worker status, and
+  `rustfs_ilm_recovery_records` reads the durable recovery controls for one
+  protocol (`transition_transaction`, `tier_delete_journal` or
+  `tier_delete_manifest`). Both are read-only. The routes ship from RustFS 1.0.1
+  on; an older server fails with a diagnostic naming the route and its version.
+- `rustfs_rebalance` now observes and stops the rebalance it starts. Creating the
+  resource still starts a run, but refresh mirrors
+  `GET /rustfs/admin/v3/rebalance/status` into the new computed `status`,
+  `pools`, `stopped_at` and `stop_propagation` attributes, and destroy calls
+  `POST /rustfs/admin/v3/rebalance/stop` on a run that is still active. Stopping
+  does not move already relocated data back, so pools stay partially drained. On
+  a server that does not implement the routes, refresh keeps the recorded trigger
+  and destroy warns instead of failing. Because the status route is
+  deployment-wide, the resource only observes and stops the run it started; a
+  rebalance started outside Terraform is reported and left alone. The resource id
+  is now the trigger id the server reports; existing state files keep working and
+  are migrated in place from the legacy fixed id.
+- `rustfs_kms_key` now manages key descriptions, tags, the 7–30 day deletion window and an explicit rotation trigger. New `rustfs_kms_rekey` and `rustfs_kms_backup` resources and a `rustfs_kms_backup_status` data source cover KMS re-keying and backup. Restore is intentionally not exposed: it is destructive and requires confirmations Terraform cannot supply.
+- `rustfs_site_replication_repair` reconciles a diverged site-replication group. The
+  resource runs the server's dry-run plan, executes it, and records the operation
+  in state, including per-site and per-family task counts and errors. Repair
+  mutates bucket targets and IAM items on every peer, so `confirm` must repeat
+  the provider endpoint (the cluster being repaired); a `partial` result is reported as a warning and kept in state for
+  inspection. Destroying the resource only forgets the record, because a repair
+  cannot be undone.
+
+  `rustfs_site_replication` continues to edit endpoint, credential and TLS
+  changes in place and to remove one peer without recreating the group. Its
+  client methods now name the public routes explicitly (`EditPeer`, `RemovePeer`):
+  the similarly named `site-replication/peer/edit`, `peer/remove` and
+  `peer/edit-capabilities` routes are the peer-side delivery of that fan-out, not
+  public operations. The diagnostic and internal routes (`devnull`, `netperf`,
+  `rotate-svc-acct`, `peer/bucket-ops`, `peer/iam-item`, `peer/bucket-meta`) stay
+  out of the provider: they have no declarative end state.
+- `rustfs_integrity_job` starts a bounded RustFS data-integrity job for 1 to 64
+  explicit object versions. `Create` creates the server's durable job and resumes
+  it, `Read` reflects its state and per-item results, and `Delete` sends `cancel`,
+  which is idempotent and does not roll back bytes already verified or migrated.
+  `rustfs_integrity_readiness` and `rustfs_integrity_inventory` read the
+  deployment's write-readiness switches and a bucket's per-object inventory. The
+  routes are implemented in RustFS 1.0.1 through 1.0.3; an older server produces a
+  version-aware diagnostic.
+- Add the `rustfs_temporary_accounts` data source and the
+  `rustfs_token_revocation` resource to inspect and revoke the STS credentials
+  RustFS issues. The data source lists temporary access keys through the bulk
+  access-key routes, attributes each key to `builtin`, `ldap` or `openid`, and
+  never exposes a secret key or session token. Set `include_policies` to read
+  each key's effective policy, implied-policy flag and account status (they stay
+  null otherwise, because the bulk listing does not report them), and
+  `include_service_accounts` to see long-lived service accounts in the same
+  listing.
+
+  `rustfs_token_revocation` deletes every STS credential one user holds under one
+  identity provider. Revocation is immediate and cannot be undone: the next
+  request signed with a revoked credential fails authentication. Both the
+  provider and the user are required so a mistake cannot revoke the caller's own
+  tokens or sweep a whole provider. Read echoes the recorded result, Delete is a
+  no-op, and changing `triggers`, `user` or `user_provider` revokes again. Both
+  types need RustFS 1.0.1 or later and fail with a version-aware diagnostic on an
+  older server.
+- Add the `rustfs_batch_jobs`, `rustfs_replication_diff` and `rustfs_replication_mrf` data sources. `rustfs_batch_jobs` lists the MinIO-compatible batch jobs and can describe/status one id, exposing the server's job documents as raw JSON because RustFS ships the admin surface without a job execution backend (the list is empty and a requested id reports `found = false`). `rustfs_replication_diff` reads the object versions whose replication is pending or failed and reports scan truncation, and `rustfs_replication_mrf` reads the failed-replication backlog counters. Both replication data sources use the aggregate response shape, which carries no object identities and needs only the metrics admin action. No job submission resource is added: the MinIO batch-job payload has no stable Terraform-shaped schema, and job submission stays an `mc`/`rc` operation.
+- The admin API client is now version-aware. `RequestData.Version` selects the
+  admin namespace (`v3` when empty, so every existing request keeps its current
+  URL) and the client stores the host root and the admin base separately. The
+  provider treats a `511 Upgrade Required` answer for an unmatched v4 path as a
+  negotiation signal rather than a payload, so a pre-v4 server is reported as
+  "upgrade RustFS or use the v3 route" naming the route and server version, while
+  `501 NotImplemented` keeps its existing unimplemented-route diagnostic.
+
+  New preview data sources read the RustFS 1.0.3 v4 admin API:
+  `rustfs_runtime_capabilities` exposes the versioned storage-class write
+  contract, and `rustfs_plugins`, `rustfs_extensions` and
+  `rustfs_cluster_snapshot` expose their payloads as the server's JSON verbatim
+  so the provider does not pin a schema upstream has not committed to. No
+  plugin-instance resource is added: the v4 payload is still new.
+- `rustfs_bucket_usage` reads the scanner's per-bucket (and per-prefix) usage
+  accounting, documenting that the numbers lag the scanner cycle and that
+  `sets_reporting` below `sets_total` makes them a lower bound.
+  `rustfs_config_history` lists the whole-server config snapshots RustFS stores
+  before every mutation, with the server's redacted directive text.
+  `rustfs_config_restore` restores one named snapshot: the restore overwrites the
+  whole live configuration, so `confirm` must repeat `restore_id`, Read only
+  echoes the record and Destroy is a no-op. No existing `rustfs_config` schema
+  changed.
+
+BUG FIXES:
+- `rustfs_tier` can be imported without planning to replace the tier. `Read` now fills `tier_type`
+  from the server's tier listing, so importing a tier that already exists no longer leaves the
+  required `tier_type` empty and triggers its `RequiresReplace` plan. If that listing cannot report
+  the type, the import fails with a diagnostic instead of silently planning a replacement.
+  `config_json` still has to be supplied by the configuration, because the server redacts backend
+  credentials from that listing; the resulting plan updates the tier in place instead of deleting
+  and recreating it.
+
+SECURITY:
+- The provider is built with Go 1.27.3, which clears GO-2026-6809 (compromised intermediate certificates in crypto/x509).
+
+CHORES:
+- Feature PRs no longer edit `CHANGELOG.md`, `AGENTS.md`, `README.md`, `docs/index.md` or
+  `templates/`: a change adds a `changelog.d/<issue>-<kind>-<slug>.md` fragment, and
+  `make changelog-release VERSION=x.y.z` renders it below `## Unreleased`. The resource and data
+  source tables and the README counts are regenerated by `make generate-tables` from the provider
+  registry and the generated docs, and the provider docs index no longer hardcodes counts.
+- The Markdown conventions are now enforced on every pull request instead of being a written rule.
+  CI fails when a change edits `CHANGELOG.md` outside a release branch, omits a
+  `changelog.d/<issue>-<kind>-<slug>.md` fragment (unless the `skip-changelog` label is set), or
+  touches `AGENTS.md`, `README.md`, `docs/index.md` or `templates/` without the `shared-md` label.
+  The generated tables are checked for deterministic output rather than for being current, so a
+  feature PR still adds only its own files. `docs/` drift is now reported on the pull request that
+  causes it rather than on `main` after the merge.
+- Releasing no longer edits shared files by hand. The new **Prepare Release** workflow bundles every
+  `changelog.d/` fragment into a dated `CHANGELOG.md` section, regenerates the resource and data source
+  tables in `AGENTS.md` and `README.md`, and pushes the result to a `release/v<version>` branch. It
+  refuses to run when the branch would contain anything else, and the version is resolved by
+  `scripts/next-version.sh`, which **Create Release Tag** now shares so the two workflows cannot
+  disagree. Opening the pull request and creating the tag stay manual.
+- The **Prepare Release** workflow now opens or updates the release pull request itself, using a
+  short-lived GitHub App installation token instead of `GITHUB_TOKEN` so the `pull_request` checks
+  run on it. The job summary links the pull request; when the `APP_ID` variable and
+  `APP_PRIVATE_KEY` secret are absent (forks, or before the App exists) the branch is still pushed
+  and the summary prints the manual compare link.
+
 ## 0.5.1 (2026-10-19)
 
 BUG FIXES:
