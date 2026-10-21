@@ -1,1 +1,0 @@
-`rustfs_kms_key` now manages key descriptions, tags, the 7–30 day deletion window and an explicit rotation trigger. New `rustfs_kms_rekey` and `rustfs_kms_backup` resources and a `rustfs_kms_backup_status` data source cover KMS re-keying and backup. Restore is intentionally not exposed: it is destructive and requires confirmations Terraform cannot supply.
