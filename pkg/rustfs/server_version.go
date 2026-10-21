@@ -137,9 +137,20 @@ const (
 type featureSpec struct {
 	// route is the admin API route that serves the feature.
 	route string
+	// version is the admin API version the route lives on ("v3" or "v4").
+	// Empty means defaultAdminAPIVersion, so existing registrations are v3.
+	version string
 	// minVersion is the first RustFS release that implements the route. nil
 	// means no released server implements it yet.
 	minVersion *Version
+}
+
+// apiVersion returns the admin API version the route lives on.
+func (s featureSpec) apiVersion() string {
+	if s.version == "" {
+		return defaultAdminAPIVersion
+	}
+	return s.version
 }
 
 // featureSpecs is the capability matrix the provider reasons about. It is
@@ -201,6 +212,13 @@ func (f Feature) Route() string {
 type UnsupportedFeatureError struct {
 	Feature Feature
 	Route   string
+	// APIVersion is the admin API version the route lives on ("v3" or "v4").
+	APIVersion string
+	// UpgradeRequired is true when the server answered 511 Upgrade Required:
+	// the v4 namespace exists, but this particular path is not served. It is
+	// deliberately distinct from a 501, where the route is not implemented at
+	// all.
+	UpgradeRequired bool
 	// ServerVersion is the version the server reported, normalized to
 	// MAJOR.MINOR.PATCH when it could be parsed. It is empty when the version
 	// could not be determined.
@@ -223,6 +241,23 @@ func (e *UnsupportedFeatureError) Error() string {
 	}
 	if route == "" {
 		route = string(e.Feature)
+	}
+
+	version := e.APIVersion
+	if version == "" {
+		if spec, ok := lookupFeatureSpec(e.Feature); ok {
+			version = spec.apiVersion()
+		}
+	}
+	if version == "" {
+		version = defaultAdminAPIVersion
+	}
+
+	if e.UpgradeRequired {
+		return fmt.Sprintf(
+			"%s does not serve %s: %s is not available on the %s admin API; upgrade RustFS or use the v3 route",
+			server, route, e.Feature, version,
+		)
 	}
 
 	if e.MinVersion != nil {
@@ -284,18 +319,27 @@ func isUnsupportedRoute(err error) bool {
 
 // featureError converts the server's "route not implemented" answer into an
 // *UnsupportedFeatureError carrying the feature, the route and the server
-// version. Every other error is returned unchanged. The version lookup is best
-// effort: the capability gap is already established without it.
+// version. A 511 Upgrade Required answer is reported as a negotiation problem
+// instead: the v4 namespace exists, but the path is not served. Every other
+// error is returned unchanged. The version lookup is best effort: the
+// capability gap is already established without it.
 func (c *RustfsAdmin) featureError(err error, feature Feature) error {
-	if err == nil || !isUnsupportedRoute(err) {
+	if err == nil {
+		return err
+	}
+	upgradeRequired := IsUpgradeRequired(err)
+	if !upgradeRequired && !isUnsupportedRoute(err) {
 		return err
 	}
 
+	spec := featureSpecFor(feature)
 	unsupported := &UnsupportedFeatureError{
-		Feature:    feature,
-		Route:      feature.Route(),
-		MinVersion: featureSpecFor(feature).minVersion,
-		Err:        err,
+		Feature:         feature,
+		Route:           spec.route,
+		APIVersion:      spec.apiVersion(),
+		UpgradeRequired: upgradeRequired,
+		MinVersion:      spec.minVersion,
+		Err:             err,
 	}
 	if _, raw, _ := c.ServerVersion(); raw != "" {
 		unsupported.ServerVersion = raw
