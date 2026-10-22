@@ -23,6 +23,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
@@ -495,6 +496,10 @@ func (r *bucketLifecycleConfigurationResource) ImportState(ctx context.Context, 
 
 // putLifecycleConfiguration writes the planned configuration to the bucket.
 func (r *bucketLifecycleConfigurationResource) putLifecycleConfiguration(ctx context.Context, plan bucketLifecycleConfigurationModel) error {
+	if !ruleListKnown(plan.Rule) {
+		return errors.New("the rule list is not fully known before apply: refusing to write a lifecycle configuration with unknown rules")
+	}
+
 	ruleModels, diags := ruleModelsFromList(ctx, plan.Rule)
 	if diags.HasError() {
 		return fmt.Errorf("%s", diagnosticsError(diags))
@@ -624,14 +629,56 @@ func ruleElementType(ctx context.Context) attr.Type {
 // expand/flatten/validate helpers operate on. A null or unknown list decodes to
 // a nil slice with no diagnostics, so callers can treat "no known rules yet" as
 // an empty configuration.
+//
+// An unknown element keeps its position as a zero-value ruleModel instead of
+// failing the whole decode. Terraform can resolve the list while one of its
+// elements stays unknown (`rule = [some_unknown_object]`), and config
+// validation must not reject that plan. The placeholder carries no filter, so
+// validateLifecycleFilters skips it and later violations still report their
+// original list index. A caller that writes to the server must reject an
+// unknown list first with ruleListKnown; an expand of the placeholder would
+// otherwise send an empty rule.
 func ruleModelsFromList(ctx context.Context, list types.List) ([]ruleModel, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	if list.IsNull() || list.IsUnknown() {
 		return nil, diags
 	}
-	var rules []ruleModel
-	diags.Append(list.ElementsAs(ctx, &rules, false)...)
+
+	var objects []types.Object
+	diags.Append(list.ElementsAs(ctx, &objects, false)...)
+	if diags.HasError() {
+		return nil, diags
+	}
+
+	rules := make([]ruleModel, len(objects))
+	for i, object := range objects {
+		if object.IsNull() || object.IsUnknown() {
+			continue
+		}
+		diags.Append(object.As(ctx, &rules[i], basetypes.ObjectAsOptions{})...)
+	}
+	if diags.HasError() {
+		return nil, diags
+	}
 	return rules, diags
+}
+
+// ruleListKnown reports whether the planned rule list carries no unknown value.
+// A null list is known (there is nothing to write); an unknown list, or a list
+// with an unknown or null element, is not, and must not be sent to the server.
+func ruleListKnown(list types.List) bool {
+	if list.IsUnknown() {
+		return false
+	}
+	if list.IsNull() {
+		return true
+	}
+	for _, element := range list.Elements() {
+		if element.IsNull() || element.IsUnknown() {
+			return false
+		}
+	}
+	return true
 }
 
 // ruleListFromModels builds the framework list from the native []ruleModel
